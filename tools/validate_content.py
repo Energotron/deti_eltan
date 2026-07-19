@@ -67,10 +67,24 @@ def main():
         raise SystemExit('map schema must define both arms')
 
     display_names=second.get('display_names',{})
-    system_names=display_names.get('systems',{})
+    story_node_titles=display_names.get('story_nodes',{})
     archetype_names=display_names.get('sector_archetypes',{})
-    if set(system_names)!=set(second['required_nodes']):
-        raise SystemExit('every required Second Home system must have a canonical display name')
+    if set(story_node_titles)!=set(second['required_nodes']):
+        raise SystemExit('every Second Home story node must have a canonical title')
+    required_archetypes=second.get('story_node_preferred_archetypes',{})
+    if set(required_archetypes)!=set(second['required_nodes']):
+        raise SystemExit('every required Second Home system must have an archetype')
+    if any(value not in second['sector_archetypes'] for value in required_archetypes.values()):
+        raise SystemExit('required Second Home system has an unknown archetype')
+    progression=second.get('story_progression',{})
+    early_nodes=progression.get('early_story_nodes',[])
+    if progression.get('starting_open_sector_count')!=3 or len(early_nodes)!=3:
+        raise SystemExit('Second Home must open with three sectors and three early story nodes')
+    if len(early_nodes)!=len(set(early_nodes)) or not set(early_nodes)<=set(second['required_nodes']):
+        raise SystemExit('early Second Home story nodes are invalid or duplicated')
+    if not progression.get('remaining_sectors_require_discovery') or \
+            not progression.get('later_story_nodes_start_hidden'):
+        raise SystemExit('later Second Home sectors and story nodes must start hidden')
     if set(archetype_names)!=set(second['sector_archetypes']):
         raise SystemExit('every Second Home sector archetype must have a display name')
     sector_pool=second.get('sector_name_pool',[])
@@ -84,7 +98,19 @@ def main():
     if set(item['archetype'] for item in sector_pool)!=set(second['sector_archetypes']):
         raise SystemExit('sector name pool must cover every archetype')
     sector_names=[item.get('display_name') for item in sector_pool]
-    visible_names=list(system_names.values())+sector_names
+    system_pool=second.get('system_name_pool',[])
+    unique(system_pool,'Second Home system names',prefixes=('CE_SYS_',))
+    if any(item.get('archetype') not in second['sector_archetypes'] for item in system_pool):
+        raise SystemExit('Second Home system name has an unknown archetype')
+    if set(item['archetype'] for item in system_pool)!=set(second['sector_archetypes']):
+        raise SystemExit('system name pool must cover every archetype')
+    reference_stars=second.get('reference_medium_game_stars',0)
+    if len(system_pool)<reference_stars:
+        raise SystemExit('system name pool is too small for the reference medium galaxy')
+    system_pool_names=[item.get('display_name') for item in system_pool]
+    visible_names=sector_names+system_pool_names
+    if any(not isinstance(title,str) or not title.strip() for title in story_node_titles.values()):
+        raise SystemExit('Second Home story node titles must be non-empty strings')
     if any(not isinstance(name,str) or not name.strip() for name in visible_names):
         raise SystemExit('Second Home display names must be non-empty strings')
     if len(visible_names)!=len(set(visible_names)):
@@ -128,6 +154,7 @@ def main():
         f'{len(variables)} variables, {len(items)} transit items, '
         f'{len(second["required_nodes"])} required Second Home nodes, '
         f'{len(sector_pool)} canonical sector names, '
+        f'{len(system_pool)} procedural system names, '
         f'{len(all_ship_ids)} unique racial ship classes, {len(all_base_ids)} unique racial bases'
     )
 

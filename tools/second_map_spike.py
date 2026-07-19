@@ -18,7 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ARMS = ("OLD_ARM", "SECOND_HOME")
 MAP_SCHEMA = json.loads(
     (Path(__file__).resolve().parents[1] / "data" / "second_home_map.schema.json").read_text(
@@ -27,18 +27,17 @@ MAP_SCHEMA = json.loads(
 )
 SECTOR_ARCHETYPES = tuple(MAP_SCHEMA["sector_archetypes"])
 SECTOR_NAME_POOL = tuple(MAP_SCHEMA["sector_name_pool"])
-REQUIRED_NODES = (
-    "CE_SYS_ELTAN_WOUND",
-    "CE_SYS_FIRST_SHELTER",
-    "CE_SYS_ARK_IV",
-    "CE_SYS_KARH_FORTRESS",
-    "CE_SYS_FACELESS_NODE",
-    "CE_SYS_LUMEN",
-    "CE_SYS_UNITY_PRISM",
-    "CE_SYS_ASH_MARKET",
-    "CE_SYS_ORPHAN_NEST",
-    "CE_SYS_UNLIT_CITY",
-    "CE_SYS_SECOND_GATE",
+SYSTEM_NAME_POOL = tuple(MAP_SCHEMA["system_name_pool"])
+REQUIRED_NODES = tuple(MAP_SCHEMA["required_nodes"])
+STORY_NODE_TITLES = MAP_SCHEMA["display_names"]["story_nodes"]
+STORY_NODE_ARCHETYPES = MAP_SCHEMA["story_node_preferred_archetypes"]
+EARLY_STORY_NODES = tuple(MAP_SCHEMA["story_progression"]["early_story_nodes"])
+STARTING_SECTOR_COUNT = MAP_SCHEMA["story_progression"]["starting_open_sector_count"]
+MIN_SECTOR_COUNT = sum(
+    2 if any(STORY_NODE_ARCHETYPES[node] == archetype for node in EARLY_STORY_NODES) and
+    any(STORY_NODE_ARCHETYPES[node] == archetype for node in set(REQUIRED_NODES) - set(EARLY_STORY_NODES))
+    else 1
+    for archetype in SECTOR_ARCHETYPES
 )
 TRANSIT_PHASES = ("PREPARED", "DEBITED", "SWITCHED")
 
@@ -86,12 +85,15 @@ def create_state(
         raise StateError("old arm is too small for the required Second Home nodes")
     if cells < 0:
         raise StateError("resonance cell count cannot be negative")
-    if old_sector_count < len(SECTOR_ARCHETYPES):
-        raise StateError("old arm has too few sectors for all Second Home archetypes")
+    if old_sector_count < MIN_SECTOR_COUNT:
+        raise StateError("old arm has too few sectors for Second Home progression")
     if old_sector_count > len(SECTOR_NAME_POOL):
         raise StateError("sector name pool is too small for the old arm scale")
     second_seed = _stable_int("CE_SECOND_HOME", seed) & 0x7FFFFFFF
     second_sectors = _generate_sector_layout(second_seed, old_sector_count)
+    second_systems = _generate_system_layout(
+        second_seed, old_star_count, second_sectors
+    )
     state = {
         "schema_version": SCHEMA_VERSION,
         "revision": 0,
@@ -103,10 +105,10 @@ def create_state(
         },
         "transit": None,
         "maps": {
-            "OLD_ARM": _new_map(seed, old_star_count, old_sector_count, (), ()),
+            "OLD_ARM": _new_map(seed, old_star_count, old_sector_count, (), (), ()),
             "SECOND_HOME": _new_map(
                 second_seed, old_star_count, old_sector_count,
-                REQUIRED_NODES, second_sectors,
+                REQUIRED_NODES, second_sectors, second_systems,
             ),
         },
         "history": [],
@@ -123,7 +125,14 @@ def _generate_sector_layout(seed: int, sector_count: int) -> tuple[dict[str, str
         )
         for archetype in SECTOR_ARCHETYPES
     }
-    selected = [by_archetype[archetype][0] for archetype in SECTOR_ARCHETYPES]
+    later_nodes = set(REQUIRED_NODES) - set(EARLY_STORY_NODES)
+    selected = []
+    for archetype in SECTOR_ARCHETYPES:
+        needs_open_and_locked = (
+            any(STORY_NODE_ARCHETYPES[node] == archetype for node in EARLY_STORY_NODES) and
+            any(STORY_NODE_ARCHETYPES[node] == archetype for node in later_nodes)
+        )
+        selected.extend(by_archetype[archetype][:(2 if needs_open_and_locked else 1)])
     selected_ids = {item["id"] for item in selected}
     remaining = sorted(
         (item for item in SECTOR_NAME_POOL if item["id"] not in selected_ids),
@@ -131,11 +140,118 @@ def _generate_sector_layout(seed: int, sector_count: int) -> tuple[dict[str, str
     )
     selected.extend(remaining[:sector_count - len(selected)])
     selected.sort(key=lambda item: _stable_int(seed, "sector-order", item["id"]))
+    starting_sector_ids = set()
+    for node_id in EARLY_STORY_NODES:
+        archetype = STORY_NODE_ARCHETYPES[node_id]
+        candidate = min(
+            (
+                item for item in selected
+                if item["archetype"] == archetype and
+                item["id"] not in starting_sector_ids
+            ),
+            key=lambda item: _stable_int(seed, "starting-sector", node_id, item["id"]),
+        )
+        starting_sector_ids.add(candidate["id"])
+    if len(starting_sector_ids) != STARTING_SECTOR_COUNT:
+        raise StateError("starting sector layout does not match story progression")
     return tuple(
         {"id": item["id"], "display_name": item["display_name"],
-         "archetype": item["archetype"]}
+         "archetype": item["archetype"],
+         "discovery_tier": (
+             "STARTING" if item["id"] in starting_sector_ids else "LOCKED"
+         )}
         for item in selected
     )
+
+
+def _generate_system_layout(
+    seed: int,
+    star_count: int,
+    sectors: tuple[dict[str, str], ...],
+) -> tuple[dict[str, Any], ...]:
+    if star_count > len(SYSTEM_NAME_POOL):
+        raise StateError("system name pool is too small for the old arm scale")
+    by_archetype = {
+        archetype: sorted(
+            (item for item in SYSTEM_NAME_POOL if item["archetype"] == archetype),
+            key=lambda item: _stable_int(seed, "system-name", item["id"]),
+        )
+        for archetype in SECTOR_ARCHETYPES
+    }
+    selected_names = []
+    for archetype in SECTOR_ARCHETYPES:
+        required_hosts = sum(
+            STORY_NODE_ARCHETYPES[node] == archetype for node in REQUIRED_NODES
+        )
+        selected_names.extend(by_archetype[archetype][:required_hosts])
+    selected_ids = {item["id"] for item in selected_names}
+    remaining = sorted(
+        (item for item in SYSTEM_NAME_POOL if item["id"] not in selected_ids),
+        key=lambda item: _stable_int(seed, "system-fill", item["id"]),
+    )
+    selected_names.extend(remaining[:star_count - len(selected_names)])
+    selected = [
+        {
+            "id": item["id"],
+            "display_name": item["display_name"],
+            "archetype": item["archetype"],
+            "story_node": None,
+            "story_node_title": None,
+        }
+        for item in selected_names
+    ]
+
+    assigned_system_ids = set()
+    for node_id in REQUIRED_NODES:
+        preferred = STORY_NODE_ARCHETYPES[node_id]
+        candidates = sorted(
+            (
+                item for item in selected
+                if item["archetype"] == preferred and
+                item["id"] not in assigned_system_ids
+            ),
+            key=lambda item: _stable_int(seed, "story-node", node_id, item["id"]),
+        )
+        if not candidates:
+            raise StateError(f"no generated system can host story node {node_id}")
+        host = candidates[0]
+        host["story_node"] = node_id
+        host["story_node_title"] = STORY_NODE_TITLES[node_id]
+        assigned_system_ids.add(host["id"])
+
+    sectors_by_archetype = {
+        archetype: sorted(
+            (sector for sector in sectors if sector["archetype"] == archetype),
+            key=lambda sector: _stable_int(seed, "system-sector", sector["id"]),
+        )
+        for archetype in SECTOR_ARCHETYPES
+    }
+    archetype_offsets = {archetype: 0 for archetype in SECTOR_ARCHETYPES}
+    ordered = sorted(
+        selected,
+        key=lambda item: _stable_int(seed, "system-order", item["id"]),
+    )
+    result = []
+    for item in ordered:
+        archetype = item["archetype"]
+        candidates = sectors_by_archetype[archetype]
+        if item["story_node"] in EARLY_STORY_NODES:
+            candidates = [
+                sector for sector in candidates
+                if sector["discovery_tier"] == "STARTING"
+            ]
+        elif item["story_node"]:
+            candidates = [
+                sector for sector in candidates
+                if sector["discovery_tier"] == "LOCKED"
+            ]
+        if not candidates:
+            raise StateError("story system has no sector in its discovery tier")
+        offset = archetype_offsets[archetype]
+        sector = candidates[offset % len(candidates)]
+        archetype_offsets[archetype] += 1
+        result.append({**item, "sector_id": sector["id"]})
+    return tuple(result)
 
 
 def _new_map(
@@ -144,12 +260,14 @@ def _new_map(
     sector_count: int,
     nodes: tuple[str, ...],
     sectors: tuple[dict[str, str], ...],
+    systems: tuple[dict[str, Any], ...],
 ) -> dict[str, Any]:
     return {
         "seed": seed,
         "star_count": star_count,
         "sector_count": sector_count,
         "sectors": list(sectors),
+        "systems": list(systems),
         "last_sim_day": 0,
         "aggregate_ticks": 0,
         "economy_index": 1000,
@@ -192,10 +310,75 @@ def validate_state(state: dict[str, Any]) -> None:
         raise StateError("Second Home contains a technical sector display name")
     if set(sector.get("archetype") for sector in sectors) != set(SECTOR_ARCHETYPES):
         raise StateError("Second Home sector layout must cover every archetype")
+    starting_sector_ids = {
+        sector["id"] for sector in sectors
+        if sector.get("discovery_tier") == "STARTING"
+    }
+    if len(starting_sector_ids) != STARTING_SECTOR_COUNT or any(
+        sector.get("discovery_tier") not in {"STARTING", "LOCKED"}
+        for sector in sectors
+    ):
+        raise StateError("Second Home must have exactly three starting sectors")
+
+    systems = state["maps"]["SECOND_HOME"].get("systems", [])
+    if len(systems) != second_count:
+        raise StateError("Second Home system layout does not match star_count")
+    system_ids = [system.get("id") for system in systems]
+    system_names = [system.get("display_name") for system in systems]
+    if len(system_ids) != len(set(system_ids)) or \
+            len(system_names) != len(set(system_names)):
+        raise StateError("Second Home system ids and names must be unique")
+    forbidden = ("system_", "sector_", "placeholder", "todo", "test")
+    if any(
+        not isinstance(name, str) or not name.strip() or
+        any(fragment in name.lower() for fragment in forbidden)
+        for name in system_names
+    ):
+        raise StateError("Second Home contains a technical system display name")
+    if any(system.get("sector_id") not in set(sector_ids) for system in systems):
+        raise StateError("Second Home system is assigned to an unknown sector")
+    sector_archetypes = {sector["id"]: sector["archetype"] for sector in sectors}
+    if any(
+        system.get("archetype") != sector_archetypes[system["sector_id"]]
+        for system in systems
+    ):
+        raise StateError("Second Home system and sector archetypes do not match")
 
     nodes = state["maps"]["SECOND_HOME"].get("required_nodes", [])
     if len(nodes) != len(set(nodes)) or set(nodes) != set(REQUIRED_NODES):
         raise StateError("Second Home required nodes are missing or duplicated")
+    story_hosts = [
+        system["story_node"] for system in systems if system.get("story_node")
+    ]
+    if len(story_hosts) != len(set(story_hosts)) or \
+            set(story_hosts) != set(REQUIRED_NODES):
+        raise StateError("Second Home story nodes are missing or duplicated")
+    if any(
+        system.get("story_node") and
+        system["archetype"] != STORY_NODE_ARCHETYPES[system["story_node"]]
+        for system in systems
+    ):
+        raise StateError("Second Home story node has an invalid host archetype")
+    if any(
+        system.get("story_node") and
+        system.get("story_node_title") != STORY_NODE_TITLES[system["story_node"]]
+        for system in systems
+    ):
+        raise StateError("Second Home story node title is not canonical")
+    story_systems = {
+        system["story_node"]: system for system in systems
+        if system.get("story_node")
+    }
+    if any(
+        story_systems[node_id]["sector_id"] not in starting_sector_ids
+        for node_id in EARLY_STORY_NODES
+    ):
+        raise StateError("early Second Home story node is outside starting sectors")
+    if any(
+        story_systems[node_id]["sector_id"] in starting_sector_ids
+        for node_id in set(REQUIRED_NODES) - set(EARLY_STORY_NODES)
+    ):
+        raise StateError("later Second Home story node leaked into starting sectors")
 
     cargo = state.get("cargo", {})
     if cargo.get("CE_Item_TwinHomeAnchor") != 1:
