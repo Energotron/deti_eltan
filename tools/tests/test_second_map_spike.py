@@ -205,6 +205,41 @@ class SecondMapSpikeTests(unittest.TestCase):
         with self.assertRaises(StateError):
             validate_state(state)
 
+    def test_destroyed_or_unknown_war_apart_clan_never_migrates(self):
+        for outcome, expected_status in (
+            ("COALITION_VICTORY", "EXTINCT"),
+            ("UNKNOWN", "UNRESOLVED"),
+        ):
+            with self.subTest(outcome=outcome):
+                path = Path(self.temp.name) / f"{outcome}.json"
+                store = StateStore(path)
+                store.save(create_state(
+                    80, 5, 2441, old_sector_count=19,
+                    war_apart_state=outcome,
+                ))
+                state = begin_transit(store)
+                simulate_days(state, 200)
+                self.assertEqual(state["pirate_migration"]["status"], expected_status)
+                self.assertFalse(any(
+                    system["controller"] == "CE_FACTION_PIRATES"
+                    for system in state["maps"]["SECOND_HOME"]["systems"]
+                ))
+
+    def test_player_pirate_brings_the_clan_through_immediately(self):
+        state = create_state(
+            80, 5, 2441, old_sector_count=19,
+            war_apart_state="PLAYER_PIRATE",
+        )
+        self.store.save(state)
+        state = begin_transit(self.store)
+        self.assertEqual(state["pirate_migration"]["status"], "ESTABLISHED")
+        self.assertEqual(state["pirate_migration"]["first_passage_day"], 0)
+        self.assertEqual(state["pirate_migration"]["arrival_day"], 0)
+        self.assertTrue(any(
+            system["controller"] == "CE_FACTION_PIRATES"
+            for system in state["maps"]["SECOND_HOME"]["systems"]
+        ))
+
     def test_system_layout_is_deterministic_for_same_seed(self):
         left = create_state(80, 5, 2441, old_sector_count=19)
         right = create_state(80, 5, 2441, old_sector_count=19)

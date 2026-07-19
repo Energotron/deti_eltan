@@ -18,7 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 ARMS = ("OLD_ARM", "SECOND_HOME")
 MAP_SCHEMA = json.loads(
     (Path(__file__).resolve().parents[1] / "data" / "second_home_map.schema.json").read_text(
@@ -38,6 +38,14 @@ MIN_LATE_STORY_DEPTH = MAP_SCHEMA["story_progression"]["minimum_late_story_map_p
 DISCOVERY_RULE = MAP_SCHEMA["sector_discovery_rule"]
 POPULATION_RULE = MAP_SCHEMA["system_population_rule"]
 PIRATE_MIGRATION_RULE = MAP_SCHEMA["interarm_pirate_migration"]
+WAR_APART_STATES = (
+    "UNKNOWN",
+    "NOT_STARTED",
+    "CLAN_ACTIVE",
+    "COALITION_VICTORY",
+    "PIRATE_VICTORY",
+    "PLAYER_PIRATE",
+)
 CORE_FACTION_BY_ARCHETYPE = {
     "STRONG": "CE_FACTION_STRONG",
     "AGILL": "CE_FACTION_AGILL",
@@ -95,6 +103,7 @@ def create_state(
     seed: int,
     old_sector_count: int = 19,
     initial_credits: int = 100_000,
+    war_apart_state: str = "CLAN_ACTIVE",
 ) -> dict[str, Any]:
     if old_star_count < max(len(REQUIRED_NODES), old_sector_count * 2):
         raise StateError("old arm is too sparse for the required Second Home layout")
@@ -102,6 +111,8 @@ def create_state(
         raise StateError("resonance cell count cannot be negative")
     if initial_credits < 0:
         raise StateError("credit balance cannot be negative")
+    if war_apart_state not in WAR_APART_STATES:
+        raise StateError("unknown War Apart outcome")
     if old_sector_count < MIN_SECTOR_COUNT:
         raise StateError("old arm has too few sectors for Second Home progression")
     if old_sector_count > len(SECTOR_NAME_POOL):
@@ -111,6 +122,12 @@ def create_state(
     second_systems = _generate_system_layout(
         second_seed, old_star_count, second_sectors
     )
+    if war_apart_state in PIRATE_MIGRATION_RULE["eligible_war_apart_states"]:
+        migration_status = PIRATE_MIGRATION_RULE["eligible_initial_status"]
+    elif war_apart_state in PIRATE_MIGRATION_RULE["destroyed_war_apart_states"]:
+        migration_status = PIRATE_MIGRATION_RULE["destroyed_initial_status"]
+    else:
+        migration_status = PIRATE_MIGRATION_RULE["unknown_initial_status"]
     state = {
         "schema_version": SCHEMA_VERSION,
         "revision": 0,
@@ -121,8 +138,9 @@ def create_state(
             "CE_Item_ResonanceCell": cells,
         },
         "credits": initial_credits,
+        "war_apart_state": war_apart_state,
         "pirate_migration": {
-            "status": PIRATE_MIGRATION_RULE["initial_status"],
+            "status": migration_status,
             "first_passage_day": None,
             "arrival_day": None,
             "arrivals": 0,
@@ -726,7 +744,12 @@ def validate_state(state: dict[str, Any]) -> None:
 
     migration = state.get("pirate_migration", {})
     migration_status = migration.get("status")
-    if migration_status not in {"LOCKED", "SCOUTING", "ESTABLISHED"}:
+    war_apart_state = state.get("war_apart_state")
+    if war_apart_state not in WAR_APART_STATES:
+        raise StateError("invalid War Apart outcome snapshot")
+    if migration_status not in {
+        "LOCKED", "SCOUTING", "ESTABLISHED", "EXTINCT", "UNRESOLVED"
+    }:
         raise StateError("invalid interarm pirate migration status")
     pirate_system_ids = {
         system["id"] for system in systems
@@ -735,7 +758,15 @@ def validate_state(state: dict[str, Any]) -> None:
     converted_ids = migration.get("converted_system_ids", [])
     if len(converted_ids) != len(set(converted_ids)):
         raise StateError("interarm pirate migration duplicated a system")
-    if migration_status == "LOCKED":
+    eligible_outcome = war_apart_state in PIRATE_MIGRATION_RULE["eligible_war_apart_states"]
+    destroyed_outcome = war_apart_state in PIRATE_MIGRATION_RULE["destroyed_war_apart_states"]
+    if eligible_outcome != (migration_status in {"LOCKED", "SCOUTING", "ESTABLISHED"}):
+        raise StateError("War Apart outcome and pirate migration status disagree")
+    if destroyed_outcome != (migration_status == "EXTINCT"):
+        raise StateError("destroyed War Apart clan has an invalid migration status")
+    if war_apart_state == "UNKNOWN" and migration_status != "UNRESOLVED":
+        raise StateError("unknown War Apart outcome must block pirate migration")
+    if migration_status in {"LOCKED", "EXTINCT", "UNRESOLVED"}:
         if pirate_system_ids or migration.get("first_passage_day") is not None or \
                 migration.get("arrival_day") is not None or \
                 migration.get("arrivals") != 0 or converted_ids:
@@ -744,7 +775,7 @@ def validate_state(state: dict[str, Any]) -> None:
         first_day = migration.get("first_passage_day")
         arrival_day = migration.get("arrival_day")
         if not isinstance(first_day, int) or \
-                arrival_day != first_day + PIRATE_MIGRATION_RULE["arrival_delay_days"] or \
+                arrival_day != first_day + _pirate_arrival_delay(state) or \
                 state["current_day"] >= arrival_day or pirate_system_ids or \
                 migration.get("arrivals") != 0 or converted_ids:
             raise StateError("invalid War Apart pirate scouting state")
@@ -936,8 +967,14 @@ def _schedule_pirate_migration(state: dict[str, Any], passage_day: int) -> None:
     migration["status"] = "SCOUTING"
     migration["first_passage_day"] = passage_day
     migration["arrival_day"] = (
-        passage_day + PIRATE_MIGRATION_RULE["arrival_delay_days"]
+        passage_day + _pirate_arrival_delay(state)
     )
+
+
+def _pirate_arrival_delay(state: dict[str, Any]) -> int:
+    if state["war_apart_state"] == "PLAYER_PIRATE":
+        return PIRATE_MIGRATION_RULE["player_pirate_arrival_delay_days"]
+    return PIRATE_MIGRATION_RULE["arrival_delay_days"]
 
 
 def _update_pirate_migration(state: dict[str, Any], target_day: int) -> None:
@@ -1046,6 +1083,7 @@ def recover_transit(store: StateStore, crash_after: str | None = None) -> dict[s
         )
         if transit["from_arm"] == "OLD_ARM" and transit["to_arm"] == "SECOND_HOME":
             _schedule_pirate_migration(state, transit["day"])
+            _update_pirate_migration(state, transit["day"])
         state["transit"] = None
         _commit(store, state)
     return state
@@ -1063,9 +1101,17 @@ def _maybe_crash(phase: str, crash_after: str | None) -> None:
 
 
 def run_demo(
-    store: StateStore, old_stars: int, cells: int, seed: int, old_sectors: int = 19
+    store: StateStore,
+    old_stars: int,
+    cells: int,
+    seed: int,
+    old_sectors: int = 19,
+    war_apart_state: str = "CLAN_ACTIVE",
 ) -> dict[str, Any]:
-    store.save(create_state(old_stars, cells, seed, old_sectors))
+    store.save(create_state(
+        old_stars, cells, seed, old_sectors,
+        war_apart_state=war_apart_state,
+    ))
     state = store.load()
     simulate_days(state, 40)
     store.save(state)
@@ -1088,6 +1134,7 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--old-sectors", type=int, default=19)
     init.add_argument("--cells", type=int, default=10)
     init.add_argument("--seed", type=int, default=3500)
+    init.add_argument("--war-apart-state", choices=WAR_APART_STATES, default="CLAN_ACTIVE")
     transit = sub.add_parser("transit")
     transit.add_argument("state", type=Path)
     transit.add_argument("--crash-after", choices=TRANSIT_PHASES)
@@ -1111,6 +1158,7 @@ def _parser() -> argparse.ArgumentParser:
     demo.add_argument("--old-sectors", type=int, default=19)
     demo.add_argument("--cells", type=int, default=10)
     demo.add_argument("--seed", type=int, default=3500)
+    demo.add_argument("--war-apart-state", choices=WAR_APART_STATES, default="CLAN_ACTIVE")
     return parser
 
 
@@ -1119,7 +1167,10 @@ def main() -> None:
     store = StateStore(args.state)
     try:
         if args.command == "init":
-            state = create_state(args.old_stars, args.cells, args.seed, args.old_sectors)
+            state = create_state(
+                args.old_stars, args.cells, args.seed, args.old_sectors,
+                war_apart_state=args.war_apart_state,
+            )
             store.save(state)
         elif args.command == "transit":
             state = begin_transit(store, args.crash_after)
@@ -1142,7 +1193,8 @@ def main() -> None:
             validate_state(state)
         else:
             state = run_demo(
-                store, args.old_stars, args.cells, args.seed, args.old_sectors
+                store, args.old_stars, args.cells, args.seed, args.old_sectors,
+                args.war_apart_state,
             )
     except SimulatedCrash as exc:
         print(f"CRASH: {exc}")

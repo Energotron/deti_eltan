@@ -156,11 +156,18 @@ def main():
         if len(bounds)!=2 or bounds[0]<0 or bounds[0]>=bounds[1]:
             raise SystemExit(f'invalid Second Home {range_name}')
     migration=second.get('interarm_pirate_migration',{})
-    if migration.get('initial_status')!='LOCKED' or \
+    if set(migration.get('eligible_war_apart_states',[]))!={
+        'NOT_STARTED','CLAN_ACTIVE','PIRATE_VICTORY','PLAYER_PIRATE'
+    } or set(migration.get('destroyed_war_apart_states',[]))!={'COALITION_VICTORY'} or \
+            migration.get('unknown_war_apart_state_behavior')!='block_migration' or \
+            migration.get('eligible_initial_status')!='LOCKED' or \
+            migration.get('destroyed_initial_status')!='EXTINCT' or \
+            migration.get('unknown_initial_status')!='UNRESOLVED' or \
             migration.get('trigger')!='first_completed_old_arm_to_second_home_transit' or \
             migration.get('arrival_delay_days',0)<1 or \
+            migration.get('player_pirate_arrival_delay_days')!=0 or \
             migration.get('preferred_archetype')!='ASH_BORDER':
-        raise SystemExit('War Apart pirate migration must begin only after the first interarm passage')
+        raise SystemExit('War Apart pirate migration outcome matrix is invalid')
     if migration.get('route_explanation')!='pirate_scouts_copy_twin_home_anchor_resonance_wake':
         raise SystemExit('War Apart pirate arrival route is not justified')
     pirate_faction=next(faction for faction in factions if faction['id']=='CE_FACTION_PIRATES')
