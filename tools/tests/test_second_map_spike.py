@@ -10,11 +10,14 @@ from tools.second_map_spike import (
     SimulatedCrash,
     StateError,
     StateStore,
+    available_sector_maps,
     begin_transit,
     create_state,
+    purchase_sector_map,
     recover_transit,
     run_demo,
     simulate_days,
+    story_sector_brief,
     validate_state,
 )
 
@@ -142,6 +145,14 @@ class SecondMapSpikeTests(unittest.TestCase):
             story_sectors[node_id] not in starting_sector_ids
             for node_id in set(REQUIRED_NODES) - set(EARLY_STORY_NODES)
         ))
+        sector_depths = {
+            sector["id"]: sector["discovery_depth"]
+            for sector in second["sectors"]
+        }
+        self.assertTrue(all(
+            sector_depths[story_sectors[node_id]] >= 2
+            for node_id in set(REQUIRED_NODES) - set(EARLY_STORY_NODES)
+        ))
 
     def test_missing_anchor_and_scale_violation_are_rejected(self):
         state = create_state(64, 5, 99)
@@ -157,14 +168,75 @@ class SecondMapSpikeTests(unittest.TestCase):
         with self.assertRaises(StateError):
             validate_state(state)
 
-    def test_smallest_supported_layout_still_places_every_story_role(self):
-        state = create_state(11, 2, 77, old_sector_count=9)
-        systems = state["maps"]["SECOND_HOME"]["systems"]
-        self.assertEqual(len(systems), 11)
+    def test_layout_rejects_a_galaxy_too_sparse_for_map_offices(self):
+        with self.assertRaises(StateError):
+            create_state(11, 2, 77, old_sector_count=10)
+
+    def test_vanilla_border_map_purchases_reveal_the_whole_galaxy(self):
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        state["current_arm"] = "SECOND_HOME"
+        second = state["maps"]["SECOND_HOME"]
+        self.assertEqual(len(second["known_sector_ids"]), 3)
+        credits_before = state["credits"]
+
+        while len(second["known_sector_ids"]) < second["sector_count"]:
+            known = set(second["known_sector_ids"])
+            purchase = None
+            for system in second["systems"]:
+                if system["sector_id"] not in known or not system["government_map_office"]:
+                    continue
+                offers = available_sector_maps(state, system["id"])
+                if offers:
+                    purchase = (system["id"], offers[0])
+                    break
+            self.assertIsNotNone(purchase)
+            office_id, offer = purchase
+            purchase_sector_map(state, office_id, offer["sector_id"])
+            if len(second["known_sector_ids"]) == 10:
+                self.store.save(state)
+                state = self.store.load()
+                validate_state(state)
+                second = state["maps"]["SECOND_HOME"]
+
+        self.assertEqual(len(second["known_sector_ids"]), 19)
+        self.assertLess(state["credits"], credits_before)
         self.assertEqual(
-            {system["story_node"] for system in systems},
-            set(REQUIRED_NODES),
+            len([event for event in state["history"] if event["type"] == "CE_SECTOR_MAP_PURCHASED"]),
+            16,
         )
+
+    def test_sector_map_requires_border_government_and_enough_credits(self):
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        state["current_arm"] = "SECOND_HOME"
+        second = state["maps"]["SECOND_HOME"]
+        known = set(second["known_sector_ids"])
+        office = next(
+            system for system in second["systems"]
+            if system["sector_id"] in known and system["government_map_office"] and
+            available_sector_maps(state, system["id"])
+        )
+        offer = available_sector_maps(state, office["id"])[0]
+        state["credits"] = offer["price"] - 1
+        with self.assertRaises(StateError):
+            purchase_sector_map(state, office["id"], offer["sector_id"])
+        non_office = next(
+            system for system in second["systems"]
+            if system["sector_id"] in known and not system["government_map_office"]
+        )
+        with self.assertRaises(StateError):
+            available_sector_maps(state, non_office["id"])
+
+    def test_locked_story_brief_names_sector_without_dry_ui_wording(self):
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        later_node = next(
+            node for node in REQUIRED_NODES if node not in EARLY_STORY_NODES
+        )
+        brief = story_sector_brief(state, later_node)
+        self.assertFalse(brief["sector_known"])
+        self.assertIsNone(brief["system_name"])
+        self.assertIn(brief["sector_name"], brief["instruction"])
+        self.assertNotIn("Для продолжения", brief["instruction"])
+        self.assertNotIn("Откройте сектор", brief["instruction"])
 
 
 if __name__ == "__main__":

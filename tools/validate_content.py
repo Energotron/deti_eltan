@@ -80,11 +80,23 @@ def main():
     early_nodes=progression.get('early_story_nodes',[])
     if progression.get('starting_open_sector_count')!=3 or len(early_nodes)!=3:
         raise SystemExit('Second Home must open with three sectors and three early story nodes')
+    if progression.get('minimum_late_story_map_purchases',0)<2:
+        raise SystemExit('later Second Home story must require at least two map purchases')
     if len(early_nodes)!=len(set(early_nodes)) or not set(early_nodes)<=set(second['required_nodes']):
         raise SystemExit('early Second Home story nodes are invalid or duplicated')
     if not progression.get('remaining_sectors_require_discovery') or \
             not progression.get('later_story_nodes_start_hidden'):
         raise SystemExit('later Second Home sectors and story nodes must start hidden')
+    if progression.get('story_completion_reveals_sectors') is not False:
+        raise SystemExit('Second Home story must not reveal sectors automatically')
+    discovery=second.get('sector_discovery_rule',{})
+    if discovery.get('method')!='buy_star_map_from_government' or \
+            not discovery.get('requires_border_adjacency'):
+        raise SystemExit('Second Home sector discovery must follow vanilla map purchases')
+    later_nodes=set(second['required_nodes'])-set(early_nodes)
+    briefings=second.get('locked_sector_briefings',{})
+    if set(briefings)!=later_nodes or any('{sector}' not in text for text in briefings.values()):
+        raise SystemExit('every later story node needs an atmospheric locked-sector briefing')
     if set(archetype_names)!=set(second['sector_archetypes']):
         raise SystemExit('every Second Home sector archetype must have a display name')
     sector_pool=second.get('sector_name_pool',[])

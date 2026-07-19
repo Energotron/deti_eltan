@@ -31,14 +31,17 @@ SYSTEM_NAME_POOL = tuple(MAP_SCHEMA["system_name_pool"])
 REQUIRED_NODES = tuple(MAP_SCHEMA["required_nodes"])
 STORY_NODE_TITLES = MAP_SCHEMA["display_names"]["story_nodes"]
 STORY_NODE_ARCHETYPES = MAP_SCHEMA["story_node_preferred_archetypes"]
+LOCKED_SECTOR_BRIEFINGS = MAP_SCHEMA["locked_sector_briefings"]
 EARLY_STORY_NODES = tuple(MAP_SCHEMA["story_progression"]["early_story_nodes"])
 STARTING_SECTOR_COUNT = MAP_SCHEMA["story_progression"]["starting_open_sector_count"]
-MIN_SECTOR_COUNT = sum(
+MIN_LATE_STORY_DEPTH = MAP_SCHEMA["story_progression"]["minimum_late_story_map_purchases"]
+DISCOVERY_RULE = MAP_SCHEMA["sector_discovery_rule"]
+MIN_SECTOR_COUNT = max(STARTING_SECTOR_COUNT + len(SECTOR_ARCHETYPES) + 1, sum(
     2 if any(STORY_NODE_ARCHETYPES[node] == archetype for node in EARLY_STORY_NODES) and
     any(STORY_NODE_ARCHETYPES[node] == archetype for node in set(REQUIRED_NODES) - set(EARLY_STORY_NODES))
     else 1
     for archetype in SECTOR_ARCHETYPES
-)
+))
 TRANSIT_PHASES = ("PREPARED", "DEBITED", "SWITCHED")
 
 
@@ -79,12 +82,18 @@ class StateStore:
 
 
 def create_state(
-    old_star_count: int, cells: int, seed: int, old_sector_count: int = 19
+    old_star_count: int,
+    cells: int,
+    seed: int,
+    old_sector_count: int = 19,
+    initial_credits: int = 100_000,
 ) -> dict[str, Any]:
-    if old_star_count < len(REQUIRED_NODES):
-        raise StateError("old arm is too small for the required Second Home nodes")
+    if old_star_count < max(len(REQUIRED_NODES), old_sector_count * 2):
+        raise StateError("old arm is too sparse for the required Second Home layout")
     if cells < 0:
         raise StateError("resonance cell count cannot be negative")
+    if initial_credits < 0:
+        raise StateError("credit balance cannot be negative")
     if old_sector_count < MIN_SECTOR_COUNT:
         raise StateError("old arm has too few sectors for Second Home progression")
     if old_sector_count > len(SECTOR_NAME_POOL):
@@ -103,6 +112,7 @@ def create_state(
             "CE_Item_TwinHomeAnchor": 1,
             "CE_Item_ResonanceCell": cells,
         },
+        "credits": initial_credits,
         "transit": None,
         "maps": {
             "OLD_ARM": _new_map(seed, old_star_count, old_sector_count, (), (), ()),
@@ -154,14 +164,85 @@ def _generate_sector_layout(seed: int, sector_count: int) -> tuple[dict[str, str
         starting_sector_ids.add(candidate["id"])
     if len(starting_sector_ids) != STARTING_SECTOR_COUNT:
         raise StateError("starting sector layout does not match story progression")
-    return tuple(
+    layout = [
         {"id": item["id"], "display_name": item["display_name"],
          "archetype": item["archetype"],
          "discovery_tier": (
              "STARTING" if item["id"] in starting_sector_ids else "LOCKED"
          )}
         for item in selected
+    ]
+    _add_sector_adjacency(seed, layout)
+    return tuple(layout)
+
+
+def _add_sector_adjacency(seed: int, sectors: list[dict[str, Any]]) -> None:
+    by_id = {sector["id"]: sector for sector in sectors}
+    starting = sorted(
+        (sector for sector in sectors if sector["discovery_tier"] == "STARTING"),
+        key=lambda sector: _stable_int(seed, "starting-chain", sector["id"]),
     )
+    locked = [sector for sector in sectors if sector["discovery_tier"] == "LOCKED"]
+    adjacency = {sector["id"]: set() for sector in sectors}
+    depth = {sector["id"]: 0 for sector in starting}
+
+    for left, right in zip(starting, starting[1:]):
+        adjacency[left["id"]].add(right["id"])
+        adjacency[right["id"]].add(left["id"])
+
+    representatives = [
+        min(
+            (sector for sector in locked if sector["archetype"] == archetype),
+            key=lambda sector: _stable_int(
+                seed, "depth-two-representative", archetype, sector["id"]
+            ),
+        )
+        for archetype in SECTOR_ARCHETYPES
+    ]
+    representative_ids = {sector["id"] for sector in representatives}
+    extras = sorted(
+        (sector for sector in locked if sector["id"] not in representative_ids),
+        key=lambda sector: _stable_int(seed, "locked-extra", sector["id"]),
+    )
+    if not extras:
+        raise StateError("sector graph needs a border gateway before story sectors")
+    gateway = extras.pop(0)
+    gateway_parent = min(
+        starting,
+        key=lambda sector: _stable_int(seed, "gateway-parent", sector["id"]),
+    )
+    adjacency[gateway["id"]].add(gateway_parent["id"])
+    adjacency[gateway_parent["id"]].add(gateway["id"])
+    depth[gateway["id"]] = 1
+
+    for sector in representatives:
+        adjacency[sector["id"]].add(gateway["id"])
+        adjacency[gateway["id"]].add(sector["id"])
+        depth[sector["id"]] = 2
+
+    connected_ids = [
+        sector["id"] for sector in starting
+    ] + [gateway["id"]] + [sector["id"] for sector in representatives]
+    for sector in extras:
+        parent_id = min(
+            (sector_id for sector_id in connected_ids if depth[sector_id] >= 1),
+            key=lambda candidate_id: _stable_int(
+                seed, "sector-parent", sector["id"], candidate_id
+            ),
+        )
+        adjacency[sector["id"]].add(parent_id)
+        adjacency[parent_id].add(sector["id"])
+        depth[sector["id"]] = depth[parent_id] + 1
+        connected_ids.append(sector["id"])
+
+    base_price = DISCOVERY_RULE["base_price_credits"]
+    depth_step = DISCOVERY_RULE["depth_price_step_credits"]
+    for sector_id, sector in by_id.items():
+        sector["adjacent_sector_ids"] = sorted(adjacency[sector_id])
+        sector["discovery_depth"] = depth[sector_id]
+        sector["map_price"] = 0 if depth[sector_id] == 0 else (
+            base_price + depth[sector_id] * depth_step
+        )
 
 
 def _generate_system_layout(
@@ -183,7 +264,18 @@ def _generate_system_layout(
         required_hosts = sum(
             STORY_NODE_ARCHETYPES[node] == archetype for node in REQUIRED_NODES
         )
-        selected_names.extend(by_archetype[archetype][:required_hosts])
+        archetype_sectors = [
+            sector for sector in sectors if sector["archetype"] == archetype
+        ]
+        shallow_locked = sum(
+            sector["discovery_tier"] == "LOCKED" and
+            sector["discovery_depth"] < MIN_LATE_STORY_DEPTH
+            for sector in archetype_sectors
+        )
+        minimum_systems = max(
+            required_hosts, len(archetype_sectors) + shallow_locked
+        )
+        selected_names.extend(by_archetype[archetype][:minimum_systems])
     selected_ids = {item["id"] for item in selected_names}
     remaining = sorted(
         (item for item in SYSTEM_NAME_POOL if item["id"] not in selected_ids),
@@ -243,7 +335,8 @@ def _generate_system_layout(
         elif item["story_node"]:
             candidates = [
                 sector for sector in candidates
-                if sector["discovery_tier"] == "LOCKED"
+                if sector["discovery_tier"] == "LOCKED" and
+                sector["discovery_depth"] >= MIN_LATE_STORY_DEPTH
             ]
         if not candidates:
             raise StateError("story system has no sector in its discovery tier")
@@ -251,6 +344,44 @@ def _generate_system_layout(
         sector = candidates[offset % len(candidates)]
         archetype_offsets[archetype] += 1
         result.append({**item, "sector_id": sector["id"]})
+    for empty_sector in sectors:
+        if any(system["sector_id"] == empty_sector["id"] for system in result):
+            continue
+        sector_loads = {
+            sector["id"]: sum(
+                system["sector_id"] == sector["id"] for system in result
+            )
+            for sector in sectors
+        }
+        movable = [
+            system for system in result
+            if system["archetype"] == empty_sector["archetype"] and
+            not system["story_node"] and sector_loads[system["sector_id"]] > 1
+        ]
+        if not movable:
+            raise StateError(f"sector {empty_sector['id']} has no generated system")
+        system = min(
+            movable,
+            key=lambda item: _stable_int(
+                seed, "fill-empty-sector", empty_sector["id"], item["id"]
+            ),
+        )
+        system["sector_id"] = empty_sector["id"]
+    for system in result:
+        system["government_map_office"] = False
+    for sector in sectors:
+        candidates = [
+            system for system in result if system["sector_id"] == sector["id"]
+        ]
+        if not candidates:
+            raise StateError(f"sector {sector['id']} has no system for a map office")
+        office = min(
+            candidates,
+            key=lambda system: _stable_int(
+                seed, "government-map-office", sector["id"], system["id"]
+            ),
+        )
+        office["government_map_office"] = True
     return tuple(result)
 
 
@@ -262,12 +393,17 @@ def _new_map(
     sectors: tuple[dict[str, str], ...],
     systems: tuple[dict[str, Any], ...],
 ) -> dict[str, Any]:
+    starting_sector_ids = [
+        sector["id"] for sector in sectors
+        if sector.get("discovery_tier") == "STARTING"
+    ]
     return {
         "seed": seed,
         "star_count": star_count,
         "sector_count": sector_count,
         "sectors": list(sectors),
         "systems": list(systems),
+        "known_sector_ids": starting_sector_ids,
         "last_sim_day": 0,
         "aggregate_ticks": 0,
         "economy_index": 1000,
@@ -319,6 +455,43 @@ def validate_state(state: dict[str, Any]) -> None:
         for sector in sectors
     ):
         raise StateError("Second Home must have exactly three starting sectors")
+    sector_by_id = {sector["id"]: sector for sector in sectors}
+    for sector in sectors:
+        adjacent = sector.get("adjacent_sector_ids", [])
+        if len(adjacent) != len(set(adjacent)) or any(
+            adjacent_id not in sector_by_id or adjacent_id == sector["id"]
+            for adjacent_id in adjacent
+        ):
+            raise StateError("Second Home sector adjacency is invalid")
+        if any(
+            sector["id"] not in sector_by_id[adjacent_id]["adjacent_sector_ids"]
+            for adjacent_id in adjacent
+        ):
+            raise StateError("Second Home sector adjacency must be symmetric")
+        expected_price = 0 if sector["discovery_depth"] == 0 else (
+            DISCOVERY_RULE["base_price_credits"] +
+            sector["discovery_depth"] * DISCOVERY_RULE["depth_price_step_credits"]
+        )
+        if sector.get("map_price") != expected_price:
+            raise StateError("Second Home sector map price is invalid")
+    reachable = set(starting_sector_ids)
+    while True:
+        expanded = reachable | {
+            adjacent_id
+            for sector_id in reachable
+            for adjacent_id in sector_by_id[sector_id]["adjacent_sector_ids"]
+        }
+        if expanded == reachable:
+            break
+        reachable = expanded
+    if reachable != set(sector_ids):
+        raise StateError("Second Home sector graph must be connected")
+
+    known_sector_ids = state["maps"]["SECOND_HOME"].get("known_sector_ids", [])
+    if len(known_sector_ids) != len(set(known_sector_ids)) or \
+            not set(starting_sector_ids) <= set(known_sector_ids) or \
+            not set(known_sector_ids) <= set(sector_ids):
+        raise StateError("Second Home known sector set is invalid")
 
     systems = state["maps"]["SECOND_HOME"].get("systems", [])
     if len(systems) != second_count:
@@ -379,12 +552,30 @@ def validate_state(state: dict[str, Any]) -> None:
         for node_id in set(REQUIRED_NODES) - set(EARLY_STORY_NODES)
     ):
         raise StateError("later Second Home story node leaked into starting sectors")
+    if any(
+        sector_by_id[story_systems[node_id]["sector_id"]]["discovery_depth"] <
+        MIN_LATE_STORY_DEPTH
+        for node_id in set(REQUIRED_NODES) - set(EARLY_STORY_NODES)
+    ):
+        raise StateError("later Second Home story node is too close to the known map")
+    office_counts = {
+        sector_id: sum(
+            system.get("government_map_office") is True and
+            system["sector_id"] == sector_id
+            for system in systems
+        )
+        for sector_id in sector_ids
+    }
+    if any(count != 1 for count in office_counts.values()):
+        raise StateError("every Second Home sector needs one government map office")
 
     cargo = state.get("cargo", {})
     if cargo.get("CE_Item_TwinHomeAnchor") != 1:
         raise StateError("Twin Home Anchor must exist exactly once")
     if cargo.get("CE_Item_ResonanceCell", -1) < 0:
         raise StateError("resonance cell count cannot be negative")
+    if state.get("credits", -1) < 0:
+        raise StateError("credit balance cannot be negative")
 
     transit = state.get("transit")
     if transit is not None:
@@ -403,6 +594,98 @@ def validate_state(state: dict[str, Any]) -> None:
             raise StateError(f"{arm} has an invalid front set")
         if any(not 0 <= value <= 100 for value in fronts.values()):
             raise StateError(f"{arm} front value is outside 0..100")
+
+
+def available_sector_maps(
+    state: dict[str, Any], current_system_id: str
+) -> tuple[dict[str, Any], ...]:
+    validate_state(state)
+    if state["current_arm"] != "SECOND_HOME":
+        raise StateError("Second Home maps are sold only inside Second Home")
+    second = state["maps"]["SECOND_HOME"]
+    system = next(
+        (item for item in second["systems"] if item["id"] == current_system_id),
+        None,
+    )
+    if system is None:
+        raise StateError("unknown Second Home system")
+    if system["sector_id"] not in second["known_sector_ids"]:
+        raise StateError("current system belongs to an unknown sector")
+    if not system.get("government_map_office"):
+        raise StateError("current system has no government map office")
+    sectors = {sector["id"]: sector for sector in second["sectors"]}
+    known = set(second["known_sector_ids"])
+    return tuple(
+        {
+            "sector_id": sector_id,
+            "display_name": sectors[sector_id]["display_name"],
+            "price": sectors[sector_id]["map_price"],
+        }
+        for sector_id in sectors[system["sector_id"]]["adjacent_sector_ids"]
+        if sector_id not in known
+    )
+
+
+def purchase_sector_map(
+    state: dict[str, Any], current_system_id: str, sector_id: str
+) -> None:
+    offer = next(
+        (
+            item for item in available_sector_maps(state, current_system_id)
+            if item["sector_id"] == sector_id
+        ),
+        None,
+    )
+    if offer is None:
+        raise StateError("sector map is not sold from this bordering system")
+    if state["credits"] < offer["price"]:
+        raise StateError("not enough credits for the sector map")
+    state["credits"] -= offer["price"]
+    state["maps"]["SECOND_HOME"]["known_sector_ids"].append(sector_id)
+    state["history"].append(
+        {
+            "type": "CE_SECTOR_MAP_PURCHASED",
+            "day": state["current_day"],
+            "system_id": current_system_id,
+            "sector_id": sector_id,
+            "price": offer["price"],
+        }
+    )
+    state["revision"] += 1
+    validate_state(state)
+
+
+def story_sector_brief(state: dict[str, Any], story_node_id: str) -> dict[str, Any]:
+    validate_state(state)
+    if story_node_id not in REQUIRED_NODES:
+        raise StateError("unknown Second Home story node")
+    second = state["maps"]["SECOND_HOME"]
+    system = next(
+        item for item in second["systems"]
+        if item.get("story_node") == story_node_id
+    )
+    sector = next(
+        item for item in second["sectors"] if item["id"] == system["sector_id"]
+    )
+    is_known = sector["id"] in second["known_sector_ids"]
+    instruction = (
+        f'Навигационный архив обновлён: система «{system["display_name"]}», '
+        f'сектор «{sector["display_name"]}».'
+        if is_known else
+        LOCKED_SECTOR_BRIEFINGS[story_node_id].format(
+            sector=sector["display_name"]
+        )
+    )
+    return {
+        "story_node_id": story_node_id,
+        "story_title": STORY_NODE_TITLES[story_node_id],
+        "system_id": system["id"] if is_known else None,
+        "system_name": system["display_name"] if is_known else None,
+        "sector_id": sector["id"],
+        "sector_name": sector["display_name"],
+        "sector_known": is_known,
+        "instruction": instruction,
+    }
 
 
 def simulate_days(state: dict[str, Any], days: int) -> None:
@@ -548,6 +831,13 @@ def _parser() -> argparse.ArgumentParser:
     simulate = sub.add_parser("simulate")
     simulate.add_argument("state", type=Path)
     simulate.add_argument("--days", type=int, required=True)
+    maps = sub.add_parser("maps")
+    maps.add_argument("state", type=Path)
+    maps.add_argument("--system", required=True)
+    buy_map = sub.add_parser("buy-map")
+    buy_map.add_argument("state", type=Path)
+    buy_map.add_argument("--system", required=True)
+    buy_map.add_argument("--sector", required=True)
     verify = sub.add_parser("verify")
     verify.add_argument("state", type=Path)
     demo = sub.add_parser("demo")
@@ -574,6 +864,14 @@ def main() -> None:
             state = store.load()
             simulate_days(state, args.days)
             store.save(state)
+        elif args.command == "maps":
+            state = store.load()
+            offers = available_sector_maps(state, args.system)
+            print(json.dumps(offers, ensure_ascii=False, indent=2))
+        elif args.command == "buy-map":
+            state = store.load()
+            purchase_sector_map(state, args.system, args.sector)
+            store.save(state)
         elif args.command == "verify":
             state = store.load()
             validate_state(state)
@@ -588,7 +886,9 @@ def main() -> None:
         f"OK: arm={state['current_arm']} day={state['current_day']} "
         f"cells={state['cargo']['CE_Item_ResonanceCell']} "
         f"sectors={state['maps']['SECOND_HOME']['sector_count']} "
-        f"transits={len(state['history'])} revision={state['revision']}"
+        f"transits={sum(event['type'] == 'CE_TRANSIT_COMPLETE' for event in state['history'])} "
+        f"maps={sum(event['type'] == 'CE_SECTOR_MAP_PURCHASED' for event in state['history'])} "
+        f"revision={state['revision']}"
     )
 
 

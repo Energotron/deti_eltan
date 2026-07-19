@@ -38,8 +38,17 @@
       "CE_SYS_FIRST_SHELTER",
       "CE_SYS_ARK_IV"
     ],
+    "minimum_late_story_map_purchases": 2,
     "remaining_sectors_require_discovery": true,
-    "later_story_nodes_start_hidden": true
+    "later_story_nodes_start_hidden": true,
+    "story_completion_reveals_sectors": false
+  },
+  "sector_discovery_rule": {
+    "method": "buy_star_map_from_government",
+    "seller_location": "inhabited_planet_in_known_adjacent_sector",
+    "requires_border_adjacency": true,
+    "base_price_credits": 1000,
+    "depth_price_step_credits": 250
   },
   "story_node_preferred_archetypes": {
     "CE_SYS_ELTAN_WOUND": "KLISSAN_SCAR",
@@ -53,6 +62,16 @@
     "CE_SYS_ORPHAN_NEST": "KLISSAN_SCAR",
     "CE_SYS_UNLIT_CITY": "AGILL",
     "CE_SYS_SECOND_GATE": "INTELL"
+  },
+  "locked_sector_briefings": {
+    "CE_SYS_KARH_FORTRESS": "Карх не станет обсуждать Клятву Пепла по дальней связи. Его крепость отмечена в секторе «{sector}», но наших навигационных данных недостаточно. Пограничные правительства иногда продают свежие карты.",
+    "CE_SYS_FACELESS_NODE": "Перехваченный пакет указывает на сектор «{sector}». Дальше координаты рассыпаются на ложные маршруты — сперва придётся раздобыть официальную карту у соседей.",
+    "CE_SYS_LUMEN": "Медиумские караваны называют сектор «{sector}» местом, где сходятся старые долговые линии. На нашей карте его нет; поспрашивайте правительства пограничных миров.",
+    "CE_SYS_UNITY_PRISM": "Сигнал Решётки приходит из сектора «{sector}». Без звёздной карты навигатор принимает его за помеху. Ближайшие правительства должны располагать маршрутами.",
+    "CE_SYS_ASH_MARKET": "Контрабандисты шепчутся о торгах в секторе «{sector}». Они продают слухи, но не координаты — карту придётся купить на обитаемой планете у границы.",
+    "CE_SYS_ORPHAN_NEST": "Споровый след уходит в сектор «{sector}», которого нет в бортовом атласе. Ищите правительство соседнего сектора: только у них могут быть безопасные трассы.",
+    "CE_SYS_UNLIT_CITY": "Все официальные записи обрываются у сектора «{sector}». Если Город Незажжённых существует, путь к нему начинается с карты, которую продают на пограничных мирах.",
+    "CE_SYS_SECOND_GATE": "Резонансный маяк отвечает из сектора «{sector}». Координаты слишком грубы для прыжка; понадобится полная карта района из правительства соседней системы."
   },
   "sector_archetypes": [
     "STRONG",
