@@ -18,7 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 ARMS = ("OLD_ARM", "SECOND_HOME")
 MAP_SCHEMA = json.loads(
     (Path(__file__).resolve().parents[1] / "data" / "second_home_map.schema.json").read_text(
@@ -35,6 +35,10 @@ LOCKED_SECTOR_BRIEFINGS = MAP_SCHEMA["locked_sector_briefings"]
 EARLY_STORY_NODES = tuple(MAP_SCHEMA["story_progression"]["early_story_nodes"])
 STARTING_SECTOR_COUNT = MAP_SCHEMA["story_progression"]["starting_open_sector_count"]
 MIN_LATE_STORY_DEPTH = MAP_SCHEMA["story_progression"]["minimum_late_story_map_purchases"]
+STORY_DECK_STAGES = tuple(
+    (stage["id"], tuple(stage["node_ids"]))
+    for stage in MAP_SCHEMA["story_progression"]["deck_stages"]
+)
 DISCOVERY_RULE = MAP_SCHEMA["sector_discovery_rule"]
 POPULATION_RULE = MAP_SCHEMA["system_population_rule"]
 PIRATE_MIGRATION_RULE = MAP_SCHEMA["interarm_pirate_migration"]
@@ -169,6 +173,10 @@ def create_state(
             "arrivals": 0,
             "converted_system_ids": [],
         },
+        "story": {
+            "node_order": list(_generate_story_node_order(second_seed)),
+            "completed_node_ids": [],
+        },
         "transit": None,
         "maps": {
             "OLD_ARM": _new_map(seed, old_star_count, old_sector_count, (), (), ()),
@@ -181,6 +189,18 @@ def create_state(
     }
     validate_state(state)
     return state
+
+
+def _generate_story_node_order(seed: int) -> tuple[str, ...]:
+    result = []
+    for stage_id, node_ids in STORY_DECK_STAGES:
+        result.extend(sorted(
+            node_ids,
+            key=lambda node_id: _stable_int(
+                seed, "story-deck", stage_id, node_id
+            ),
+        ))
+    return tuple(result)
 
 
 def _generate_sector_layout(seed: int, sector_count: int) -> tuple[dict[str, str], ...]:
@@ -718,6 +738,17 @@ def validate_state(state: dict[str, Any]) -> None:
         for node_id in set(REQUIRED_NODES) - set(EARLY_STORY_NODES)
     ):
         raise StateError("later Second Home story node is too close to the known map")
+    story = state.get("story", {})
+    node_order = story.get("node_order", [])
+    expected_node_order = list(_generate_story_node_order(
+        state["maps"]["SECOND_HOME"]["seed"]
+    ))
+    completed_node_ids = story.get("completed_node_ids", [])
+    if node_order != expected_node_order or set(node_order) != set(REQUIRED_NODES):
+        raise StateError("Second Home story deck does not match its seed")
+    if not isinstance(completed_node_ids, list) or \
+            completed_node_ids != node_order[:len(completed_node_ids)]:
+        raise StateError("Second Home story completion is not a deck prefix")
     office_counts = {
         sector_id: sum(
             system.get("government_map_office") is True and
@@ -965,6 +996,47 @@ def story_sector_brief(state: dict[str, Any], story_node_id: str) -> dict[str, A
         "sector_known": is_known,
         "instruction": instruction,
     }
+
+
+def current_story_target(state: dict[str, Any]) -> dict[str, Any] | None:
+    validate_state(state)
+    story = state["story"]
+    index = len(story["completed_node_ids"])
+    if index == len(story["node_order"]):
+        return None
+    node_id = story["node_order"][index]
+    stage_id = next(
+        stage_id for stage_id, node_ids in STORY_DECK_STAGES
+        if node_id in node_ids
+    )
+    return {
+        **story_sector_brief(state, node_id),
+        "sequence_index": index,
+        "stage_id": stage_id,
+    }
+
+
+def complete_story_target(state: dict[str, Any], story_node_id: str) -> None:
+    target = current_story_target(state)
+    if target is None:
+        raise StateError("Second Home story deck is already complete")
+    if story_node_id != target["story_node_id"]:
+        raise StateError("story node is not the current randomized target")
+    if state["current_arm"] != "SECOND_HOME":
+        raise StateError("Second Home story target requires the Second Home map")
+    if not target["sector_known"]:
+        raise StateError("current story target remains behind an unknown sector map")
+    state["story"]["completed_node_ids"].append(story_node_id)
+    state["history"].append(
+        {
+            "type": "CE_STORY_NODE_COMPLETED",
+            "day": state["current_day"],
+            "story_node_id": story_node_id,
+            "stage_id": target["stage_id"],
+        }
+    )
+    state["revision"] += 1
+    validate_state(state)
 
 
 def simulate_days(state: dict[str, Any], days: int) -> None:

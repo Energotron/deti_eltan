@@ -41,7 +41,25 @@
     "minimum_late_story_map_purchases": 2,
     "remaining_sectors_require_discovery": true,
     "later_story_nodes_start_hidden": true,
-    "story_completion_reveals_sectors": false
+    "story_completion_reveals_sectors": false,
+    "deck_stages": [
+      {
+        "id": "ARRIVAL",
+        "node_ids": ["CE_SYS_ELTAN_WOUND", "CE_SYS_FIRST_SHELTER", "CE_SYS_ARK_IV"]
+      },
+      {
+        "id": "FOUR_VOICES",
+        "node_ids": ["CE_SYS_KARH_FORTRESS", "CE_SYS_FACELESS_NODE", "CE_SYS_LUMEN", "CE_SYS_UNITY_PRISM"]
+      },
+      {
+        "id": "ASH_SECRETS",
+        "node_ids": ["CE_SYS_ASH_MARKET", "CE_SYS_ORPHAN_NEST", "CE_SYS_UNLIT_CITY"]
+      },
+      {
+        "id": "GATE",
+        "node_ids": ["CE_SYS_SECOND_GATE"]
+      }
+    ]
   },
   "sector_discovery_rule": {
     "method": "buy_star_map_from_government",

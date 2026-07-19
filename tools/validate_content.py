@@ -89,6 +89,17 @@ def main():
         raise SystemExit('later Second Home sectors and story nodes must start hidden')
     if progression.get('story_completion_reveals_sectors') is not False:
         raise SystemExit('Second Home story must not reveal sectors automatically')
+    deck_stages=progression.get('deck_stages',[])
+    deck_stage_ids=[stage.get('id') for stage in deck_stages]
+    deck_nodes=[node for stage in deck_stages for node in stage.get('node_ids',[])]
+    if deck_stage_ids!=['ARRIVAL','FOUR_VOICES','ASH_SECRETS','GATE'] or \
+            any(not stage.get('node_ids') for stage in deck_stages) or \
+            len(deck_nodes)!=len(set(deck_nodes)) or \
+            set(deck_nodes)!=set(second['required_nodes']):
+        raise SystemExit('Second Home randomized story deck is incomplete')
+    if set(deck_stages[0]['node_ids'])!=set(early_nodes) or \
+            deck_stages[-1]['node_ids']!=['CE_SYS_SECOND_GATE']:
+        raise SystemExit('Second Home story deck breaks arrival or gate causality')
     discovery=second.get('sector_discovery_rule',{})
     if discovery.get('method')!='buy_star_map_from_government' or \
             not discovery.get('requires_border_adjacency'):

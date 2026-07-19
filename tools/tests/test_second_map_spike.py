@@ -12,7 +12,9 @@ from tools.second_map_spike import (
     StateStore,
     available_sector_maps,
     begin_transit,
+    complete_story_target,
     create_state,
+    current_story_target,
     purchase_sector_map,
     recover_transit,
     run_demo,
@@ -416,6 +418,51 @@ class SecondMapSpikeTests(unittest.TestCase):
             if system["story_node"]
         }
         self.assertNotEqual(left_hosts, right_hosts)
+
+    def test_story_deck_randomizes_within_causal_stages_and_survives_load(self):
+        left = create_state(80, 5, 2441, old_sector_count=19)
+        right = create_state(80, 5, 2442, old_sector_count=19)
+        left_order = left["story"]["node_order"]
+        right_order = right["story"]["node_order"]
+        self.assertNotEqual(left_order, right_order)
+        self.assertEqual(set(left_order[:3]), set(EARLY_STORY_NODES))
+        self.assertEqual(left_order[-1], "CE_SYS_SECOND_GATE")
+
+        left["current_arm"] = "SECOND_HOME"
+        for _ in range(3):
+            target = current_story_target(left)
+            self.assertTrue(target["sector_known"])
+            complete_story_target(left, target["story_node_id"])
+
+        target = current_story_target(left)
+        self.assertFalse(target["sector_known"])
+        with self.assertRaises(StateError):
+            complete_story_target(left, target["story_node_id"])
+
+        second = left["maps"]["SECOND_HOME"]
+        while target["sector_id"] not in second["known_sector_ids"]:
+            known = set(second["known_sector_ids"])
+            purchase = next(
+                (
+                    (system["id"], offer)
+                    for system in second["systems"]
+                    if system["sector_id"] in known and system["government_map_office"]
+                    for offer in available_sector_maps(left, system["id"])
+                ),
+                None,
+            )
+            self.assertIsNotNone(purchase)
+            office_id, offer = purchase
+            purchase_sector_map(left, office_id, offer["sector_id"])
+
+        complete_story_target(left, target["story_node_id"])
+        self.store.save(left)
+        loaded = self.store.load()
+        self.assertEqual(loaded["story"], left["story"])
+        self.assertEqual(
+            current_story_target(loaded)["story_node_id"],
+            left_order[4],
+        )
 
     def test_first_story_nodes_are_open_and_later_nodes_start_hidden(self):
         state = create_state(80, 5, 2441, old_sector_count=19)
