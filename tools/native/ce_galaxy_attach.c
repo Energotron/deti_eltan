@@ -9,6 +9,8 @@
 
 #define CE_SAMPLE_BYTES 256u
 #define CE_DWORD_COUNT 64u
+#define CE_TARGET_SAMPLE_BYTES 64u
+#define CE_TARGET_DWORD_COUNT 16u
 #define CE_CHUNK_BYTES (1024u * 1024u)
 #define CE_MAX_REPORTED 64u
 
@@ -16,11 +18,25 @@
 #define CE_STABLE_ZERO_MASK UINT64_C(0x0818404000000400)
 #define CE_STABLE_POINTER_MASK UINT64_C(0x000300003000F801)
 
+typedef struct ce_target_fingerprint {
+    uint32_t root_word_index;
+    uint32_t hash;
+    uint32_t normalized_hash;
+    uint16_t zero_mask;
+    uint16_t pointer_mask;
+    DWORD state;
+    DWORD type;
+    DWORD protect_base;
+} ce_target_fingerprint;
+
 typedef struct ce_candidate {
     uint32_t hashes[4];
     uint32_t normalized_hashes[4];
     uint64_t zero_mask;
     uint64_t pointer_mask;
+    uint32_t root_pointer_count;
+    ce_target_fingerprint targets[CE_DWORD_COUNT];
+    size_t target_count;
 } ce_candidate;
 
 typedef struct ce_scan_result {
@@ -97,12 +113,60 @@ static uint64_t ce_pointer_mask(HANDLE process, const unsigned char *sample) {
     return result;
 }
 
+static int ce_sample_pointer_target(
+    HANDLE process,
+    uint32_t root_word_index,
+    uint32_t pointer_value,
+    ce_target_fingerprint *target
+) {
+    MEMORY_BASIC_INFORMATION memory;
+    unsigned char sample[CE_TARGET_SAMPLE_BYTES];
+    unsigned char normalized[CE_TARGET_SAMPLE_BYTES];
+    uintptr_t address = (uintptr_t)pointer_value;
+    uintptr_t region_start;
+    uintptr_t region_end;
+    SIZE_T bytes_read = 0;
+    unsigned index;
+    uint16_t zero_mask = 0;
+    uint16_t pointer_mask = 0;
+    if (VirtualQueryEx(process, (LPCVOID)address, &memory, sizeof(memory)) !=
+            sizeof(memory)) return 0;
+    region_start = (uintptr_t)memory.BaseAddress;
+    region_end = region_start + memory.RegionSize;
+    if (memory.State != MEM_COMMIT || !ce_is_readable(memory.Protect) ||
+            address < region_start || address > region_end ||
+            CE_TARGET_SAMPLE_BYTES > region_end - address) return 0;
+    if (!ReadProcessMemory(
+            process, (LPCVOID)address, sample, sizeof(sample), &bytes_read) ||
+            bytes_read != sizeof(sample)) return 0;
+    memcpy(normalized, sample, sizeof(normalized));
+    for (index = 0; index < CE_TARGET_DWORD_COUNT; ++index) {
+        uint32_t word = ce_read_u32(sample + index * 4u);
+        if (word == 0) {
+            zero_mask |= (uint16_t)(UINT16_C(1) << index);
+        } else if (ce_is_readable_pointer(process, word)) {
+            pointer_mask |= (uint16_t)(UINT16_C(1) << index);
+            memset(normalized + index * 4u, 0, 4u);
+        }
+    }
+    target->root_word_index = root_word_index;
+    target->hash = ce_fnv1a32(sample, sizeof(sample));
+    target->normalized_hash = ce_fnv1a32(normalized, sizeof(normalized));
+    target->zero_mask = zero_mask;
+    target->pointer_mask = pointer_mask;
+    target->state = memory.State;
+    target->type = memory.Type;
+    target->protect_base = memory.Protect & 0xffu;
+    return 1;
+}
+
 static int ce_match_sample(
     HANDLE process,
     const unsigned char *sample,
     uint64_t expected_zero,
     uint64_t expected_pointer,
     int exact,
+    const uint32_t *expected_hashes,
     ce_candidate *candidate
 ) {
     uint64_t zeros = ce_zero_mask(sample);
@@ -128,8 +192,26 @@ static int ce_match_sample(
             normalized + block * 64u, 64u
         );
     }
+    if (expected_hashes != NULL) {
+        for (block = 0; block < 4; ++block) {
+            if (candidate->hashes[block] != expected_hashes[block]) return 0;
+        }
+    }
     candidate->zero_mask = zeros;
     candidate->pointer_mask = pointers;
+    candidate->root_pointer_count = 0;
+    candidate->target_count = 0;
+    for (word_index = 0; word_index < CE_DWORD_COUNT; ++word_index) {
+        if ((pointers & (UINT64_C(1) << word_index)) != 0) {
+            uint32_t pointer_value = ce_read_u32(sample + word_index * 4u);
+            ++candidate->root_pointer_count;
+            if (ce_sample_pointer_target(
+                    process, word_index, pointer_value,
+                    &candidate->targets[candidate->target_count])) {
+                ++candidate->target_count;
+            }
+        }
+    }
     return 1;
 }
 
@@ -147,6 +229,7 @@ static int ce_scan_region(
     uint64_t expected_zero,
     uint64_t expected_pointer,
     int exact,
+    const uint32_t *expected_hashes,
     ce_scan_result *result
 ) {
     const SIZE_T allocation = CE_CHUNK_BYTES + CE_SAMPLE_BYTES - 1u;
@@ -174,7 +257,7 @@ static int ce_scan_region(
                 ce_candidate candidate;
                 if (ce_match_sample(
                         process, buffer + offset, expected_zero, expected_pointer,
-                        exact, &candidate)) {
+                        exact, expected_hashes, &candidate)) {
                     ce_record_candidate(result, &candidate);
                 }
             }
@@ -190,6 +273,7 @@ static int ce_scan_process(
     uint64_t expected_zero,
     uint64_t expected_pointer,
     int exact,
+    const uint32_t *expected_hashes,
     ce_scan_result *result
 ) {
     SYSTEM_INFO system_info;
@@ -215,7 +299,7 @@ static int ce_scan_process(
             ++result->regions;
             if (!ce_scan_region(
                     process, (uintptr_t)memory.BaseAddress, memory.RegionSize,
-                    expected_zero, expected_pointer, exact, result)) return 0;
+                    expected_zero, expected_pointer, exact, expected_hashes, result)) return 0;
         }
         address = next;
     }
@@ -232,6 +316,23 @@ static int ce_parse_u64(const char *text, uint64_t *value) {
     return 1;
 }
 
+static int ce_parse_hashes(const char *text, uint32_t hashes[4]) {
+    char copy[128];
+    char *part;
+    unsigned index = 0;
+    if (text == NULL || strlen(text) >= sizeof(copy)) return 0;
+    memcpy(copy, text, strlen(text) + 1u);
+    part = strtok(copy, ",");
+    while (part != NULL && index < 4) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(part, &end, 10);
+        if (end == part || *end != '\0') return 0;
+        hashes[index++] = (uint32_t)parsed;
+        part = strtok(NULL, ",");
+    }
+    return index == 4 && part == NULL;
+}
+
 static void ce_print_result(
     DWORD process_id,
     uint64_t expected_zero,
@@ -241,7 +342,7 @@ static void ce_print_result(
 ) {
     size_t index;
     printf(
-        "{\"schema\":1,\"read_only\":true,\"process_id\":%lu,"
+        "{\"schema\":2,\"read_only\":true,\"process_id\":%lu,"
         "\"profile\":\"%s\",\"expected_zero_mask\":\"%016" PRIX64 "\","
         "\"expected_pointer_mask\":\"%016" PRIX64 "\",\"regions\":%" PRIu64 ","
         "\"bytes_scanned\":%" PRIu64 ",\"candidate_count\":%" PRIu64 ","
@@ -258,13 +359,34 @@ static void ce_print_result(
             "{\"block_fnv1a32\":[%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 "],"
             "\"pointer_normalized_fnv1a32\":[%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 "],"
             "\"zero_mask\":\"%016" PRIX64 "\","
-            "\"readable_pointer_mask\":\"%016" PRIX64 "\"}",
+            "\"readable_pointer_mask\":\"%016" PRIX64 "\","
+            "\"root_pointer_count\":%" PRIu32 ","
+            "\"target_fingerprint_count\":%zu,\"target_fingerprints\":[",
             candidate->hashes[0], candidate->hashes[1],
             candidate->hashes[2], candidate->hashes[3],
             candidate->normalized_hashes[0], candidate->normalized_hashes[1],
             candidate->normalized_hashes[2], candidate->normalized_hashes[3],
-            candidate->zero_mask, candidate->pointer_mask
+            candidate->zero_mask, candidate->pointer_mask,
+            candidate->root_pointer_count, candidate->target_count
         );
+        {
+            size_t target_index;
+            for (target_index = 0; target_index < candidate->target_count; ++target_index) {
+                const ce_target_fingerprint *target = &candidate->targets[target_index];
+                if (target_index != 0) putchar(',');
+                printf(
+                    "{\"root_word_index\":%" PRIu32 ",\"sample_bytes\":64,"
+                    "\"fnv1a32\":%" PRIu32 ",\"pointer_normalized_fnv1a32\":%" PRIu32 ","
+                    "\"zero_mask\":\"%04" PRIX16 "\",\"readable_pointer_mask\":\"%04" PRIX16 "\","
+                    "\"state\":%lu,\"type\":%lu,\"protect_base\":%lu}",
+                    target->root_word_index, target->hash, target->normalized_hash,
+                    target->zero_mask, target->pointer_mask,
+                    (unsigned long)target->state, (unsigned long)target->type,
+                    (unsigned long)target->protect_base
+                );
+            }
+        }
+        fputs("]}", stdout);
     }
     puts("]}");
 }
@@ -296,14 +418,16 @@ static int ce_self_test(void) {
     }
     matched = ce_match_sample(
         GetCurrentProcess(), sample, CE_STABLE_ZERO_MASK,
-        CE_STABLE_POINTER_MASK, 1, &candidate
+        CE_STABLE_POINTER_MASK, 1, NULL, &candidate
     );
     memset(&result, 0, sizeof(result));
     if (matched) {
         matched = ce_scan_region(
             GetCurrentProcess(), (uintptr_t)sample, CE_SAMPLE_BYTES,
-            CE_STABLE_ZERO_MASK, CE_STABLE_POINTER_MASK, 1, &result
-        ) && result.candidate_count == 1 && result.reported_count == 1;
+            CE_STABLE_ZERO_MASK, CE_STABLE_POINTER_MASK, 1, NULL, &result
+        ) && result.candidate_count == 1 && result.reported_count == 1 &&
+            result.reported[0].root_pointer_count > 0 &&
+            result.reported[0].target_count == result.reported[0].root_pointer_count;
     }
     VirtualFree(pointer_target, 0, MEM_RELEASE);
     VirtualFree(sample, 0, MEM_RELEASE);
@@ -320,7 +444,8 @@ static void ce_usage(const char *program) {
         stderr,
         "Usage:\n"
         "  %s --self-test\n"
-        "  %s --pid PID [--zero-mask HEX] [--pointer-mask HEX] [--exact]\n",
+        "  %s --pid PID [--zero-mask HEX] [--pointer-mask HEX] [--exact] "
+        "[--root-hashes U32,U32,U32,U32]\n",
         program, program
     );
 }
@@ -330,6 +455,8 @@ int main(int argc, char **argv) {
     uint64_t zero_mask = CE_STABLE_ZERO_MASK;
     uint64_t pointer_mask = CE_STABLE_POINTER_MASK;
     int exact = 0;
+    uint32_t expected_hashes[4] = {0, 0, 0, 0};
+    int filter_hashes = 0;
     int index;
     HANDLE process;
     ce_scan_result result;
@@ -349,6 +476,9 @@ int main(int argc, char **argv) {
             if (!ce_parse_u64(argv[++index], &pointer_mask)) return 2;
         } else if (strcmp(argv[index], "--exact") == 0) {
             exact = 1;
+        } else if (strcmp(argv[index], "--root-hashes") == 0 && index + 1 < argc) {
+            if (!ce_parse_hashes(argv[++index], expected_hashes)) return 2;
+            filter_hashes = 1;
         } else {
             ce_usage(argv[0]);
             return 2;
@@ -363,7 +493,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "FAIL: OpenProcess read-only error=%lu\n", (unsigned long)GetLastError());
         return 3;
     }
-    if (!ce_scan_process(process, zero_mask, pointer_mask, exact, &result)) {
+    if (!ce_scan_process(
+            process, zero_mask, pointer_mask, exact,
+            filter_hashes ? expected_hashes : NULL, &result)) {
         CloseHandle(process);
         fputs("FAIL: scan allocation\n", stderr);
         return 3;

@@ -39,6 +39,13 @@ class ReadOnlyAttachSourceTests(unittest.TestCase):
         self.assertEqual(pointer, 0x000300003000F801 & 0x00070001F000F801)
         self.assertEqual(zero & pointer, 0)
 
+    def test_pointer_targets_are_bounded_and_address_free(self) -> None:
+        text = SOURCE.read_text(encoding="utf-8")
+        self.assertIn("#define CE_TARGET_SAMPLE_BYTES 64u", text)
+        self.assertIn('"{\\"schema\\":2', text)
+        self.assertIn("--root-hashes", text)
+        self.assertNotIn('\\"address\\"', text)
+
 
 if __name__ == "__main__":
     unittest.main()

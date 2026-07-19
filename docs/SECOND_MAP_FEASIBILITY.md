@@ -78,6 +78,14 @@ scanner. Offline build/host gate и реальный save/load gate пройде
 pointer-class masks сохранились. Результат записан в
 `GALAXY_LAYOUT_ABI6_RESULTS.md`.
 
+Следующий read-only topology gate проследил первые 64 байта каждого из 14
+читаемых pointer-target объектов Galaxy. Пять целей менялись с ходом, а 12
+целей, включая все пять динамических, сохранили нормализованные fingerprints
+после save/load. На ходу 303 обнаружена вторая устаревшая оболочка с теми же
+масками; scanner теперь требует callback root hashes для однозначного выбора.
+Результат описан в `GALAXY_POINTER_TOPOLOGY_RESULTS.md`. Типы полей ещё не
+назначены и запись остаётся запрещена.
+
 ## Решение для планирования
 
 1. CE-P00 и War Apart snapshot можно делать обычным RScript-модом.
@@ -87,4 +95,4 @@ pointer-class masks сохранились. Результат записан в
    `20648864`, не перенося предположения между версиями.
 5. Native switch и расширение save реализовывать отдельными capability gates.
 
-Статус: **OFFLINE SPIKE PASSED / ABI 5 TURN SAMPLE PASSED / SAME-TURN READ-ONLY ATTACH PASSED / ABI 6 NORMALIZED SAVE-LOAD PASSED / NATIVE SWITCH BLOCKED**.
+Статус: **OFFLINE SPIKE PASSED / ABI 5 TURN SAMPLE PASSED / ABI 6 NORMALIZED SAVE-LOAD PASSED / POINTER TOPOLOGY PASSED / FIELD TYPES UNKNOWN / NATIVE SWITCH BLOCKED**.

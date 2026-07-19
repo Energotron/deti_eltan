@@ -29,6 +29,29 @@
     "ASH_BORDER",
     "KLISSAN_SCAR"
   ],
+  "display_names": {
+    "systems": {
+      "CE_SYS_ELTAN_WOUND": "Эльтанская Рана",
+      "CE_SYS_FIRST_SHELTER": "Первый Приют",
+      "CE_SYS_ARK_IV": "Ковчег-IV",
+      "CE_SYS_KARH_FORTRESS": "Крепость Карх",
+      "CE_SYS_FACELESS_NODE": "Узел Без Лица",
+      "CE_SYS_LUMEN": "Люмен",
+      "CE_SYS_UNITY_PRISM": "Призма Единства",
+      "CE_SYS_ASH_MARKET": "Пепельный рынок",
+      "CE_SYS_ORPHAN_NEST": "Сиротское гнездо",
+      "CE_SYS_UNLIT_CITY": "Город Незажжённых",
+      "CE_SYS_SECOND_GATE": "Врата Второго Дома"
+    },
+    "sectors": {
+      "STRONG": "Сектор Стронгов",
+      "AGILL": "Сектор Агиллов",
+      "MEDIUM": "Сектор Медиумов",
+      "INTELL": "Сектор Интеллов",
+      "ASH_BORDER": "Пепельная окраина",
+      "KLISSAN_SCAR": "Клисанский шрам"
+    }
+  },
   "inactive_map_simulation": {
     "light_tick_days": 1,
     "aggregate_tick_min_days": 10,

@@ -15,10 +15,10 @@ Current ABI 6 capabilities:
 - explicitly report that native multi-galaxy switching is not implemented.
 
 The bind, marker and 64-byte fingerprint gates passed in the supported game build.
-ABI 5 passed the in-process `CurTurn 300 -> 301` game test. ABI 6 passes the x86
-host and adds pointer-normalized hashes for the next save/load comparison.
-Same-turn load observation is blocked because restored RScript does not call the
-DLL until another game day. Write and native multi-galaxy capabilities stay disabled.
+ABI 5 passed the in-process `CurTurn 300 -> 301` game test. ABI 6 passed the x86
+host and the real `301 -> 302 -> save -> reload 302` pointer-normalized gate.
+The external read-only scanner also passed a 14-target pointer-topology cycle on
+turns 302/303. Write and native multi-galaxy capabilities stay disabled.
 
 Build and test with `tools/build-engine-adapter.ps1`. The ABI contract and staged
 in-game gates are documented in `docs/SECOND_MAP_ADAPTER_ABI.md`.

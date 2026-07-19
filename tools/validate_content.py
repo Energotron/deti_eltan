@@ -63,6 +63,22 @@ def main():
     if set(second['maps'])!={'OLD_ARM','SECOND_HOME'}:
         raise SystemExit('map schema must define both arms')
 
+    display_names=second.get('display_names',{})
+    system_names=display_names.get('systems',{})
+    sector_names=display_names.get('sectors',{})
+    if set(system_names)!=set(second['required_nodes']):
+        raise SystemExit('every required Second Home system must have a canonical display name')
+    if set(sector_names)!=set(second['procedural_sectors']):
+        raise SystemExit('every Second Home sector must have a canonical display name')
+    visible_names=list(system_names.values())+list(sector_names.values())
+    if any(not isinstance(name,str) or not name.strip() for name in visible_names):
+        raise SystemExit('Second Home display names must be non-empty strings')
+    if len(visible_names)!=len(set(visible_names)):
+        raise SystemExit('Second Home display names must be unique')
+    forbidden_name_fragments=('sector_','system_','todo','placeholder','test')
+    if any(any(fragment in name.lower() for fragment in forbidden_name_fragments) for name in visible_names):
+        raise SystemExit('technical placeholder leaked into a Second Home display name')
+
     pirate_ids={x['id'] for x in pirate['states']}
     expected={'UNKNOWN','NOT_STARTED','CLAN_ACTIVE','COALITION_VICTORY','PIRATE_VICTORY','PLAYER_PIRATE'}
     if pirate_ids!=expected:

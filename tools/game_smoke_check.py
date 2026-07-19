@@ -89,6 +89,13 @@ def mask_value(record: dict[str, object], key: str) -> int:
     return int(value, 16)
 
 
+def target_mask_value(record: dict[str, object], key: str) -> int:
+    value = record.get(key)
+    if not isinstance(value, str) or len(value) != 4:
+        raise ValueError(f"invalid target {key}")
+    return int(value, 16)
+
+
 def preflight(module: Path) -> int:
     required = [
         module / "ModuleInfo.txt", module / "CFG" / "Main.dat",
@@ -322,7 +329,7 @@ def attach_timeline_record(
 ) -> dict[str, object]:
     candidates = payload.get("candidates")
     if (
-        payload.get("schema") != 1
+        payload.get("schema") not in {1, 2}
         or payload.get("read_only") is not True
         or not isinstance(payload.get("process_id"), int)
         or payload["process_id"] <= 0
@@ -347,7 +354,7 @@ def attach_timeline_record(
         raise ValueError("invalid attach candidate hashes")
     mask_value(candidate, "zero_mask")
     mask_value(candidate, "readable_pointer_mask")
-    return {
+    record = {
         "abi": EXPECTED_ABI,
         "process_id": payload["process_id"],
         "sample_tag": EXPECTED_MARKER,
@@ -364,6 +371,41 @@ def attach_timeline_record(
         "capture_source": "readonly-attach",
         "captured_ns": time.time_ns(),
     }
+    if payload.get("schema") == 2:
+        targets = candidate.get("target_fingerprints")
+        root_pointer_count = candidate.get("root_pointer_count")
+        target_count = candidate.get("target_fingerprint_count")
+        if (
+            not isinstance(root_pointer_count, int)
+            or not 0 <= root_pointer_count <= 64
+            or not isinstance(target_count, int)
+            or not isinstance(targets, list)
+            or target_count != len(targets)
+            or target_count > root_pointer_count
+        ):
+            raise ValueError("invalid pointer-target fingerprint counts")
+        indexes: set[int] = set()
+        for target in targets:
+            if not isinstance(target, dict):
+                raise ValueError("invalid pointer-target fingerprint")
+            root_word_index = target.get("root_word_index")
+            if (
+                not isinstance(root_word_index, int)
+                or not 0 <= root_word_index < 64
+                or root_word_index in indexes
+                or target.get("sample_bytes") != 64
+                or not isinstance(target.get("fnv1a32"), int)
+                or target["fnv1a32"] <= 0
+                or not isinstance(target.get("pointer_normalized_fnv1a32"), int)
+                or target["pointer_normalized_fnv1a32"] <= 0
+            ):
+                raise ValueError("invalid pointer-target fingerprint fields")
+            target_mask_value(target, "zero_mask")
+            target_mask_value(target, "readable_pointer_mask")
+            indexes.add(root_word_index)
+        record["root_pointer_count"] = root_pointer_count
+        record["target_fingerprints"] = targets
+    return record
 
 
 def capture_attach(
@@ -375,6 +417,7 @@ def capture_attach(
     zero_mask: str,
     pointer_mask: str,
     exact: bool,
+    root_hashes: str | None = None,
 ) -> int:
     command = [
         str(scanner), "--pid", str(process_id),
@@ -382,6 +425,8 @@ def capture_attach(
     ]
     if exact:
         command.append("--exact")
+    if root_hashes:
+        command.extend(("--root-hashes", root_hashes))
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         print(completed.stdout.strip())
@@ -490,6 +535,65 @@ def analyze_timeline(layout_file: Path) -> int:
     return 0
 
 
+def analyze_topology(layout_file: Path) -> int:
+    phases: dict[str, dict[str, object]] = {}
+    for record in layout_records(layout_file):
+        targets = record.get("target_fingerprints")
+        if (
+            record.get("phase") in {"before", "after", "reload"}
+            and isinstance(record.get("process_id"), int)
+            and isinstance(record.get("observation_tag"), int)
+            and isinstance(targets, list)
+            and targets
+        ):
+            phases[record["phase"]] = record
+    missing = [phase for phase in ("before", "after", "reload") if phase not in phases]
+    if missing:
+        print(f"NEED MORE: missing topology phase(s): {', '.join(missing)}")
+        return 3
+    before = phases["before"]
+    after = phases["after"]
+    reload_record = phases["reload"]
+    if before["process_id"] != after["process_id"] or \
+            after["observation_tag"] <= before["observation_tag"]:
+        print("FAIL: topology before/after must advance in one process")
+        return 3
+    if reload_record["process_id"] == after["process_id"] or \
+            reload_record["observation_tag"] != after["observation_tag"]:
+        print("FAIL: topology reload must use the saved turn in a new process")
+        return 3
+
+    def by_index(record: dict[str, object]) -> dict[int, dict[str, object]]:
+        return {target["root_word_index"]: target for target in record["target_fingerprints"]}
+
+    before_targets = by_index(before)
+    after_targets = by_index(after)
+    reload_targets = by_index(reload_record)
+    common_turn = sorted(before_targets.keys() & after_targets.keys())
+    common_reload = sorted(after_targets.keys() & reload_targets.keys())
+    changed_after_turn = [
+        index for index in common_turn
+        if before_targets[index]["pointer_normalized_fnv1a32"] !=
+        after_targets[index]["pointer_normalized_fnv1a32"]
+    ]
+    stable_after_reload = [
+        index for index in common_reload
+        if after_targets[index]["pointer_normalized_fnv1a32"] ==
+        reload_targets[index]["pointer_normalized_fnv1a32"]
+        and after_targets[index]["zero_mask"] == reload_targets[index]["zero_mask"]
+        and after_targets[index]["readable_pointer_mask"] ==
+        reload_targets[index]["readable_pointer_mask"]
+    ]
+    print(f"Pointer targets present before/after: {common_turn}")
+    print(f"Pointer targets changed after turn advance: {changed_after_turn}")
+    print(f"Pointer targets stable across save/load: {stable_after_reload}")
+    if not stable_after_reload:
+        print("FAIL: no pointer target fingerprint remained stable across save/load")
+        return 3
+    print("PASS: read-only Galaxy pointer topology is comparable across save/load")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -514,6 +618,8 @@ def main() -> int:
     p_capture.add_argument("--expected-turn", type=int)
     p_timeline = sub.add_parser("timeline")
     p_timeline.add_argument("--layout", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "galaxy-layout-timeline.jsonl")
+    p_topology = sub.add_parser("topology")
+    p_topology.add_argument("--layout", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "galaxy-topology-timeline.jsonl")
     p_attach = sub.add_parser("attach-capture")
     p_attach.add_argument("--scanner", type=Path, required=True)
     p_attach.add_argument("--process-id", type=int, required=True)
@@ -522,6 +628,7 @@ def main() -> int:
     p_attach.add_argument("--zero-mask", default="0D58404000000400")
     p_attach.add_argument("--pointer-mask", default="00070001F000F801")
     p_attach.add_argument("--exact", action="store_true")
+    p_attach.add_argument("--root-hashes")
     p_attach.add_argument("--timeline", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "galaxy-layout-timeline.jsonl")
     args = parser.parse_args()
     if args.command == "preflight":
@@ -537,11 +644,13 @@ def main() -> int:
         )
     if args.command == "timeline":
         return analyze_timeline(args.layout.resolve())
+    if args.command == "topology":
+        return analyze_topology(args.layout.resolve())
     if args.command == "attach-capture":
         return capture_attach(
             args.scanner.resolve(), args.process_id, args.timeline.resolve(),
             args.phase, args.expected_turn, args.zero_mask, args.pointer_mask,
-            args.exact,
+            args.exact, args.root_hashes,
         )
     return report(
         args.state.resolve(), args.marker.resolve(), args.fingerprint.resolve(), args.layout.resolve()

@@ -115,4 +115,7 @@ ABI 5 attach reload сохранил zero/pointer masks, но не сохран�
 64-байтный hash между процессами. ABI 6 вычисляет второй набор hashes после
 обнуления всех значений, классифицированных как readable pointers, исключительно
 в 256-байтной локальной копии. DLL и внешний scanner используют один алгоритм.
-Offline x86 host пройден; in-game turn/save/load цикл ещё требуется.
+Offline x86 host и in-game `301 -> 302 -> save -> reload 302` цикл пройдены:
+pointer-normalized блоки 0 и 3 совпали между процессами. Следующий внешний
+pointer-topology gate также пройден; детали находятся в
+`GALAXY_POINTER_TOPOLOGY_RESULTS.md`.
