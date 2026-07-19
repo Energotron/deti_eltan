@@ -57,7 +57,15 @@ same-turn загрузке строгий и устойчивый профили
 кандидат, хотя RScript latest остался устаревшим. Контракт и доказательства
 описаны в `GALAXY_READONLY_ATTACH.md`.
 
-Следующий gate — автоматически архивировать обезличенный reload fingerprint и
-сравнить его с `after`. По-прежнему запрещены process injection, запись в Galaxy,
-native switch и расширение save. `CEAdapterSupportsNativeMultiGalaxy()` остаётся
-`0`.
+Attach reload-точка автоматически архивирована для PID `6760`, `CurTurn=301`:
+
+- zero-mask полностью совпала с `after`;
+- pointer-class mask полностью совпала с `after`;
+- ни один сырой 64-байтный хеш не совпал между процессами.
+
+Таким образом, discovery gate пройден, но raw hashes непригодны для проверки
+сериализации: они включают process-local указатели и другие изменяемые значения.
+Следующий gate — ABI 6 с pointer-normalized hashes, вычисленными после замены
+классифицированных указателей на ноль в локальной копии. По-прежнему запрещены
+process injection, запись в Galaxy, native switch и расширение save.
+`CEAdapterSupportsNativeMultiGalaxy()` остаётся `0`.

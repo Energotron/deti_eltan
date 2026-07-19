@@ -7,6 +7,25 @@ from tools import game_smoke_check
 
 
 class GalaxyLayoutAnalysisTests(unittest.TestCase):
+    def test_attach_record_requires_one_read_only_candidate(self) -> None:
+        payload = {
+            "schema": 1,
+            "read_only": True,
+            "process_id": 20,
+            "candidate_count": 1,
+            "reported_count": 1,
+            "candidates": [{
+                "block_fnv1a32": [1, 2, 3, 4],
+                "zero_mask": "0D58404000000400",
+                "readable_pointer_mask": "00070001F000F801",
+            }],
+        }
+        record = game_smoke_check.attach_timeline_record(payload, "reload", 301)
+        self.assertEqual(record["process_id"], 20)
+        self.assertEqual(record["observation_tag"], 301)
+        self.assertEqual(record["sequence"], 0)
+        self.assertEqual(record["capture_source"], "readonly-attach")
+
     def make_record(
         self,
         process_id: int,

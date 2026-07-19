@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import struct
+import subprocess
 import sys
 import time
 
@@ -305,6 +306,88 @@ def capture_layout(
     return 0
 
 
+def attach_timeline_record(
+    payload: dict[str, object], phase: str, expected_turn: int
+) -> dict[str, object]:
+    candidates = payload.get("candidates")
+    if (
+        payload.get("schema") != 1
+        or payload.get("read_only") is not True
+        or not isinstance(payload.get("process_id"), int)
+        or payload["process_id"] <= 0
+        or payload.get("candidate_count") != 1
+        or payload.get("reported_count") != 1
+        or not isinstance(candidates, list)
+        or len(candidates) != 1
+        or not isinstance(candidates[0], dict)
+    ):
+        raise ValueError("attach scan did not return exactly one read-only candidate")
+    candidate = candidates[0]
+    hashes = candidate.get("block_fnv1a32")
+    if (
+        not isinstance(hashes, list)
+        or len(hashes) != 4
+        or not all(isinstance(value, int) and value > 0 for value in hashes)
+    ):
+        raise ValueError("invalid attach candidate hashes")
+    mask_value(candidate, "zero_mask")
+    mask_value(candidate, "readable_pointer_mask")
+    return {
+        "abi": EXPECTED_ABI,
+        "process_id": payload["process_id"],
+        "sample_tag": EXPECTED_MARKER,
+        "observation_tag": expected_turn,
+        "sequence": 0,
+        "sample_bytes": 256,
+        "block_fnv1a32": hashes,
+        "zero_mask": candidate["zero_mask"],
+        "readable_pointer_mask": candidate["readable_pointer_mask"],
+        "raw_values_included": False,
+        "read_only": True,
+        "phase": phase,
+        "capture_source": "readonly-attach",
+        "captured_ns": time.time_ns(),
+    }
+
+
+def capture_attach(
+    scanner: Path,
+    process_id: int,
+    timeline_file: Path,
+    phase: str,
+    expected_turn: int,
+    zero_mask: str,
+    pointer_mask: str,
+    exact: bool,
+) -> int:
+    command = [
+        str(scanner), "--pid", str(process_id),
+        "--zero-mask", zero_mask, "--pointer-mask", pointer_mask,
+    ]
+    if exact:
+        command.append("--exact")
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        print(completed.stdout.strip())
+        print(completed.stderr.strip())
+        print(f"FAIL: attach scanner exited with {completed.returncode}")
+        return 3
+    try:
+        payload = json.loads(completed.stdout.strip().splitlines()[-1])
+        record = attach_timeline_record(payload, phase, expected_turn)
+    except (IndexError, TypeError, ValueError) as error:
+        print(f"FAIL: invalid attach scanner result: {error}")
+        return 3
+    timeline_file.parent.mkdir(parents=True, exist_ok=True)
+    with timeline_file.open("a", encoding="utf-8", newline="") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+    print(
+        f"OK: attach captured phase={phase} turn={expected_turn} "
+        f"pid={process_id} source=readonly-attach"
+    )
+    return 0
+
+
 def analyze_timeline(layout_file: Path) -> int:
     valid: list[dict[str, object]] = []
     for record in layout_records(layout_file):
@@ -317,7 +400,7 @@ def analyze_timeline(layout_file: Path) -> int:
                 and record["process_id"] > 0
                 and isinstance(record.get("observation_tag"), int)
                 and isinstance(record.get("sequence"), int)
-                and record["sequence"] >= 1
+                and record["sequence"] >= 0
                 and record.get("phase") in {"before", "after", "reload"}
                 and isinstance(hashes, list)
                 and len(hashes) == 4
@@ -405,6 +488,15 @@ def main() -> int:
     p_capture.add_argument("--expected-turn", type=int)
     p_timeline = sub.add_parser("timeline")
     p_timeline.add_argument("--layout", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "galaxy-layout-timeline.jsonl")
+    p_attach = sub.add_parser("attach-capture")
+    p_attach.add_argument("--scanner", type=Path, required=True)
+    p_attach.add_argument("--process-id", type=int, required=True)
+    p_attach.add_argument("--phase", choices=("reload",), default="reload")
+    p_attach.add_argument("--expected-turn", type=int, required=True)
+    p_attach.add_argument("--zero-mask", default="0D58404000000400")
+    p_attach.add_argument("--pointer-mask", default="00070001F000F801")
+    p_attach.add_argument("--exact", action="store_true")
+    p_attach.add_argument("--timeline", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "galaxy-layout-timeline.jsonl")
     args = parser.parse_args()
     if args.command == "preflight":
         return preflight(args.module.resolve())
@@ -419,6 +511,12 @@ def main() -> int:
         )
     if args.command == "timeline":
         return analyze_timeline(args.layout.resolve())
+    if args.command == "attach-capture":
+        return capture_attach(
+            args.scanner.resolve(), args.process_id, args.timeline.resolve(),
+            args.phase, args.expected_turn, args.zero_mask, args.pointer_mask,
+            args.exact,
+        )
     return report(
         args.state.resolve(), args.marker.resolve(), args.fingerprint.resolve(), args.layout.resolve()
     )

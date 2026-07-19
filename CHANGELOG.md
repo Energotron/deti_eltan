@@ -33,6 +33,10 @@
   распознаванием чёрного кадра и рабочим GDI fallback без внедрения в игру.
 - На same-turn загруженном save строгий и устойчивый attach-профили нашли ровно
   один одинаковый Galaxy-кандидат при устаревшем RScript latest.
+- `attach-capture` архивирует единственный read-only кандидат как reload-точку с
+  отдельным источником и без подделки sequence RScript.
+- Реальный timeline подтвердил одинаковые zero/pointer masks после reload, но
+  отклонил raw block hashes; следующий gate требует pointer normalization.
 
 ## 0.0.5 — Local technical audit
 

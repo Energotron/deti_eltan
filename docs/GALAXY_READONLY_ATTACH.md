@@ -45,6 +45,17 @@ powershell -ExecutionPolicy Bypass -File tools\run-readonly-attach.ps1 `
   -Exact
 ```
 
+Архивирование единственного кандидата как `reload` точки:
+
+```powershell
+python tools\game_smoke_check.py attach-capture `
+  --scanner dist\readonly-attach\ce_galaxy_attach.exe `
+  --process-id <PID> --expected-turn 301 --exact
+```
+
+Запись получает `capture_source=readonly-attach` и `sequence=0`, чтобы её нельзя
+перепутать с callback-наблюдением RScript.
+
 Коды завершения: `0` — ровно один кандидат; `4` — ноль или неоднозначное число
 кандидатов; `2` — неверные аргументы; `3` — процесс нельзя безопасно прочитать.
 
