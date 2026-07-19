@@ -18,7 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 ARMS = ("OLD_ARM", "SECOND_HOME")
 MAP_SCHEMA = json.loads(
     (Path(__file__).resolve().parents[1] / "data" / "second_home_map.schema.json").read_text(
@@ -36,6 +36,13 @@ EARLY_STORY_NODES = tuple(MAP_SCHEMA["story_progression"]["early_story_nodes"])
 STARTING_SECTOR_COUNT = MAP_SCHEMA["story_progression"]["starting_open_sector_count"]
 MIN_LATE_STORY_DEPTH = MAP_SCHEMA["story_progression"]["minimum_late_story_map_purchases"]
 DISCOVERY_RULE = MAP_SCHEMA["sector_discovery_rule"]
+POPULATION_RULE = MAP_SCHEMA["system_population_rule"]
+CORE_FACTION_BY_ARCHETYPE = {
+    "STRONG": "CE_FACTION_STRONG",
+    "AGILL": "CE_FACTION_AGILL",
+    "MEDIUM": "CE_FACTION_MEDIUM",
+    "INTELL": "CE_FACTION_INTELL",
+}
 MIN_SECTOR_COUNT = max(STARTING_SECTOR_COUNT + len(SECTOR_ARCHETYPES) + 1, sum(
     2 if any(STORY_NODE_ARCHETYPES[node] == archetype for node in EARLY_STORY_NODES) and
     any(STORY_NODE_ARCHETYPES[node] == archetype for node in set(REQUIRED_NODES) - set(EARLY_STORY_NODES))
@@ -382,7 +389,111 @@ def _generate_system_layout(
             ),
         )
         office["government_map_office"] = True
+    _apply_system_profiles(seed, result)
     return tuple(result)
+
+
+def _apply_system_profiles(seed: int, systems: list[dict[str, Any]]) -> None:
+    core_factions = tuple(CORE_FACTION_BY_ARCHETYPE.values())
+    economy_bases = {
+        "STRONG": 1150,
+        "AGILL": 950,
+        "MEDIUM": 1250,
+        "INTELL": 1100,
+        "ASH_BORDER": 700,
+        "KLISSAN_SCAR": 350,
+    }
+    security_bases = {
+        "STRONG": 760,
+        "AGILL": 620,
+        "MEDIUM": 580,
+        "INTELL": 680,
+        "ASH_BORDER": 280,
+        "KLISSAN_SCAR": 180,
+    }
+    office_specializations = {
+        "STRONG": "INDUSTRIAL",
+        "AGILL": "COVERT",
+        "MEDIUM": "TRADE",
+        "INTELL": "RESEARCH",
+        "ASH_BORDER": "SMUGGLING",
+        "KLISSAN_SCAR": "QUARANTINE",
+    }
+    for system in systems:
+        archetype = system["archetype"]
+        specializations = POPULATION_RULE["specializations"][archetype]
+        specialization = specializations[
+            _stable_int(seed, "specialization", system["id"]) % len(specializations)
+        ]
+        if system["government_map_office"]:
+            specialization = office_specializations[archetype]
+        roll = _stable_int(seed, "controller", system["id"]) % 100
+        if archetype in CORE_FACTION_BY_ARCHETYPE:
+            controller = CORE_FACTION_BY_ARCHETYPE[archetype]
+            if not system["government_map_office"] and roll >= 85:
+                controller = (
+                    "CE_FACTION_PIRATES" if roll < 95 else "CE_UNCLAIMED"
+                )
+        elif archetype == "ASH_BORDER":
+            if system["government_map_office"] or roll < 50:
+                controller = "CE_FACTION_PIRATES"
+            elif roll < 80:
+                controller = "CE_UNCLAIMED"
+            else:
+                controller = core_factions[
+                    _stable_int(seed, "ash-controller", system["id"]) % len(core_factions)
+                ]
+        else:
+            if system["government_map_office"]:
+                controller = core_factions[
+                    _stable_int(seed, "scar-outpost", system["id"]) % len(core_factions)
+                ]
+                specialization = "QUARANTINE"
+            elif roll < 70:
+                controller = "CE_HOSTILE_KLISSAN"
+            elif roll < 90:
+                controller = "CE_UNCLAIMED"
+            else:
+                controller = core_factions[
+                    _stable_int(seed, "scar-controller", system["id"]) % len(core_factions)
+                ]
+
+        if system["government_map_office"]:
+            condition = "INHABITED"
+        elif specialization == "INFESTED":
+            condition = "INFESTED"
+        elif specialization == "DEAD":
+            condition = "DEAD"
+        elif specialization in {"BLACK_HOLE_OUTPOST", "QUARANTINE", "SALVAGE"}:
+            condition = "OUTPOST"
+        else:
+            condition = (
+                "INHABITED"
+                if _stable_int(seed, "habitability", system["id"]) % 100 < 72
+                else "OUTPOST"
+            )
+
+        if condition == "INHABITED":
+            population = 50_000 + _stable_int(seed, "population", system["id"]) % 4_950_001
+        elif condition == "OUTPOST":
+            population = 1 + _stable_int(seed, "population", system["id"]) % 49_999
+        else:
+            population = 0
+        economy = economy_bases[archetype] + (
+            _stable_int(seed, "economy", system["id"]) % 401 - 200
+        )
+        security = security_bases[archetype] + (
+            _stable_int(seed, "security", system["id"]) % 301 - 150
+        )
+        if condition in {"DEAD", "INFESTED"}:
+            economy = min(economy, 250)
+            security = min(security, 250)
+        system["controller"] = controller
+        system["condition"] = condition
+        system["specialization"] = specialization
+        system["population_thousands"] = population
+        system["economy_index"] = max(100, min(2000, economy))
+        system["security_index"] = max(0, min(1000, security))
 
 
 def _new_map(
@@ -568,6 +679,34 @@ def validate_state(state: dict[str, Any]) -> None:
     }
     if any(count != 1 for count in office_counts.values()):
         raise StateError("every Second Home sector needs one government map office")
+    allowed_controllers = set(POPULATION_RULE["controllers"])
+    allowed_conditions = set(POPULATION_RULE["conditions"])
+    economy_min, economy_max = POPULATION_RULE["economy_range"]
+    security_min, security_max = POPULATION_RULE["security_range"]
+    population_min, population_max = POPULATION_RULE["population_thousands_range"]
+    for system in systems:
+        if system.get("controller") not in allowed_controllers:
+            raise StateError("Second Home system has an invalid controller")
+        if system.get("condition") not in allowed_conditions:
+            raise StateError("Second Home system has an invalid condition")
+        if system.get("specialization") not in POPULATION_RULE["specializations"][system["archetype"]]:
+            raise StateError("Second Home system has an invalid specialization")
+        if not economy_min <= system.get("economy_index", -1) <= economy_max:
+            raise StateError("Second Home system economy is outside its range")
+        if not security_min <= system.get("security_index", -1) <= security_max:
+            raise StateError("Second Home system security is outside its range")
+        if not population_min <= system.get("population_thousands", -1) <= population_max:
+            raise StateError("Second Home system population is outside its range")
+        if system["condition"] in {"DEAD", "INFESTED"} and system["population_thousands"] != 0:
+            raise StateError("dead or infested Second Home system has population")
+        if (system["specialization"] == "DEAD") != (system["condition"] == "DEAD"):
+            raise StateError("dead Second Home specialization and condition disagree")
+        if (system["specialization"] == "INFESTED") != (system["condition"] == "INFESTED"):
+            raise StateError("infested Second Home specialization and condition disagree")
+        if system["government_map_office"] and (
+            system["condition"] != "INHABITED" or system["population_thousands"] <= 0
+        ):
+            raise StateError("government map office needs an inhabited planet")
 
     cargo = state.get("cargo", {})
     if cargo.get("CE_Item_TwinHomeAnchor") != 1:
@@ -718,6 +857,31 @@ def _simulate_inactive(map_state: dict[str, Any], target_day: int) -> None:
         for index, faction in enumerate(map_state["fronts"]):
             delta = int(_stable_int(map_state["seed"], serial, faction, index) % 5) - 2
             map_state["fronts"][faction] = max(0, min(100, map_state["fronts"][faction] + delta))
+        for system in map_state.get("systems", []):
+            economy_delta = int(
+                _stable_int(map_state["seed"], serial, system["id"], "system-economy") % 7
+            ) - 3
+            security_delta = int(
+                _stable_int(map_state["seed"], serial, system["id"], "system-security") % 5
+            ) - 2
+            system["economy_index"] = max(
+                POPULATION_RULE["economy_range"][0],
+                min(POPULATION_RULE["economy_range"][1], system["economy_index"] + economy_delta),
+            )
+            system["security_index"] = max(
+                POPULATION_RULE["security_range"][0],
+                min(POPULATION_RULE["security_range"][1], system["security_index"] + security_delta),
+            )
+            if system["population_thousands"] > 0:
+                population_delta = int(
+                    _stable_int(map_state["seed"], serial, system["id"], "population") % 101
+                ) - 50
+                system["population_thousands"] = max(
+                    1, min(
+                        POPULATION_RULE["population_thousands_range"][1],
+                        system["population_thousands"] + population_delta,
+                    )
+                )
         map_state["aggregate_ticks"] += 1
         map_state["event_serial"] += 1
         day = next_day

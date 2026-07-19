@@ -220,6 +220,30 @@
     {"id": "CE_SYS_SCAR_TIDE", "display_name": "Прилив Шрама", "archetype": "KLISSAN_SCAR"},
     {"id": "CE_SYS_LAST_ANTIBODY", "display_name": "Последнее Противоядие", "archetype": "KLISSAN_SCAR"}
   ],
+  "system_population_rule": {
+    "controllers": [
+      "CE_FACTION_STRONG",
+      "CE_FACTION_AGILL",
+      "CE_FACTION_MEDIUM",
+      "CE_FACTION_INTELL",
+      "CE_FACTION_PIRATES",
+      "CE_HOSTILE_KLISSAN",
+      "CE_UNCLAIMED"
+    ],
+    "conditions": ["INHABITED", "OUTPOST", "DEAD", "INFESTED"],
+    "specializations": {
+      "STRONG": ["FORTRESS", "INDUSTRIAL", "MINING"],
+      "AGILL": ["COVERT", "RESEARCH", "BLACK_HOLE_OUTPOST"],
+      "MEDIUM": ["AGRICULTURAL", "TRADE", "ADMINISTRATIVE", "MINING"],
+      "INTELL": ["RESEARCH", "ENERGY", "ARCHIVE"],
+      "ASH_BORDER": ["SMUGGLING", "SALVAGE", "DEAD", "TRADE"],
+      "KLISSAN_SCAR": ["INFESTED", "QUARANTINE", "SALVAGE", "DEAD"]
+    },
+    "government_map_office_requires_inhabited_planet": true,
+    "economy_range": [100, 2000],
+    "security_range": [0, 1000],
+    "population_thousands_range": [0, 9000000]
+  },
   "inactive_map_simulation": {
     "light_tick_days": 1,
     "aggregate_tick_min_days": 10,

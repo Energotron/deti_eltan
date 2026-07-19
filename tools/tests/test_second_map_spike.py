@@ -67,6 +67,23 @@ class SecondMapSpikeTests(unittest.TestCase):
         self.assertEqual(state["maps"]["OLD_ARM"]["economy_index"], old_before["economy_index"])
         self.assertNotEqual(state["maps"]["SECOND_HOME"], second_before)
         self.assertEqual(state["maps"]["SECOND_HOME"]["last_sim_day"], 200)
+        before_systems = {
+            system["id"]: (
+                system["economy_index"],
+                system["security_index"],
+                system["population_thousands"],
+            )
+            for system in second_before["systems"]
+        }
+        after_systems = {
+            system["id"]: (
+                system["economy_index"],
+                system["security_index"],
+                system["population_thousands"],
+            )
+            for system in state["maps"]["SECOND_HOME"]["systems"]
+        }
+        self.assertNotEqual(after_systems, before_systems)
 
     def test_simulation_is_deterministic_for_same_seed(self):
         left = create_state(64, 5, 99)
@@ -101,6 +118,44 @@ class SecondMapSpikeTests(unittest.TestCase):
         }
         self.assertEqual(set(story_hosts), set(REQUIRED_NODES))
         self.assertEqual(len(set(story_hosts.values())), len(REQUIRED_NODES))
+
+    def test_every_system_has_a_living_economic_profile(self):
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        systems = state["maps"]["SECOND_HOME"]["systems"]
+        controllers = {system["controller"] for system in systems}
+        self.assertEqual(len(systems), 80)
+        self.assertTrue({
+            "CE_FACTION_STRONG",
+            "CE_FACTION_AGILL",
+            "CE_FACTION_MEDIUM",
+            "CE_FACTION_INTELL",
+            "CE_FACTION_PIRATES",
+            "CE_HOSTILE_KLISSAN",
+        } <= controllers)
+        self.assertTrue(any(system["condition"] == "DEAD" for system in systems))
+        self.assertTrue(any(system["condition"] == "INFESTED" for system in systems))
+        self.assertTrue(all(100 <= system["economy_index"] <= 2000 for system in systems))
+        self.assertTrue(all(0 <= system["security_index"] <= 1000 for system in systems))
+        offices = [system for system in systems if system["government_map_office"]]
+        self.assertEqual(len(offices), 19)
+        self.assertTrue(all(
+            system["condition"] == "INHABITED" and system["population_thousands"] > 0
+            for system in offices
+        ))
+
+    def test_invalid_system_profile_is_rejected(self):
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        office = next(
+            system for system in state["maps"]["SECOND_HOME"]["systems"]
+            if system["government_map_office"]
+        )
+        office["condition"] = "DEAD"
+        with self.assertRaises(StateError):
+            validate_state(state)
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        state["maps"]["SECOND_HOME"]["systems"][0]["controller"] = "CE_FACTION_UNKNOWN"
+        with self.assertRaises(StateError):
+            validate_state(state)
 
     def test_system_layout_is_deterministic_for_same_seed(self):
         left = create_state(80, 5, 2441, old_sector_count=19)

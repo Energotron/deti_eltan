@@ -131,6 +131,31 @@ def main():
     if any(any(fragment in name.lower() for fragment in forbidden_name_fragments) for name in visible_names):
         raise SystemExit('technical placeholder leaked into a Second Home display name')
 
+    population_rule=second.get('system_population_rule',{})
+    controllers=set(population_rule.get('controllers',[]))
+    expected_controllers={
+        'CE_FACTION_STRONG','CE_FACTION_AGILL','CE_FACTION_MEDIUM','CE_FACTION_INTELL',
+        'CE_FACTION_PIRATES','CE_HOSTILE_KLISSAN','CE_UNCLAIMED'
+    }
+    if controllers!=expected_controllers:
+        raise SystemExit(f'Second Home controller set mismatch: {controllers ^ expected_controllers}')
+    if not controllers & fids == {
+        'CE_FACTION_STRONG','CE_FACTION_AGILL','CE_FACTION_MEDIUM','CE_FACTION_INTELL',
+        'CE_FACTION_PIRATES'
+    }:
+        raise SystemExit('Second Home controller factions are missing from factions.json')
+    specializations=population_rule.get('specializations',{})
+    if set(specializations)!=set(second['sector_archetypes']) or any(
+        not values or len(values)!=len(set(values)) for values in specializations.values()
+    ):
+        raise SystemExit('Second Home specialization tables are incomplete or duplicated')
+    if not population_rule.get('government_map_office_requires_inhabited_planet'):
+        raise SystemExit('government map offices must require inhabited planets')
+    for range_name in ('economy_range','security_range','population_thousands_range'):
+        bounds=population_rule.get(range_name,[])
+        if len(bounds)!=2 or bounds[0]<0 or bounds[0]>=bounds[1]:
+            raise SystemExit(f'invalid Second Home {range_name}')
+
     pirate_ids={x['id'] for x in pirate['states']}
     expected={'UNKNOWN','NOT_STARTED','CLAN_ACTIVE','COALITION_VICTORY','PIRATE_VICTORY','PLAYER_PIRATE'}
     if pirate_ids!=expected:
