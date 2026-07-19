@@ -72,8 +72,11 @@ read-only discovery без RScript callback. Контракт описан в
 `GALAXY_READONLY_ATTACH.md`.
 
 ABI 6 добавляет pointer-normalized hashes в in-process adapter и внешний attach
-scanner. Offline build/host gate пройден; реальный save/load gate ожидает новый
-цикл с ABI 6.
+scanner. Offline build/host gate и реальный save/load gate пройдены. В цикле
+`CurTurn 301 -> 302 -> save -> restart -> load 302` сырые хеши всех блоков
+между процессами различались, но pointer-normalized блоки 0 и 3 совпали; zero и
+pointer-class masks сохранились. Результат записан в
+`GALAXY_LAYOUT_ABI6_RESULTS.md`.
 
 ## Решение для планирования
 
@@ -84,4 +87,4 @@ scanner. Offline build/host gate пройден; реальный save/load gate
    `20648864`, не перенося предположения между версиями.
 5. Native switch и расширение save реализовывать отдельными capability gates.
 
-Статус: **OFFLINE SPIKE PASSED / ABI 5 TURN SAMPLE PASSED / SAME-TURN READ-ONLY ATTACH PASSED / ABI 6 NORMALIZED OFFLINE PASSED / ABI 6 IN-GAME PENDING / NATIVE SWITCH BLOCKED**.
+Статус: **OFFLINE SPIKE PASSED / ABI 5 TURN SAMPLE PASSED / SAME-TURN READ-ONLY ATTACH PASSED / ABI 6 NORMALIZED SAVE-LOAD PASSED / NATIVE SWITCH BLOCKED**.
