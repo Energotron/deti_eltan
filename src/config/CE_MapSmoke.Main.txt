@@ -21,6 +21,13 @@ Data ^{
             CEAdapterProbeGalaxy=dword,CEAdapterProbeGalaxy,dword,dword
             CEAdapterGetLastFingerprintHash=dword,CEAdapterGetLastFingerprintHash
             CEAdapterGetLastFingerprintBytes=dword,CEAdapterGetLastFingerprintBytes
+            CEAdapterSampleGalaxyLayout=dword,CEAdapterSampleGalaxyLayout,dword,dword
+            CEAdapterGetLayoutBlockHash=dword,CEAdapterGetLayoutBlockHash,dword
+            CEAdapterGetLayoutZeroMaskLow=dword,CEAdapterGetLayoutZeroMaskLow
+            CEAdapterGetLayoutZeroMaskHigh=dword,CEAdapterGetLayoutZeroMaskHigh
+            CEAdapterGetLayoutReadablePointerMaskLow=dword,CEAdapterGetLayoutReadablePointerMaskLow
+            CEAdapterGetLayoutReadablePointerMaskHigh=dword,CEAdapterGetLayoutReadablePointerMaskHigh
+            CEAdapterGetLayoutSampleBytes=dword,CEAdapterGetLayoutSampleBytes
             CEAdapterSupportsNativeMultiGalaxy=dword,CEAdapterSupportsNativeMultiGalaxy
         }
         CE_MapSmoke=CESecondMapAdapter

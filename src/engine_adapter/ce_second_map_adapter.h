@@ -16,13 +16,14 @@ extern "C" {
 #endif
 
 enum {
-    CE_ADAPTER_ABI_VERSION = 3,
+    CE_ADAPTER_ABI_VERSION = 4,
     CE_CAP_BIND_GALAXY_POINTER = 1u << 0,
     CE_CAP_NATIVE_MULTI_GALAXY = 1u << 1,
     CE_CAP_NATIVE_SWITCH = 1u << 2,
     CE_CAP_NATIVE_SAVE_EXTENSION = 1u << 3,
     CE_CAP_SMOKE_MARKER = 1u << 4,
-    CE_CAP_READONLY_GALAXY_FINGERPRINT = 1u << 5
+    CE_CAP_READONLY_GALAXY_FINGERPRINT = 1u << 5,
+    CE_CAP_READONLY_GALAXY_LAYOUT_SAMPLE = 1u << 6
 };
 
 CE_EXPORT uint32_t CE_CALL CEAdapterAbiVersion(void);
@@ -34,6 +35,13 @@ CE_EXPORT uint32_t CE_CALL CEAdapterRunSmoke(uint32_t galaxy_ptr, uint32_t marke
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeGalaxy(uint32_t galaxy_ptr, uint32_t byte_count);
 CE_EXPORT uint32_t CE_CALL CEAdapterGetLastFingerprintHash(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterGetLastFingerprintBytes(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterSampleGalaxyLayout(uint32_t galaxy_ptr, uint32_t sample_tag);
+CE_EXPORT uint32_t CE_CALL CEAdapterGetLayoutBlockHash(uint32_t block_index);
+CE_EXPORT uint32_t CE_CALL CEAdapterGetLayoutZeroMaskLow(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterGetLayoutZeroMaskHigh(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterGetLayoutReadablePointerMaskLow(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterGetLayoutReadablePointerMaskHigh(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterGetLayoutSampleBytes(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterSupportsNativeMultiGalaxy(void);
 
 #ifdef __cplusplus

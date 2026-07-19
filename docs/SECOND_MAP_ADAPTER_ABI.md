@@ -3,9 +3,10 @@
 ## Назначение
 
 `CESecondMapAdapter.dll` — 32-битный C-адаптер между RScript и будущим
-build-specific слоем второй галактики. Текущая версия ABI 3 подтверждена внутри
-Steam build `20648864`: игра загрузила DLL, RScript вызвал smoke-экспорт и передал
-ненулевой непрозрачный `GalaxyPtr()` без чтения памяти игры.
+build-specific слоем второй галактики. ABI 3 подтверждён внутри Steam build
+`20648864`: игра загрузила DLL, RScript вызвал smoke-экспорт, передал ненулевой
+`GalaxyPtr()` и выполнил ограниченный read-only fingerprint. ABI 4 сохраняет эти
+gate и добавляет сравнимый layout sample без сырых значений или адресов.
 
 ## Подтверждённая цепочка
 
@@ -18,12 +19,12 @@ Steam build `20648864`: игра загрузила DLL, RScript вызвал sm
 `Script functions list.txt:3804,3819-3829,3878-3902` в зафиксированном
 репозитории референсов.
 
-## Экспорты ABI 3
+## Экспорты ABI 4
 
 | Экспорт | Контракт |
 |---|---|
-| `CEAdapterAbiVersion()` | возвращает `3` |
-| `CEAdapterCapabilities()` | bind, smoke-маркер и read-only fingerprint |
+| `CEAdapterAbiVersion()` | возвращает `4` |
+| `CEAdapterCapabilities()` | bind, smoke, fingerprint и read-only layout sample (`113`) |
 | `CEAdapterBindGalaxy(dword)` | принимает ненулевой непрозрачный адрес и сохраняет его |
 | `CEAdapterGetBoundGalaxy()` | возвращает последний сохранённый адрес |
 | `CEAdapterEchoDword(dword)` | безопасный smoke-вызов без доступа к игре |
@@ -31,14 +32,35 @@ Steam build `20648864`: игра загрузила DLL, RScript вызвал sm
 | `CEAdapterProbeGalaxy(dword,dword)` | проверка региона и чтение 16–256 байт через `ReadProcessMemory` |
 | `CEAdapterGetLastFingerprintHash()` | последний FNV-1a хеш без выдачи сырых данных |
 | `CEAdapterGetLastFingerprintBytes()` | размер последней успешной выборки |
+| `CEAdapterSampleGalaxyLayout(dword,dword)` | один 256-байтный sample на процесс и append в JSONL |
+| `CEAdapterGetLayoutBlockHash(dword)` | FNV-1a одного из четырёх 64-байтных блоков |
+| `CEAdapterGetLayoutZeroMaskLow/High()` | 64-битная маска нулевых dword двумя половинами |
+| `CEAdapterGetLayoutReadablePointerMaskLow/High()` | маска dword, похожих на читаемые выровненные указатели |
+| `CEAdapterGetLayoutSampleBytes()` | `256` после успешного sample |
 | `CEAdapterSupportsNativeMultiGalaxy()` | возвращает `0` |
 
 Все функции используют `cdecl`, фиксированные 32-битные типы и не владеют
 переданным объектом Galaxy.
 
-## Запреты до reverse engineering
+## Ограничения layout sampler
 
-- не разыменовывать `GalaxyPtr()`;
+- перед чтением весь диапазон проверяется через `VirtualQuery`;
+- копирование выполняется через `ReadProcessMemory(GetCurrentProcess())`;
+- размер жёстко ограничен первыми 256 байтами;
+- sample пишется не чаще одного раза за процесс игры;
+- JSONL не содержит сырые байты, `GalaxyPtr` или адрес региона;
+- readable-pointer mask является только классификацией, а не доказательством поля;
+- четыре 64-байтных FNV-1a хеша нужны только для межпроцессного сравнения.
+
+Файл: `%TEMP%\ChildrenOfEltan\galaxy-layout-samples.jsonl`. Сравнение:
+
+```powershell
+python tools\game_smoke_check.py layouts --minimum 3
+```
+
+## Запреты до завершения reverse engineering
+
+- не обращаться к предполагаемым полям Galaxy напрямую;
 - не менять глобальную переменную `Galaxy`;
 - не патчить `Rangers.exe`;
 - не создавать второй объект Galaxy по предполагаемому layout;
@@ -58,8 +80,12 @@ Steam build `20648864`: игра загрузила DLL, RScript вызвал sm
 - корневой `INSTALL.TXT` восстановлен побайтно до исходного SHA256
   `A2E1A160662E1B07EC5C519345369C243553887BC53D4D16F3CFFBF01E93C77B`.
 
-## Следующий безопасный gate
+## Результат ABI 4 in-game
 
-In-game fingerprint пройден. Следующий этап — искать стабильные read-only
-инварианты и указатели внутри первых полей `Galaxy`, сравнивая несколько новых игр
-и save/load. Запись в память остаётся запрещённой до подтверждения layout.
+Три новые игры в трёх отдельных процессах успешно создали валидные read-only
+образцы. Блок 128–191 имел одинаковый хеш во всех трёх запусках; zero-mask была
+полностью стабильна, pointer-классификация менялась только на offset 92. Полные
+offsets и ограничения вывода записаны в `GALAXY_LAYOUT_ABI4_RESULTS.md`.
+
+Следующий gate — сравнение одной партии до хода и после save/load. Запись в память
+остаётся запрещённой до подтверждения layout.
