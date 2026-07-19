@@ -135,7 +135,8 @@ def main():
     controllers=set(population_rule.get('controllers',[]))
     expected_controllers={
         'CE_FACTION_STRONG','CE_FACTION_AGILL','CE_FACTION_MEDIUM','CE_FACTION_INTELL',
-        'CE_FACTION_PIRATES','CE_LOCAL_ASH_CORSAIRS','CE_HOSTILE_KLISSAN','CE_UNCLAIMED'
+        'CE_FACTION_PIRATES','CE_LOCAL_ASH_CORSAIRS','CE_HOSTILE_KLISSAN','CE_UNCLAIMED',
+        'CE_DOMINATOR_BLAZEROIDS','CE_DOMINATOR_KELLEROIDS','CE_DOMINATOR_TERRONOIDS'
     }
     if controllers!=expected_controllers:
         raise SystemExit(f'Second Home controller set mismatch: {controllers ^ expected_controllers}')
@@ -174,6 +175,27 @@ def main():
     if 'Пепельные корсары' in pirate_faction.get('subfactions',[]) or \
             'Пепельные каперы' not in pirate_faction.get('subfactions',[]):
         raise SystemExit('local Ash corsairs must remain separate from War Apart pirate branches')
+    dominators=second.get('interarm_dominator_invasions',{})
+    expected_series={
+        'BLAZER': ('CE_DOMINATOR_BLAZEROIDS',15,'OUTER_ASH_APPROACH',{'ASH_BORDER'}),
+        'KELLER': ('CE_DOMINATOR_KELLEROIDS',7,'BLACK_HOLE_SCAR',{'KLISSAN_SCAR'}),
+        'TERRON': ('CE_DOMINATOR_TERRONOIDS',30,'INNER_FREIGHT_NETWORK',{'MEDIUM','INTELL'}),
+    }
+    if dominators.get('trigger')!='first_completed_old_arm_to_second_home_transit' or \
+            set(dominators.get('boss_state_values',[]))!={'ACTIVE','ELIMINATED'} or \
+            set(dominators.get('series',{}))!=set(expected_series):
+        raise SystemExit('Second Home dominator invasion matrix is incomplete')
+    invasion_fronts=[]
+    for series,(controller,delay,front,archetypes) in expected_series.items():
+        rule=dominators['series'][series]
+        if rule.get('controller')!=controller or rule.get('arrival_delay_days')!=delay or \
+                rule.get('entry_front')!=front or \
+                set(rule.get('preferred_archetypes',[]))!=archetypes or not rule.get('route'):
+            raise SystemExit(f'invalid Second Home {series} invasion rule')
+        invasion_fronts.append(archetypes)
+    if any(left & right for index,left in enumerate(invasion_fronts)
+           for right in invasion_fronts[index+1:]):
+        raise SystemExit('Dominator series must enter Second Home from separate fronts')
 
     pirate_ids={x['id'] for x in pirate['states']}
     expected={'UNKNOWN','NOT_STARTED','CLAN_ACTIVE','COALITION_VICTORY','PIRATE_VICTORY','PLAYER_PIRATE'}

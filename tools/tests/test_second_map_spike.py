@@ -136,6 +136,7 @@ class SecondMapSpikeTests(unittest.TestCase):
             "CE_HOSTILE_KLISSAN",
         } <= controllers)
         self.assertNotIn("CE_FACTION_PIRATES", controllers)
+        self.assertFalse(any(controller.startswith("CE_DOMINATOR_") for controller in controllers))
         self.assertTrue(any(system["condition"] == "DEAD" for system in systems))
         self.assertTrue(any(system["condition"] == "INFESTED" for system in systems))
         self.assertTrue(all(100 <= system["economy_index"] <= 2000 for system in systems))
@@ -239,6 +240,118 @@ class SecondMapSpikeTests(unittest.TestCase):
             system["controller"] == "CE_FACTION_PIRATES"
             for system in state["maps"]["SECOND_HOME"]["systems"]
         ))
+
+    def test_each_living_dominator_boss_finds_its_own_route(self):
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        self.store.save(state)
+        state = begin_transit(self.store)
+        self.assertEqual(
+            {series: branch["status"] for series, branch in state["dominator_invasions"].items()},
+            {"BLAZER": "TRACKING", "KELLER": "TRACKING", "TERRON": "TRACKING"},
+        )
+        simulate_days(state, 6)
+        self.assertFalse(any(
+            system["controller"].startswith("CE_DOMINATOR_")
+            for system in state["maps"]["SECOND_HOME"]["systems"]
+        ))
+        simulate_days(state, 1)
+        self.assertEqual(state["dominator_invasions"]["KELLER"]["status"], "ESTABLISHED")
+        self.assertEqual(state["dominator_invasions"]["BLAZER"]["status"], "TRACKING")
+        simulate_days(state, 8)
+        self.assertEqual(state["dominator_invasions"]["BLAZER"]["status"], "ESTABLISHED")
+        self.assertEqual(state["dominator_invasions"]["TERRON"]["status"], "TRACKING")
+        self.store.save(state)
+        state = self.store.load()
+        validate_state(state)
+        simulate_days(state, 15)
+        self.assertTrue(all(
+            branch["status"] == "ESTABLISHED"
+            for branch in state["dominator_invasions"].values()
+        ))
+        expected_fronts = {
+            "CE_DOMINATOR_BLAZEROIDS": {"ASH_BORDER"},
+            "CE_DOMINATOR_KELLEROIDS": {"KLISSAN_SCAR"},
+            "CE_DOMINATOR_TERRONOIDS": {"MEDIUM", "INTELL"},
+        }
+        for controller, allowed_archetypes in expected_fronts.items():
+            foothold_archetypes = {
+                system["archetype"]
+                for system in state["maps"]["SECOND_HOME"]["systems"]
+                if system["controller"] == controller
+            }
+            self.assertTrue(foothold_archetypes)
+            self.assertTrue(foothold_archetypes <= allowed_archetypes)
+
+    def test_interarm_arrivals_do_not_depend_on_simulation_tick_size(self):
+        self.store.save(create_state(80, 5, 2400, old_sector_count=19))
+        initial = begin_transit(self.store)
+        one_jump = json.loads(json.dumps(initial))
+        daily = json.loads(json.dumps(initial))
+        simulate_days(one_jump, 30)
+        for _ in range(30):
+            simulate_days(daily, 1)
+        self.assertEqual(one_jump["pirate_migration"], daily["pirate_migration"])
+        self.assertEqual(one_jump["dominator_invasions"], daily["dominator_invasions"])
+        self.assertEqual(
+            [system["controller"] for system in one_jump["maps"]["SECOND_HOME"]["systems"]],
+            [system["controller"] for system in daily["maps"]["SECOND_HOME"]["systems"]],
+        )
+        self.assertEqual(
+            [event for event in one_jump["history"] if "ARRIVE" in event["type"]],
+            [event for event in daily["history"] if "ARRIVE" in event["type"]],
+        )
+
+    def test_each_eliminated_boss_forbids_only_its_own_series(self):
+        controllers_by_series = {
+            "BLAZER": "CE_DOMINATOR_BLAZEROIDS",
+            "KELLER": "CE_DOMINATOR_KELLEROIDS",
+            "TERRON": "CE_DOMINATOR_TERRONOIDS",
+        }
+        for eliminated_series in controllers_by_series:
+            with self.subTest(eliminated_series=eliminated_series):
+                state = create_state(
+                    80, 5, 2441, old_sector_count=19,
+                    dominator_boss_states={
+                        series: (
+                            "ELIMINATED" if series == eliminated_series else "ACTIVE"
+                        )
+                        for series in controllers_by_series
+                    },
+                )
+                self.store.save(state)
+                state = begin_transit(self.store)
+                simulate_days(state, 100)
+                controllers = {
+                    system["controller"]
+                    for system in state["maps"]["SECOND_HOME"]["systems"]
+                }
+                for series, controller in controllers_by_series.items():
+                    expected_status = (
+                        "EXTINCT" if series == eliminated_series else "ESTABLISHED"
+                    )
+                    self.assertEqual(
+                        state["dominator_invasions"][series]["status"],
+                        expected_status,
+                    )
+                    if series == eliminated_series:
+                        self.assertNotIn(controller, controllers)
+                    else:
+                        self.assertIn(controller, controllers)
+
+    def test_eliminated_dominator_series_cannot_be_injected(self):
+        state = create_state(
+            80, 5, 2441, old_sector_count=19,
+            dominator_boss_states={
+                "BLAZER": "ELIMINATED",
+                "KELLER": "ELIMINATED",
+                "TERRON": "ELIMINATED",
+            },
+        )
+        state["maps"]["SECOND_HOME"]["systems"][0]["controller"] = (
+            "CE_DOMINATOR_BLAZEROIDS"
+        )
+        with self.assertRaises(StateError):
+            validate_state(state)
 
     def test_system_layout_is_deterministic_for_same_seed(self):
         left = create_state(80, 5, 2441, old_sector_count=19)

@@ -18,7 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 ARMS = ("OLD_ARM", "SECOND_HOME")
 MAP_SCHEMA = json.loads(
     (Path(__file__).resolve().parents[1] / "data" / "second_home_map.schema.json").read_text(
@@ -38,6 +38,8 @@ MIN_LATE_STORY_DEPTH = MAP_SCHEMA["story_progression"]["minimum_late_story_map_p
 DISCOVERY_RULE = MAP_SCHEMA["sector_discovery_rule"]
 POPULATION_RULE = MAP_SCHEMA["system_population_rule"]
 PIRATE_MIGRATION_RULE = MAP_SCHEMA["interarm_pirate_migration"]
+DOMINATOR_INVASION_RULE = MAP_SCHEMA["interarm_dominator_invasions"]
+DOMINATOR_SERIES = tuple(DOMINATOR_INVASION_RULE["series"])
 WAR_APART_STATES = (
     "UNKNOWN",
     "NOT_STARTED",
@@ -104,6 +106,7 @@ def create_state(
     old_sector_count: int = 19,
     initial_credits: int = 100_000,
     war_apart_state: str = "CLAN_ACTIVE",
+    dominator_boss_states: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if old_star_count < max(len(REQUIRED_NODES), old_sector_count * 2):
         raise StateError("old arm is too sparse for the required Second Home layout")
@@ -113,6 +116,13 @@ def create_state(
         raise StateError("credit balance cannot be negative")
     if war_apart_state not in WAR_APART_STATES:
         raise StateError("unknown War Apart outcome")
+    if dominator_boss_states is None:
+        dominator_boss_states = {series: "ACTIVE" for series in DOMINATOR_SERIES}
+    if set(dominator_boss_states) != set(DOMINATOR_SERIES) or any(
+        value not in DOMINATOR_INVASION_RULE["boss_state_values"]
+        for value in dominator_boss_states.values()
+    ):
+        raise StateError("invalid dominator boss state snapshot")
     if old_sector_count < MIN_SECTOR_COUNT:
         raise StateError("old arm has too few sectors for Second Home progression")
     if old_sector_count > len(SECTOR_NAME_POOL):
@@ -139,6 +149,19 @@ def create_state(
         },
         "credits": initial_credits,
         "war_apart_state": war_apart_state,
+        "dominator_boss_states": dict(dominator_boss_states),
+        "dominator_invasions": {
+            series: {
+                "status": (
+                    "DORMANT" if dominator_boss_states[series] == "ACTIVE"
+                    else "EXTINCT"
+                ),
+                "discovery_day": None,
+                "arrival_day": None,
+                "converted_system_ids": [],
+            }
+            for series in DOMINATOR_SERIES
+        },
         "pirate_migration": {
             "status": migration_status,
             "first_passage_day": None,
@@ -787,6 +810,52 @@ def validate_state(state: dict[str, Any]) -> None:
                 pirate_system_ids != set(converted_ids):
             raise StateError("invalid established War Apart pirate foothold")
 
+    boss_states = state.get("dominator_boss_states", {})
+    invasions = state.get("dominator_invasions", {})
+    if set(boss_states) != set(DOMINATOR_SERIES) or \
+            set(invasions) != set(DOMINATOR_SERIES):
+        raise StateError("dominator invasion snapshot is incomplete")
+    for series in DOMINATOR_SERIES:
+        boss_state = boss_states[series]
+        invasion = invasions[series]
+        rule = DOMINATOR_INVASION_RULE["series"][series]
+        status = invasion.get("status")
+        if boss_state not in DOMINATOR_INVASION_RULE["boss_state_values"] or \
+                status not in {"DORMANT", "TRACKING", "ESTABLISHED", "EXTINCT"}:
+            raise StateError("invalid dominator invasion branch")
+        controlled_ids = {
+            system["id"] for system in systems
+            if system["controller"] == rule["controller"]
+        }
+        converted_ids = invasion.get("converted_system_ids", [])
+        if len(converted_ids) != len(set(converted_ids)):
+            raise StateError("dominator invasion duplicated a system")
+        if boss_state == "ELIMINATED":
+            if status != "EXTINCT" or controlled_ids or converted_ids or \
+                    invasion.get("discovery_day") is not None or \
+                    invasion.get("arrival_day") is not None:
+                raise StateError("eliminated dominator series entered Second Home")
+            continue
+        if status == "EXTINCT":
+            raise StateError("active dominator boss has an extinct invasion branch")
+        if status == "DORMANT":
+            if controlled_ids or converted_ids or invasion.get("discovery_day") is not None or \
+                    invasion.get("arrival_day") is not None:
+                raise StateError("dormant dominator series entered Second Home early")
+        elif status == "TRACKING":
+            discovery_day = invasion.get("discovery_day")
+            arrival_day = invasion.get("arrival_day")
+            if not isinstance(discovery_day, int) or \
+                    arrival_day != discovery_day + rule["arrival_delay_days"] or \
+                    state["current_day"] >= arrival_day or controlled_ids or converted_ids:
+                raise StateError("invalid dominator tracking state")
+        elif status == "ESTABLISHED":
+            if state["current_day"] < invasion.get("arrival_day", state["current_day"] + 1) or \
+                    controlled_ids != set(converted_ids) or \
+                    not DOMINATOR_INVASION_RULE["first_wave_min_systems"] <= \
+                    len(converted_ids) <= DOMINATOR_INVASION_RULE["first_wave_max_systems"]:
+                raise StateError("invalid dominator foothold")
+
     transit = state.get("transit")
     if transit is not None:
         if transit.get("phase") not in TRANSIT_PHASES:
@@ -908,7 +977,7 @@ def simulate_days(state: dict[str, Any], days: int) -> None:
     inactive = _other_arm(active)
     state["maps"][active]["last_sim_day"] = target_day
     _simulate_inactive(state["maps"][inactive], target_day)
-    _update_pirate_migration(state, target_day)
+    _update_interarm_arrivals(state, target_day)
     state["current_day"] = target_day
     state["revision"] += 1
     validate_state(state)
@@ -1024,6 +1093,83 @@ def _update_pirate_migration(state: dict[str, Any], target_day: int) -> None:
     )
 
 
+def _schedule_dominator_invasions(state: dict[str, Any], passage_day: int) -> None:
+    for series in DOMINATOR_SERIES:
+        invasion = state["dominator_invasions"][series]
+        if invasion["status"] != "DORMANT":
+            continue
+        invasion["status"] = "TRACKING"
+        invasion["discovery_day"] = passage_day
+        invasion["arrival_day"] = (
+            passage_day +
+            DOMINATOR_INVASION_RULE["series"][series]["arrival_delay_days"]
+        )
+
+
+def _update_dominator_invasions(state: dict[str, Any], target_day: int) -> None:
+    systems = state["maps"]["SECOND_HOME"]["systems"]
+    seed = state["maps"]["SECOND_HOME"]["seed"]
+    for series in DOMINATOR_SERIES:
+        invasion = state["dominator_invasions"][series]
+        if invasion["status"] != "TRACKING" or target_day < invasion["arrival_day"]:
+            continue
+        rule = DOMINATOR_INVASION_RULE["series"][series]
+        candidates = sorted(
+            (
+                system for system in systems
+                if system["archetype"] in rule["preferred_archetypes"] and
+                not system["story_node"] and
+                not system["government_map_office"] and
+                system["controller"] != "CE_FACTION_PIRATES" and
+                not system["controller"].startswith("CE_DOMINATOR_")
+            ),
+            key=lambda system: _stable_int(
+                seed, "dominator-arrival", series, system["id"]
+            ),
+        )
+        wave_span = (
+            DOMINATOR_INVASION_RULE["first_wave_max_systems"] -
+            DOMINATOR_INVASION_RULE["first_wave_min_systems"] + 1
+        )
+        wave_size = DOMINATOR_INVASION_RULE["first_wave_min_systems"] + (
+            _stable_int(seed, "dominator-wave-size", series) % wave_span
+        )
+        selected = candidates[:wave_size]
+        if len(selected) < DOMINATOR_INVASION_RULE["first_wave_min_systems"]:
+            raise StateError(f"no valid Second Home foothold for {series}")
+        converted_ids = []
+        for system in selected:
+            system["controller"] = rule["controller"]
+            converted_ids.append(system["id"])
+        invasion["status"] = "ESTABLISHED"
+        invasion["converted_system_ids"] = converted_ids
+        state["history"].append(
+            {
+                "type": "CE_DOMINATOR_SERIES_ARRIVES",
+                "day": invasion["arrival_day"],
+                "series": series,
+                "system_ids": converted_ids,
+                "route": rule["route"],
+                "entry_front": rule["entry_front"],
+            }
+        )
+
+
+def _update_interarm_arrivals(state: dict[str, Any], target_day: int) -> None:
+    due_days = {
+        invasion["arrival_day"]
+        for invasion in state["dominator_invasions"].values()
+        if invasion["status"] == "TRACKING" and
+        invasion["arrival_day"] <= target_day
+    }
+    migration = state["pirate_migration"]
+    if migration["status"] == "SCOUTING" and migration["arrival_day"] <= target_day:
+        due_days.add(migration["arrival_day"])
+    for arrival_day in sorted(due_days):
+        _update_pirate_migration(state, arrival_day)
+        _update_dominator_invasions(state, arrival_day)
+
+
 def begin_transit(store: StateStore, crash_after: str | None = None) -> dict[str, Any]:
     state = store.load()
     validate_state(state)
@@ -1083,7 +1229,8 @@ def recover_transit(store: StateStore, crash_after: str | None = None) -> dict[s
         )
         if transit["from_arm"] == "OLD_ARM" and transit["to_arm"] == "SECOND_HOME":
             _schedule_pirate_migration(state, transit["day"])
-            _update_pirate_migration(state, transit["day"])
+            _schedule_dominator_invasions(state, transit["day"])
+            _update_interarm_arrivals(state, transit["day"])
         state["transit"] = None
         _commit(store, state)
     return state
@@ -1107,10 +1254,12 @@ def run_demo(
     seed: int,
     old_sectors: int = 19,
     war_apart_state: str = "CLAN_ACTIVE",
+    dominator_boss_states: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     store.save(create_state(
         old_stars, cells, seed, old_sectors,
         war_apart_state=war_apart_state,
+        dominator_boss_states=dominator_boss_states,
     ))
     state = store.load()
     simulate_days(state, 40)
@@ -1135,6 +1284,12 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--cells", type=int, default=10)
     init.add_argument("--seed", type=int, default=3500)
     init.add_argument("--war-apart-state", choices=WAR_APART_STATES, default="CLAN_ACTIVE")
+    for series in DOMINATOR_SERIES:
+        init.add_argument(
+            f"--{series.lower()}-state",
+            choices=DOMINATOR_INVASION_RULE["boss_state_values"],
+            default="ACTIVE",
+        )
     transit = sub.add_parser("transit")
     transit.add_argument("state", type=Path)
     transit.add_argument("--crash-after", choices=TRANSIT_PHASES)
@@ -1159,6 +1314,12 @@ def _parser() -> argparse.ArgumentParser:
     demo.add_argument("--cells", type=int, default=10)
     demo.add_argument("--seed", type=int, default=3500)
     demo.add_argument("--war-apart-state", choices=WAR_APART_STATES, default="CLAN_ACTIVE")
+    for series in DOMINATOR_SERIES:
+        demo.add_argument(
+            f"--{series.lower()}-state",
+            choices=DOMINATOR_INVASION_RULE["boss_state_values"],
+            default="ACTIVE",
+        )
     return parser
 
 
@@ -1170,6 +1331,10 @@ def main() -> None:
             state = create_state(
                 args.old_stars, args.cells, args.seed, args.old_sectors,
                 war_apart_state=args.war_apart_state,
+                dominator_boss_states={
+                    series: getattr(args, f"{series.lower()}_state")
+                    for series in DOMINATOR_SERIES
+                },
             )
             store.save(state)
         elif args.command == "transit":
@@ -1195,6 +1360,10 @@ def main() -> None:
             state = run_demo(
                 store, args.old_stars, args.cells, args.seed, args.old_sectors,
                 args.war_apart_state,
+                {
+                    series: getattr(args, f"{series.lower()}_state")
+                    for series in DOMINATOR_SERIES
+                },
             )
     except SimulatedCrash as exc:
         print(f"CRASH: {exc}")

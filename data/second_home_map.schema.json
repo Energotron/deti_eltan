@@ -229,7 +229,10 @@
       "CE_FACTION_PIRATES",
       "CE_LOCAL_ASH_CORSAIRS",
       "CE_HOSTILE_KLISSAN",
-      "CE_UNCLAIMED"
+      "CE_UNCLAIMED",
+      "CE_DOMINATOR_BLAZEROIDS",
+      "CE_DOMINATOR_KELLEROIDS",
+      "CE_DOMINATOR_TERRONOIDS"
     ],
     "conditions": ["INHABITED", "OUTPOST", "DEAD", "INFESTED"],
     "specializations": {
@@ -264,6 +267,35 @@
     "first_wave_min_outposts": 1,
     "first_wave_max_outposts": 3,
     "preferred_archetype": "ASH_BORDER"
+  },
+  "interarm_dominator_invasions": {
+    "trigger": "first_completed_old_arm_to_second_home_transit",
+    "boss_state_values": ["ACTIVE", "ELIMINATED"],
+    "series": {
+      "BLAZER": {
+        "controller": "CE_DOMINATOR_BLAZEROIDS",
+        "route": "intercept_gate_calibration_and_defense_telemetry",
+        "entry_front": "OUTER_ASH_APPROACH",
+        "arrival_delay_days": 15,
+        "preferred_archetypes": ["ASH_BORDER"]
+      },
+      "KELLER": {
+        "controller": "CE_DOMINATOR_KELLEROIDS",
+        "route": "trace_new_hyperspace_topology_through_black_holes",
+        "entry_front": "BLACK_HOLE_SCAR",
+        "arrival_delay_days": 7,
+        "preferred_archetypes": ["KLISSAN_SCAR"]
+      },
+      "TERRON": {
+        "controller": "CE_DOMINATOR_TERRONOIDS",
+        "route": "hide_conversion_seed_in_automated_gate_logistics",
+        "entry_front": "INNER_FREIGHT_NETWORK",
+        "arrival_delay_days": 30,
+        "preferred_archetypes": ["MEDIUM", "INTELL"]
+      }
+    },
+    "first_wave_min_systems": 1,
+    "first_wave_max_systems": 2
   },
   "inactive_map_simulation": {
     "light_tick_days": 1,
