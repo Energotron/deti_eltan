@@ -46,7 +46,7 @@ DLL; для него собран минимальный безопасный а
 транзакцию после сбоя. Это исполняемая модель контракта, а не финальная нативная
 карта.
 
-## CE Second Map Adapter ABI 4
+## CE Second Map Adapter ABI 5
 
 Собран PE32/i386 `CESecondMapAdapter.dll`. Отдельный x86 host и реальная новая
 игра подтвердили загрузку ABI 3, `cdecl`, передачу ненулевого `GalaxyPtr()` и
@@ -58,6 +58,11 @@ host и три независимых игровых процесса. Блок 
 `GALAXY_LAYOUT_ABI4_RESULTS.md`. Адаптер не патчит процесс и сообщает
 `native multi-galaxy = false`. Контракт описан в `SECOND_MAP_ADAPTER_ABI.md`.
 
+ABI 5 подтвердил rolling read-only наблюдение `CurTurn 300 -> 301` в одном
+процессе. Same-turn sample после load не получен: сохранённый RScript не вызывает
+ни `Turn`, ни `Init` до следующего игрового дня. Результат зафиксирован в
+`GALAXY_LAYOUT_ABI5_RESULTS.md`; stale PID теперь отклоняется анализатором.
+
 ## Решение для планирования
 
 1. CE-P00 и War Apart snapshot можно делать обычным RScript-модом.
@@ -67,4 +72,4 @@ host и три независимых игровых процесса. Блок 
    `20648864`, не перенося предположения между версиями.
 5. Native switch и расширение save реализовывать отдельными capability gates.
 
-Статус: **OFFLINE SPIKE PASSED / ABI 3 PROBE PASSED / ABI 4 THREE-PROCESS SAMPLE PASSED / NATIVE SWITCH BLOCKED**.
+Статус: **OFFLINE SPIKE PASSED / ABI 4 THREE-PROCESS SAMPLE PASSED / ABI 5 TURN SAMPLE PASSED / SAME-TURN LOAD HOOK BLOCKED / NATIVE SWITCH BLOCKED**.

@@ -15,6 +15,12 @@ static volatile LONG g_ce_layout_zero_mask_high = 0;
 static volatile LONG g_ce_layout_pointer_mask_low = 0;
 static volatile LONG g_ce_layout_pointer_mask_high = 0;
 static volatile LONG g_ce_layout_sample_bytes = 0;
+static volatile LONG g_ce_layout_observation_tag = 0;
+static volatile LONG g_ce_layout_observation_sequence = 0;
+static volatile LONG g_ce_layout_observation_count = 0;
+static volatile LONG g_ce_layout_observation_lock = 0;
+static volatile LONG g_ce_layout_last_observation_tag = 0;
+static volatile LONG g_ce_layout_output_latest = 0;
 
 uint32_t CE_CALL CEAdapterAbiVersion(void) {
     return CE_ADAPTER_ABI_VERSION;
@@ -23,7 +29,8 @@ uint32_t CE_CALL CEAdapterAbiVersion(void) {
 uint32_t CE_CALL CEAdapterCapabilities(void) {
     return CE_CAP_BIND_GALAXY_POINTER | CE_CAP_SMOKE_MARKER |
         CE_CAP_READONLY_GALAXY_FINGERPRINT |
-        CE_CAP_READONLY_GALAXY_LAYOUT_SAMPLE;
+        CE_CAP_READONLY_GALAXY_LAYOUT_SAMPLE |
+        CE_CAP_READONLY_GALAXY_LAYOUT_LATEST;
 }
 
 uint32_t CE_CALL CEAdapterBindGalaxy(uint32_t galaxy_ptr) {
@@ -235,6 +242,7 @@ uint32_t CE_CALL CEAdapterSampleGalaxyLayout(uint32_t galaxy_ptr, uint32_t sampl
     int payload_size;
     HANDLE file;
     DWORD written = 0;
+    int latest_output;
 
     if (InterlockedCompareExchange(&g_ce_layout_written, 1, 0) != 0) {
         return 1;
@@ -273,21 +281,30 @@ uint32_t CE_CALL CEAdapterSampleGalaxyLayout(uint32_t galaxy_ptr, uint32_t sampl
     InterlockedExchange(&g_ce_layout_pointer_mask_high, (LONG)pointer_high);
     InterlockedExchange(&g_ce_layout_sample_bytes, (LONG)sizeof(sample));
 
+    latest_output = InterlockedCompareExchange(&g_ce_layout_output_latest, 0, 0) != 0;
     if (GetTempPathA(MAX_PATH, temp_path) == 0 ||
         snprintf(marker_dir, sizeof(marker_dir), "%sChildrenOfEltan", temp_path) < 0 ||
         (!CreateDirectoryA(marker_dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) ||
-        snprintf(marker_path, sizeof(marker_path), "%s\\galaxy-layout-samples.jsonl", marker_dir) < 0) {
+        snprintf(
+            marker_path,
+            sizeof(marker_path),
+            latest_output ? "%s\\galaxy-layout-latest.json" : "%s\\galaxy-layout-samples.jsonl",
+            marker_dir
+        ) < 0) {
         InterlockedExchange(&g_ce_layout_written, 0);
         return 0;
     }
     payload_size = snprintf(
         payload,
         sizeof(payload),
-        "{\"abi\":%u,\"process_id\":%lu,\"sample_tag\":%u,\"sample_bytes\":256,"
+        "{\"abi\":%u,\"process_id\":%lu,\"sample_tag\":%u,"
+        "\"observation_tag\":%u,\"sequence\":%u,\"sample_bytes\":256,"
         "\"block_fnv1a32\":[%u,%u,%u,%u],\"zero_mask\":\"%08lX%08lX\","
         "\"readable_pointer_mask\":\"%08lX%08lX\",\"raw_values_included\":false,"
         "\"read_only\":true}\r\n",
         CEAdapterAbiVersion(), (unsigned long)GetCurrentProcessId(), sample_tag,
+        (uint32_t)InterlockedCompareExchange(&g_ce_layout_observation_tag, 0, 0),
+        (uint32_t)InterlockedCompareExchange(&g_ce_layout_observation_sequence, 0, 0),
         block_hash[0], block_hash[1], block_hash[2], block_hash[3],
         (unsigned long)zero_high, (unsigned long)zero_low,
         (unsigned long)pointer_high, (unsigned long)pointer_low
@@ -296,8 +313,15 @@ uint32_t CE_CALL CEAdapterSampleGalaxyLayout(uint32_t galaxy_ptr, uint32_t sampl
         InterlockedExchange(&g_ce_layout_written, 0);
         return 0;
     }
-    file = CreateFileA(marker_path, FILE_APPEND_DATA,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    file = CreateFileA(
+        marker_path,
+        latest_output ? GENERIC_WRITE : FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL,
+        latest_output ? CREATE_ALWAYS : OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
     if (file == INVALID_HANDLE_VALUE ||
         !WriteFile(file, payload, (DWORD)payload_size, &written, NULL) ||
         !FlushFileBuffers(file)) {
@@ -311,6 +335,41 @@ uint32_t CE_CALL CEAdapterSampleGalaxyLayout(uint32_t galaxy_ptr, uint32_t sampl
         return 0;
     }
     return 1;
+}
+
+uint32_t CE_CALL CEAdapterObserveGalaxyLayout(
+    uint32_t galaxy_ptr, uint32_t sample_tag, uint32_t observation_tag
+) {
+    uint32_t count;
+    uint32_t result;
+
+    if (galaxy_ptr == 0 || sample_tag == 0 ||
+        InterlockedCompareExchange(&g_ce_layout_observation_lock, 1, 0) != 0) {
+        return 0;
+    }
+    count = (uint32_t)InterlockedCompareExchange(&g_ce_layout_observation_count, 0, 0);
+    if (count != 0 &&
+        (uint32_t)InterlockedCompareExchange(&g_ce_layout_last_observation_tag, 0, 0) ==
+            observation_tag) {
+        InterlockedExchange(&g_ce_layout_observation_lock, 0);
+        return 1;
+    }
+    InterlockedExchange(&g_ce_layout_observation_tag, (LONG)observation_tag);
+    InterlockedExchange(&g_ce_layout_observation_sequence, (LONG)(count + 1u));
+    InterlockedExchange(&g_ce_layout_output_latest, 1);
+    InterlockedExchange(&g_ce_layout_written, 0);
+    result = CEAdapterSampleGalaxyLayout(galaxy_ptr, sample_tag);
+    InterlockedExchange(&g_ce_layout_output_latest, 0);
+    if (result != 0) {
+        InterlockedExchange(&g_ce_layout_observation_count, (LONG)(count + 1u));
+        InterlockedExchange(&g_ce_layout_last_observation_tag, (LONG)observation_tag);
+    }
+    InterlockedExchange(&g_ce_layout_observation_lock, 0);
+    return result;
+}
+
+uint32_t CE_CALL CEAdapterGetLayoutObservationCount(void) {
+    return (uint32_t)InterlockedCompareExchange(&g_ce_layout_observation_count, 0, 0);
 }
 
 uint32_t CE_CALL CEAdapterGetLayoutBlockHash(uint32_t block_index) {

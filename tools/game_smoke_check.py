@@ -12,11 +12,12 @@ import struct
 import sys
 import time
 
-EXPECTED_ABI = 4
+EXPECTED_ABI = 5
 EXPECTED_MARKER = 1128616787
 CAP_SMOKE_MARKER = 1 << 4
 CAP_READONLY_FINGERPRINT = 1 << 5
 CAP_READONLY_LAYOUT_SAMPLE = 1 << 6
+CAP_READONLY_LAYOUT_LATEST = 1 << 7
 ERROR_WORDS = (
     "access violation", "exception", "fatal", "script error", "cannot load",
     "loadlibrary failed", "ce_map", "cesecondmapadapter",
@@ -139,6 +140,7 @@ def report(state_file: Path, marker_file: Path, fingerprint_file: Path, layout_f
                 and marker.get("capabilities", 0) & CAP_SMOKE_MARKER
                 and marker.get("capabilities", 0) & CAP_READONLY_FINGERPRINT
                 and marker.get("capabilities", 0) & CAP_READONLY_LAYOUT_SAMPLE
+                and marker.get("capabilities", 0) & CAP_READONLY_LAYOUT_LATEST
             )
         except (OSError, ValueError):
             marker_ok = False
@@ -168,6 +170,8 @@ def report(state_file: Path, marker_file: Path, fingerprint_file: Path, layout_f
                 layout_ok = (
                     layout.get("abi") == EXPECTED_ABI
                     and layout.get("sample_bytes") == 256
+                    and isinstance(layout.get("observation_tag"), int)
+                    and isinstance(layout.get("sequence"), int)
                     and isinstance(layout.get("block_fnv1a32"), list)
                     and len(layout["block_fnv1a32"]) == 4
                     and all(isinstance(value, int) and value != 0 for value in layout["block_fnv1a32"])
@@ -246,6 +250,137 @@ def analyze_layouts(layout_file: Path, minimum: int) -> int:
     return 0
 
 
+def capture_layout(
+    latest_file: Path,
+    timeline_file: Path,
+    phase: str,
+    expected_process_id: int | None = None,
+    expected_turn: int | None = None,
+) -> int:
+    if not latest_file.is_file():
+        print(f"MISSING: {latest_file}")
+        return 3
+    try:
+        record = json.loads(latest_file.read_text(encoding="utf-8"))
+        valid = (
+            isinstance(record, dict)
+            and record.get("abi") == EXPECTED_ABI
+            and record.get("sample_tag") == EXPECTED_MARKER
+            and record.get("sample_bytes") == 256
+            and isinstance(record.get("process_id"), int)
+            and isinstance(record.get("observation_tag"), int)
+            and isinstance(record.get("sequence"), int)
+            and record.get("raw_values_included") is False
+            and record.get("read_only") is True
+        )
+        mask_value(record, "zero_mask")
+        mask_value(record, "readable_pointer_mask")
+    except (OSError, TypeError, ValueError):
+        valid = False
+    if not valid:
+        print("FAIL: latest layout observation is invalid")
+        return 3
+    if expected_process_id is not None and record["process_id"] != expected_process_id:
+        print(
+            f"FAIL: stale layout PID {record['process_id']}; "
+            f"expected current game PID {expected_process_id}"
+        )
+        return 3
+    if expected_turn is not None and record["observation_tag"] != expected_turn:
+        print(
+            f"FAIL: layout turn {record['observation_tag']}; "
+            f"expected saved turn {expected_turn}"
+        )
+        return 3
+    captured = dict(record)
+    captured["phase"] = phase
+    captured["captured_ns"] = time.time_ns()
+    timeline_file.parent.mkdir(parents=True, exist_ok=True)
+    with timeline_file.open("a", encoding="utf-8", newline="") as stream:
+        stream.write(json.dumps(captured, ensure_ascii=False, separators=(",", ":")) + "\n")
+    print(
+        f"OK: captured phase={phase} turn={record['observation_tag']} "
+        f"pid={record['process_id']} sequence={record['sequence']}"
+    )
+    return 0
+
+
+def analyze_timeline(layout_file: Path) -> int:
+    valid: list[dict[str, object]] = []
+    for record in layout_records(layout_file):
+        try:
+            hashes = record.get("block_fnv1a32")
+            if (
+                record.get("abi") == EXPECTED_ABI
+                and record.get("sample_bytes") == 256
+                and isinstance(record.get("process_id"), int)
+                and record["process_id"] > 0
+                and isinstance(record.get("observation_tag"), int)
+                and isinstance(record.get("sequence"), int)
+                and record["sequence"] >= 1
+                and record.get("phase") in {"before", "after", "reload"}
+                and isinstance(hashes, list)
+                and len(hashes) == 4
+                and all(isinstance(value, int) for value in hashes)
+                and record.get("raw_values_included") is False
+                and record.get("read_only") is True
+            ):
+                mask_value(record, "zero_mask")
+                mask_value(record, "readable_pointer_mask")
+                valid.append(record)
+        except (TypeError, ValueError):
+            pass
+    phases: dict[str, dict[str, object]] = {}
+    for record in valid:
+        phases[record["phase"]] = record
+    missing = [phase for phase in ("before", "after", "reload") if phase not in phases]
+    if missing:
+        print(f"NEED MORE: missing captured phase(s): {', '.join(missing)}")
+        return 3
+    before = phases["before"]
+    after = phases["after"]
+    reload_record = phases["reload"]
+    if before["process_id"] != after["process_id"] or \
+            after["observation_tag"] <= before["observation_tag"]:
+        print("FAIL: before/after must be increasing CurTurn values in the same process")
+        return 3
+    if reload_record["process_id"] == after["process_id"] or \
+            reload_record["observation_tag"] != after["observation_tag"]:
+        print("FAIL: reload must be the saved CurTurn in a separate process")
+        return 3
+    print(
+        f"Same-process turn comparison: {before['observation_tag']} -> "
+        f"{after['observation_tag']} (PID {after['process_id']})"
+    )
+    changed_blocks = [
+        index for index in range(4)
+        if before["block_fnv1a32"][index] != after["block_fnv1a32"][index]
+    ]
+    print(f"Blocks changed after turn advance: {changed_blocks}")
+    equal_blocks = [
+        index for index in range(4)
+        if after["block_fnv1a32"][index] == reload_record["block_fnv1a32"][index]
+    ]
+    print(
+        f"Reload comparison: turn {after['observation_tag']} in PID "
+        f"{after['process_id']} vs PID {reload_record['process_id']}"
+    )
+    print(f"Blocks identical across save/load: {equal_blocks}")
+    print(
+        "Zero mask preserved across save/load: "
+        f"{mask_value(after, 'zero_mask') == mask_value(reload_record, 'zero_mask')}"
+    )
+    print(
+        "Pointer-class mask preserved across save/load: "
+        f"{mask_value(after, 'readable_pointer_mask') == mask_value(reload_record, 'readable_pointer_mask')}"
+    )
+    if not equal_blocks:
+        print("FAIL: no 64-byte block remained identical across save/load")
+        return 3
+    print("PASS: turn advance and cross-process save/load samples are comparable")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -258,10 +393,18 @@ def main() -> int:
     p_report.add_argument("--state", type=Path, default=Path("dist/game-smoke-baseline.json"))
     p_report.add_argument("--marker", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "adapter-smoke.json")
     p_report.add_argument("--fingerprint", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "galaxy-fingerprint.json")
-    p_report.add_argument("--layout", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "galaxy-layout-samples.jsonl")
+    p_report.add_argument("--layout", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "galaxy-layout-latest.json")
     p_layouts = sub.add_parser("layouts")
     p_layouts.add_argument("--layout", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "galaxy-layout-samples.jsonl")
     p_layouts.add_argument("--minimum", type=int, default=3)
+    p_capture = sub.add_parser("capture")
+    p_capture.add_argument("--phase", choices=("before", "after", "reload"), required=True)
+    p_capture.add_argument("--latest", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "galaxy-layout-latest.json")
+    p_capture.add_argument("--timeline", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "galaxy-layout-timeline.jsonl")
+    p_capture.add_argument("--expected-process-id", type=int)
+    p_capture.add_argument("--expected-turn", type=int)
+    p_timeline = sub.add_parser("timeline")
+    p_timeline.add_argument("--layout", type=Path, default=Path(os.environ.get("TEMP", ".")) / "ChildrenOfEltan" / "galaxy-layout-timeline.jsonl")
     args = parser.parse_args()
     if args.command == "preflight":
         return preflight(args.module.resolve())
@@ -269,6 +412,13 @@ def main() -> int:
         return snapshot(args.logs.resolve(), args.state.resolve())
     if args.command == "layouts":
         return analyze_layouts(args.layout.resolve(), args.minimum)
+    if args.command == "capture":
+        return capture_layout(
+            args.latest.resolve(), args.timeline.resolve(), args.phase,
+            args.expected_process_id, args.expected_turn,
+        )
+    if args.command == "timeline":
+        return analyze_timeline(args.layout.resolve())
     return report(
         args.state.resolve(), args.marker.resolve(), args.fingerprint.resolve(), args.layout.resolve()
     )

@@ -24,9 +24,11 @@ int main(int argc, char **argv) {
     ce_dword_fn bind;
     ce_dword_fn echo;
     typedef uint32_t (__cdecl *ce_two_dword_fn)(uint32_t, uint32_t);
+    typedef uint32_t (__cdecl *ce_three_dword_fn)(uint32_t, uint32_t, uint32_t);
     ce_two_dword_fn run_smoke;
     ce_two_dword_fn probe;
     ce_two_dword_fn sample_layout;
+    ce_three_dword_fn observe_layout;
     ce_noarg_fn fingerprint_hash;
     ce_noarg_fn fingerprint_bytes;
     ce_dword_fn layout_block_hash;
@@ -35,11 +37,13 @@ int main(int argc, char **argv) {
     ce_noarg_fn layout_pointer_low;
     ce_noarg_fn layout_pointer_high;
     ce_noarg_fn layout_sample_bytes;
+    ce_noarg_fn layout_observation_count;
     union {
         uint32_t words[64];
         uint8_t bytes[256];
     } sample = {{0}};
     const uint32_t marker = 0x1234ABCDu;
+    uint32_t test_index;
 
     if (argc != 2) {
         fprintf(stderr, "usage: test_ce_second_map_adapter.exe <dll>\n");
@@ -60,6 +64,8 @@ int main(int argc, char **argv) {
     fingerprint_hash = (ce_noarg_fn)require_export(module, "CEAdapterGetLastFingerprintHash");
     fingerprint_bytes = (ce_noarg_fn)require_export(module, "CEAdapterGetLastFingerprintBytes");
     sample_layout = (ce_two_dword_fn)require_export(module, "CEAdapterSampleGalaxyLayout");
+    observe_layout = (ce_three_dword_fn)require_export(module, "CEAdapterObserveGalaxyLayout");
+    layout_observation_count = (ce_noarg_fn)require_export(module, "CEAdapterGetLayoutObservationCount");
     layout_block_hash = (ce_dword_fn)require_export(module, "CEAdapterGetLayoutBlockHash");
     layout_zero_low = (ce_noarg_fn)require_export(module, "CEAdapterGetLayoutZeroMaskLow");
     layout_zero_high = (ce_noarg_fn)require_export(module, "CEAdapterGetLayoutZeroMaskHigh");
@@ -68,7 +74,7 @@ int main(int argc, char **argv) {
     layout_sample_bytes = (ce_noarg_fn)require_export(module, "CEAdapterGetLayoutSampleBytes");
     supports_multi = (ce_noarg_fn)require_export(module, "CEAdapterSupportsNativeMultiGalaxy");
 
-    if (abi() != 4 || capabilities() != 113 || supports_multi() != 0) return 3;
+    if (abi() != 5 || capabilities() != 241 || supports_multi() != 0) return 3;
     if (echo(marker) != marker || bind(0) != 0 || bind(marker) != 1) return 4;
     if (get_bound() != marker) return 5;
     if (run_smoke(0, 1128616787u) != 0 || run_smoke(marker, 1128616787u) != 1) return 6;
@@ -85,7 +91,18 @@ int main(int argc, char **argv) {
         layout_block_hash(3) == 0 || layout_block_hash(4) != 0) return 10;
     if (layout_zero_low() != 0xFFFFFFFDu || layout_zero_high() != 0x7FFFFFFFu ||
         layout_pointer_low() != 0x00000002u || layout_pointer_high() != 0) return 11;
+    if (observe_layout((uint32_t)(uintptr_t)sample.bytes, marker, 100) != 1 ||
+        observe_layout((uint32_t)(uintptr_t)sample.bytes, marker, 100) != 1 ||
+        layout_observation_count() != 1) return 12;
+    sample.words[63] = 0x32u;
+    if (observe_layout((uint32_t)(uintptr_t)sample.bytes, marker, 101) != 1 ||
+        layout_observation_count() != 2) return 13;
+    for (test_index = 102; test_index <= 131; ++test_index) {
+        if (observe_layout((uint32_t)(uintptr_t)sample.bytes, marker, test_index) != 1) return 14;
+    }
+    if (observe_layout((uint32_t)(uintptr_t)sample.bytes, marker, 132) != 1 ||
+        layout_observation_count() != 33) return 15;
     FreeLibrary(module);
-    printf("OK: ABI=4 fingerprint/layout sampler passed; native multi-galaxy remains disabled\n");
+    printf("OK: ABI=5 rolling latest layout passed; native multi-galaxy remains disabled\n");
     return 0;
 }

@@ -22,6 +22,8 @@ Data ^{
             CEAdapterGetLastFingerprintHash=dword,CEAdapterGetLastFingerprintHash
             CEAdapterGetLastFingerprintBytes=dword,CEAdapterGetLastFingerprintBytes
             CEAdapterSampleGalaxyLayout=dword,CEAdapterSampleGalaxyLayout,dword,dword
+            CEAdapterObserveGalaxyLayout=dword,CEAdapterObserveGalaxyLayout,dword,dword,dword
+            CEAdapterGetLayoutObservationCount=dword,CEAdapterGetLayoutObservationCount
             CEAdapterGetLayoutBlockHash=dword,CEAdapterGetLayoutBlockHash,dword
             CEAdapterGetLayoutZeroMaskLow=dword,CEAdapterGetLayoutZeroMaskLow
             CEAdapterGetLayoutZeroMaskHigh=dword,CEAdapterGetLayoutZeroMaskHigh

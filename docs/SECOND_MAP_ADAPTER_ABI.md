@@ -5,8 +5,9 @@
 `CESecondMapAdapter.dll` — 32-битный C-адаптер между RScript и будущим
 build-specific слоем второй галактики. ABI 3 подтверждён внутри Steam build
 `20648864`: игра загрузила DLL, RScript вызвал smoke-экспорт, передал ненулевой
-`GalaxyPtr()` и выполнил ограниченный read-only fingerprint. ABI 4 сохраняет эти
-gate и добавляет сравнимый layout sample без сырых значений или адресов.
+`GalaxyPtr()` и выполнил ограниченный read-only fingerprint. ABI 4 добавил
+сравнимый layout sample без сырых значений или адресов. ABI 5 добавляет rolling
+latest-наблюдение по подтверждённому `CurTurn()`.
 
 ## Подтверждённая цепочка
 
@@ -19,12 +20,12 @@ gate и добавляет сравнимый layout sample без сырых з
 `Script functions list.txt:3804,3819-3829,3878-3902` в зафиксированном
 репозитории референсов.
 
-## Экспорты ABI 4
+## Экспорты ABI 5
 
 | Экспорт | Контракт |
 |---|---|
-| `CEAdapterAbiVersion()` | возвращает `4` |
-| `CEAdapterCapabilities()` | bind, smoke, fingerprint и read-only layout sample (`113`) |
+| `CEAdapterAbiVersion()` | возвращает `5` |
+| `CEAdapterCapabilities()` | bind, smoke, fingerprint, sample и rolling latest (`241`) |
 | `CEAdapterBindGalaxy(dword)` | принимает ненулевой непрозрачный адрес и сохраняет его |
 | `CEAdapterGetBoundGalaxy()` | возвращает последний сохранённый адрес |
 | `CEAdapterEchoDword(dword)` | безопасный smoke-вызов без доступа к игре |
@@ -33,6 +34,8 @@ gate и добавляет сравнимый layout sample без сырых з
 | `CEAdapterGetLastFingerprintHash()` | последний FNV-1a хеш без выдачи сырых данных |
 | `CEAdapterGetLastFingerprintBytes()` | размер последней успешной выборки |
 | `CEAdapterSampleGalaxyLayout(dword,dword)` | один 256-байтный sample на процесс и append в JSONL |
+| `CEAdapterObserveGalaxyLayout(dword,dword,dword)` | перезаписывает latest для нового `CurTurn` |
+| `CEAdapterGetLayoutObservationCount()` | число уникальных ходов, увиденных процессом |
 | `CEAdapterGetLayoutBlockHash(dword)` | FNV-1a одного из четырёх 64-байтных блоков |
 | `CEAdapterGetLayoutZeroMaskLow/High()` | 64-битная маска нулевых dword двумя половинами |
 | `CEAdapterGetLayoutReadablePointerMaskLow/High()` | маска dword, похожих на читаемые выровненные указатели |
@@ -47,7 +50,8 @@ gate и добавляет сравнимый layout sample без сырых з
 - перед чтением весь диапазон проверяется через `VirtualQuery`;
 - копирование выполняется через `ReadProcessMemory(GetCurrentProcess())`;
 - размер жёстко ограничен первыми 256 байтами;
-- sample пишется не чаще одного раза за процесс игры;
+- повтор одного `CurTurn` не создаёт нового наблюдения;
+- rolling-файл перезаписывается и не растёт со временем;
 - JSONL не содержит сырые байты, `GalaxyPtr` или адрес региона;
 - readable-pointer mask является только классификацией, а не доказательством поля;
 - четыре 64-байтных FNV-1a хеша нужны только для межпроцессного сравнения.
@@ -57,6 +61,10 @@ gate и добавляет сравнимый layout sample без сырых з
 ```powershell
 python tools\game_smoke_check.py layouts --minimum 3
 ```
+
+ABI 5 rolling-файл: `%TEMP%\ChildrenOfEltan\galaxy-layout-latest.json`.
+Контрольные точки архивируются командой `capture`, которая умеет проверять
+ожидаемые PID и ход.
 
 ## Запреты до завершения reverse engineering
 
@@ -89,3 +97,11 @@ offsets и ограничения вывода записаны в `GALAXY_LAYOU
 
 Следующий gate — сравнение одной партии до хода и после save/load. Запись в память
 остаётся запрещённой до подтверждения layout.
+
+## Результат ABI 5 in-game
+
+Сравнение `CurTurn 300 -> 301` в одном процессе прошло: все четыре блока
+изменились, zero-mask и pointer-class mask сохранились. Same-turn reload gate
+заблокирован жизненным циклом RScript: ни `Turn`, ни проверенный `Init` не вызвали
+DLL после открытия save в новом процессе. Детали и защита от stale PID записаны в
+`GALAXY_LAYOUT_ABI5_RESULTS.md`.

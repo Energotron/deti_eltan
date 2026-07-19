@@ -8,6 +8,7 @@
 | запустить глобальный скрипт | `GRun()` | `references/Space-Rangers-Mods-Sources/Astro/LastOneHP.rson:75` | только из Global-кода |
 | не повторять запуск | `GCntRun`, `GLastTurnRun`, `IsScriptActive` | `script-functions/Script functions list.txt:420` | имя скрипта должно совпадать с Main |
 | получить игровой день | `CurTurn()` | `AnotherMods/AMod_Invaders/Invaders (den).rson:1428` | сохранять дедлайн, не пересчитывать после load |
+| вызвать DLL сразу после load | подтверждённого callback нет | `docs/GALAXY_LAYOUT_ABI5_RESULTS.md` | `Turn` ждёт следующий день; `Init` при восстановлении save не вызывается |
 | создать нативного рейнджера | `BuyRanger(planet, finance)` | список функций, строки 1404–1408 | корпус/раса выбираются нативно |
 | создать пирата | `BuyPirate(planet, finance)` | список функций, строки 1409–1414 | зависит от владельца планеты |
 | создать военного/флагман | `BuyWarrior`, `BuyBigWarrior` | список функций, строки 1415–1425 | нативные роли и владельцы |

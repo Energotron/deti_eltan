@@ -52,8 +52,8 @@
             "ceSmoke(GalaxyPtr(),1128616787);",
             "unknown ceProbe = ImportedFunction('CESecondMapAdapter','CEAdapterProbeGalaxy');",
             "ceProbe(GalaxyPtr(),64);",
-            "unknown ceLayout = ImportedFunction('CESecondMapAdapter','CEAdapterSampleGalaxyLayout');",
-            "ceLayout(GalaxyPtr(),1128616787);"
+            "unknown ceLayout = ImportedFunction('CESecondMapAdapter','CEAdapterObserveGalaxyLayout');",
+            "ceLayout(GalaxyPtr(),1128616787,CurTurn());"
           ]
         }
       ],
