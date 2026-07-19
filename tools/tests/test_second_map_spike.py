@@ -5,6 +5,7 @@ from pathlib import Path
 
 from tools.second_map_spike import (
     REQUIRED_NODES,
+    SECTOR_ARCHETYPES,
     SimulatedCrash,
     StateError,
     StateStore,
@@ -33,6 +34,8 @@ class SecondMapSpikeTests(unittest.TestCase):
         self.assertEqual(len(state["history"]), 3)
         self.assertEqual(state["maps"]["OLD_ARM"]["star_count"], 80)
         self.assertEqual(state["maps"]["SECOND_HOME"]["star_count"], 80)
+        self.assertEqual(state["maps"]["OLD_ARM"]["sector_count"], 19)
+        self.assertEqual(state["maps"]["SECOND_HOME"]["sector_count"], 19)
         self.assertEqual(set(state["maps"]["SECOND_HOME"]["required_nodes"]), set(REQUIRED_NODES))
 
     def test_recovery_after_every_persisted_phase_is_idempotent(self):
@@ -68,6 +71,15 @@ class SecondMapSpikeTests(unittest.TestCase):
         simulate_days(right, 500)
         self.assertEqual(left, right)
 
+    def test_sector_layout_mirrors_old_arm_and_uses_real_unique_names(self):
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        sectors = state["maps"]["SECOND_HOME"]["sectors"]
+        self.assertEqual(len(sectors), 19)
+        self.assertEqual(len({sector["id"] for sector in sectors}), 19)
+        self.assertEqual(len({sector["display_name"] for sector in sectors}), 19)
+        self.assertEqual({sector["archetype"] for sector in sectors}, set(SECTOR_ARCHETYPES))
+        self.assertTrue(all(not sector["display_name"].startswith("CE_") for sector in sectors))
+
     def test_missing_anchor_and_scale_violation_are_rejected(self):
         state = create_state(64, 5, 99)
         state["cargo"]["CE_Item_TwinHomeAnchor"] = 0
@@ -75,6 +87,10 @@ class SecondMapSpikeTests(unittest.TestCase):
             validate_state(state)
         state = create_state(64, 5, 99)
         state["maps"]["SECOND_HOME"]["star_count"] = 40
+        with self.assertRaises(StateError):
+            validate_state(state)
+        state = create_state(64, 5, 99, old_sector_count=19)
+        state["maps"]["SECOND_HOME"]["sector_count"] = 10
         with self.assertRaises(StateError):
             validate_state(state)
 

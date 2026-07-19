@@ -4,6 +4,11 @@
     "target": "mirror_old_arm_star_count",
     "allowed_deviation_percent": 10
   },
+  "sector_scale_rule": {
+    "target": "mirror_old_arm_sector_count",
+    "allowed_deviation_percent": 10,
+    "reference_medium_game_sectors": 19
+  },
   "maps": [
     "OLD_ARM",
     "SECOND_HOME"
@@ -21,7 +26,7 @@
     "CE_SYS_UNLIT_CITY",
     "CE_SYS_SECOND_GATE"
   ],
-  "procedural_sectors": [
+  "sector_archetypes": [
     "STRONG",
     "AGILL",
     "MEDIUM",
@@ -43,7 +48,7 @@
       "CE_SYS_UNLIT_CITY": "Город Незажжённых",
       "CE_SYS_SECOND_GATE": "Врата Второго Дома"
     },
-    "sectors": {
+    "sector_archetypes": {
       "STRONG": "Сектор Стронгов",
       "AGILL": "Сектор Агиллов",
       "MEDIUM": "Сектор Медиумов",
@@ -52,6 +57,32 @@
       "KLISSAN_SCAR": "Клисанский шрам"
     }
   },
+  "sector_name_pool": [
+    {"id": "CE_SEC_KARH_FORGES", "display_name": "Кузни Карха", "archetype": "STRONG"},
+    {"id": "CE_SEC_IRON_REACH", "display_name": "Железный Предел", "archetype": "STRONG"},
+    {"id": "CE_SEC_TARG_BASTION", "display_name": "Бастион Тарг", "archetype": "STRONG"},
+    {"id": "CE_SEC_HAMMER_WEDGE", "display_name": "Клин Молота", "archetype": "STRONG"},
+    {"id": "CE_SEC_FACELESS_DEPTH", "display_name": "Безликая Глубина", "archetype": "AGILL"},
+    {"id": "CE_SEC_SILENT_FAULT", "display_name": "Тихий Излом", "archetype": "AGILL"},
+    {"id": "CE_SEC_BLACK_NODE", "display_name": "Чёрный Узел", "archetype": "AGILL"},
+    {"id": "CE_SEC_UNKNOWN_VEIL", "display_name": "Завеса Неведомых", "archetype": "AGILL"},
+    {"id": "CE_SEC_LUMEN_BELT", "display_name": "Люменский Пояс", "archetype": "MEDIUM"},
+    {"id": "CE_SEC_MEASURE_TERRACES", "display_name": "Террасы Меры", "archetype": "MEDIUM"},
+    {"id": "CE_SEC_COPPER_LEDGER", "display_name": "Медный Реестр", "archetype": "MEDIUM"},
+    {"id": "CE_SEC_COVENANT_VALLEY", "display_name": "Долина Договоров", "archetype": "MEDIUM"},
+    {"id": "CE_SEC_PRISMATIC_CHOIR", "display_name": "Призматический Хор", "archetype": "INTELL"},
+    {"id": "CE_SEC_ECHO_GRID", "display_name": "Решётка Эха", "archetype": "INTELL"},
+    {"id": "CE_SEC_RADIANT_ARCHIVE", "display_name": "Сияющий Архив", "archetype": "INTELL"},
+    {"id": "CE_SEC_UNITY_CONTOUR", "display_name": "Контур Единства", "archetype": "INTELL"},
+    {"id": "CE_SEC_ASH_BORDER", "display_name": "Пепельная окраина", "archetype": "ASH_BORDER"},
+    {"id": "CE_SEC_FREE_WASTES", "display_name": "Вольные Пустоши", "archetype": "ASH_BORDER"},
+    {"id": "CE_SEC_CARAVAN_RIFT", "display_name": "Караванный Разлом", "archetype": "ASH_BORDER"},
+    {"id": "CE_SEC_GREY_HARBORS", "display_name": "Серые Причалы", "archetype": "ASH_BORDER"},
+    {"id": "CE_SEC_KLISSAN_SCAR", "display_name": "Клисанский шрам", "archetype": "KLISSAN_SCAR"},
+    {"id": "CE_SEC_GREEN_WOUND", "display_name": "Зелёная Рана", "archetype": "KLISSAN_SCAR"},
+    {"id": "CE_SEC_SPORE_FRONTIER", "display_name": "Споровый Рубеж", "archetype": "KLISSAN_SCAR"},
+    {"id": "CE_SEC_SILENT_BLIGHT", "display_name": "Немая Зараза", "archetype": "KLISSAN_SCAR"}
+  ],
   "inactive_map_simulation": {
     "light_tick_days": 1,
     "aggregate_tick_min_days": 10,

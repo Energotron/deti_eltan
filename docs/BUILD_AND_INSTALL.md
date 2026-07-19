@@ -17,7 +17,7 @@ CE-модуля ещё не выполнялась.
 python tools/validate_content.py
 python -m unittest discover -s tools/tests -v
 python tools/second_map_spike.py demo dist/second-map-spike/demo-state.json `
-  --old-stars 80 --cells 10 --seed 2441
+  --old-stars 80 --old-sectors 19 --cells 10 --seed 2441
 ```
 
 ## Сборка безопасного engine-adapter

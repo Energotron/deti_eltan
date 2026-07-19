@@ -60,21 +60,35 @@ def main():
     deviation=second['scale_rule']['allowed_deviation_percent']
     if deviation>10:
         raise SystemExit('Second Home scale deviation exceeds product requirement')
+    sector_deviation=second['sector_scale_rule']['allowed_deviation_percent']
+    if sector_deviation>10 or second['sector_scale_rule']['target']!='mirror_old_arm_sector_count':
+        raise SystemExit('Second Home sector count must mirror the old arm within 10 percent')
     if set(second['maps'])!={'OLD_ARM','SECOND_HOME'}:
         raise SystemExit('map schema must define both arms')
 
     display_names=second.get('display_names',{})
     system_names=display_names.get('systems',{})
-    sector_names=display_names.get('sectors',{})
+    archetype_names=display_names.get('sector_archetypes',{})
     if set(system_names)!=set(second['required_nodes']):
         raise SystemExit('every required Second Home system must have a canonical display name')
-    if set(sector_names)!=set(second['procedural_sectors']):
-        raise SystemExit('every Second Home sector must have a canonical display name')
-    visible_names=list(system_names.values())+list(sector_names.values())
+    if set(archetype_names)!=set(second['sector_archetypes']):
+        raise SystemExit('every Second Home sector archetype must have a display name')
+    sector_pool=second.get('sector_name_pool',[])
+    if len(sector_pool)<second['sector_scale_rule']['reference_medium_game_sectors']:
+        raise SystemExit('sector name pool is too small for the reference medium galaxy')
+    sector_ids=unique(sector_pool,'Second Home sector names',prefixes=('CE_SEC_',))
+    if len(sector_ids)!=len(sector_pool):
+        raise SystemExit('Second Home sector ids must be unique')
+    if any(item.get('archetype') not in second['sector_archetypes'] for item in sector_pool):
+        raise SystemExit('Second Home sector name has an unknown archetype')
+    if set(item['archetype'] for item in sector_pool)!=set(second['sector_archetypes']):
+        raise SystemExit('sector name pool must cover every archetype')
+    sector_names=[item.get('display_name') for item in sector_pool]
+    visible_names=list(system_names.values())+sector_names
     if any(not isinstance(name,str) or not name.strip() for name in visible_names):
         raise SystemExit('Second Home display names must be non-empty strings')
     if len(visible_names)!=len(set(visible_names)):
-        raise SystemExit('Second Home display names must be unique')
+        raise SystemExit('Second Home system and sector display names must be unique')
     forbidden_name_fragments=('sector_','system_','todo','placeholder','test')
     if any(any(fragment in name.lower() for fragment in forbidden_name_fragments) for name in visible_names):
         raise SystemExit('technical placeholder leaked into a Second Home display name')
@@ -113,6 +127,7 @@ def main():
         f'OK: {len(factions)} factions, {len(chars)} characters, {len(missions)} missions, '
         f'{len(variables)} variables, {len(items)} transit items, '
         f'{len(second["required_nodes"])} required Second Home nodes, '
+        f'{len(sector_pool)} canonical sector names, '
         f'{len(all_ship_ids)} unique racial ship classes, {len(all_base_ids)} unique racial bases'
     )
 

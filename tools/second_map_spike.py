@@ -18,8 +18,15 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ARMS = ("OLD_ARM", "SECOND_HOME")
+MAP_SCHEMA = json.loads(
+    (Path(__file__).resolve().parents[1] / "data" / "second_home_map.schema.json").read_text(
+        encoding="utf-8"
+    )
+)
+SECTOR_ARCHETYPES = tuple(MAP_SCHEMA["sector_archetypes"])
+SECTOR_NAME_POOL = tuple(MAP_SCHEMA["sector_name_pool"])
 REQUIRED_NODES = (
     "CE_SYS_ELTAN_WOUND",
     "CE_SYS_FIRST_SHELTER",
@@ -72,12 +79,19 @@ class StateStore:
         os.replace(temp, self.path)
 
 
-def create_state(old_star_count: int, cells: int, seed: int) -> dict[str, Any]:
+def create_state(
+    old_star_count: int, cells: int, seed: int, old_sector_count: int = 19
+) -> dict[str, Any]:
     if old_star_count < len(REQUIRED_NODES):
         raise StateError("old arm is too small for the required Second Home nodes")
     if cells < 0:
         raise StateError("resonance cell count cannot be negative")
+    if old_sector_count < len(SECTOR_ARCHETYPES):
+        raise StateError("old arm has too few sectors for all Second Home archetypes")
+    if old_sector_count > len(SECTOR_NAME_POOL):
+        raise StateError("sector name pool is too small for the old arm scale")
     second_seed = _stable_int("CE_SECOND_HOME", seed) & 0x7FFFFFFF
+    second_sectors = _generate_sector_layout(second_seed, old_sector_count)
     state = {
         "schema_version": SCHEMA_VERSION,
         "revision": 0,
@@ -89,8 +103,11 @@ def create_state(old_star_count: int, cells: int, seed: int) -> dict[str, Any]:
         },
         "transit": None,
         "maps": {
-            "OLD_ARM": _new_map(seed, old_star_count, ()),
-            "SECOND_HOME": _new_map(second_seed, old_star_count, REQUIRED_NODES),
+            "OLD_ARM": _new_map(seed, old_star_count, old_sector_count, (), ()),
+            "SECOND_HOME": _new_map(
+                second_seed, old_star_count, old_sector_count,
+                REQUIRED_NODES, second_sectors,
+            ),
         },
         "history": [],
     }
@@ -98,10 +115,41 @@ def create_state(old_star_count: int, cells: int, seed: int) -> dict[str, Any]:
     return state
 
 
-def _new_map(seed: int, star_count: int, nodes: tuple[str, ...]) -> dict[str, Any]:
+def _generate_sector_layout(seed: int, sector_count: int) -> tuple[dict[str, str], ...]:
+    by_archetype = {
+        archetype: sorted(
+            (item for item in SECTOR_NAME_POOL if item["archetype"] == archetype),
+            key=lambda item: _stable_int(seed, "sector-name", item["id"]),
+        )
+        for archetype in SECTOR_ARCHETYPES
+    }
+    selected = [by_archetype[archetype][0] for archetype in SECTOR_ARCHETYPES]
+    selected_ids = {item["id"] for item in selected}
+    remaining = sorted(
+        (item for item in SECTOR_NAME_POOL if item["id"] not in selected_ids),
+        key=lambda item: _stable_int(seed, "sector-fill", item["id"]),
+    )
+    selected.extend(remaining[:sector_count - len(selected)])
+    selected.sort(key=lambda item: _stable_int(seed, "sector-order", item["id"]))
+    return tuple(
+        {"id": item["id"], "display_name": item["display_name"],
+         "archetype": item["archetype"]}
+        for item in selected
+    )
+
+
+def _new_map(
+    seed: int,
+    star_count: int,
+    sector_count: int,
+    nodes: tuple[str, ...],
+    sectors: tuple[dict[str, str], ...],
+) -> dict[str, Any]:
     return {
         "seed": seed,
         "star_count": star_count,
+        "sector_count": sector_count,
+        "sectors": list(sectors),
         "last_sim_day": 0,
         "aggregate_ticks": 0,
         "economy_index": 1000,
@@ -126,6 +174,24 @@ def validate_state(state: dict[str, Any]) -> None:
     second_count = state["maps"]["SECOND_HOME"].get("star_count", 0)
     if old_count <= 0 or abs(second_count - old_count) / old_count > 0.10:
         raise StateError("Second Home star count exceeds the ±10% scale rule")
+
+    old_sector_count = state["maps"]["OLD_ARM"].get("sector_count", 0)
+    second_sector_count = state["maps"]["SECOND_HOME"].get("sector_count", 0)
+    if old_sector_count <= 0 or \
+            abs(second_sector_count - old_sector_count) / old_sector_count > 0.10:
+        raise StateError("Second Home sector count exceeds the ±10% scale rule")
+    sectors = state["maps"]["SECOND_HOME"].get("sectors", [])
+    if len(sectors) != second_sector_count:
+        raise StateError("Second Home sector layout does not match sector_count")
+    sector_ids = [sector.get("id") for sector in sectors]
+    sector_names = [sector.get("display_name") for sector in sectors]
+    if len(sector_ids) != len(set(sector_ids)) or \
+            len(sector_names) != len(set(sector_names)):
+        raise StateError("Second Home sector ids and names must be unique")
+    if any(not name or "sector_" in name.lower() for name in sector_names):
+        raise StateError("Second Home contains a technical sector display name")
+    if set(sector.get("archetype") for sector in sectors) != set(SECTOR_ARCHETYPES):
+        raise StateError("Second Home sector layout must cover every archetype")
 
     nodes = state["maps"]["SECOND_HOME"].get("required_nodes", [])
     if len(nodes) != len(set(nodes)) or set(nodes) != set(REQUIRED_NODES):
@@ -265,8 +331,10 @@ def _maybe_crash(phase: str, crash_after: str | None) -> None:
         raise SimulatedCrash(f"simulated crash after {phase}")
 
 
-def run_demo(store: StateStore, old_stars: int, cells: int, seed: int) -> dict[str, Any]:
-    store.save(create_state(old_stars, cells, seed))
+def run_demo(
+    store: StateStore, old_stars: int, cells: int, seed: int, old_sectors: int = 19
+) -> dict[str, Any]:
+    store.save(create_state(old_stars, cells, seed, old_sectors))
     state = store.load()
     simulate_days(state, 40)
     store.save(state)
@@ -286,6 +354,7 @@ def _parser() -> argparse.ArgumentParser:
     init = sub.add_parser("init")
     init.add_argument("state", type=Path)
     init.add_argument("--old-stars", type=int, default=64)
+    init.add_argument("--old-sectors", type=int, default=19)
     init.add_argument("--cells", type=int, default=10)
     init.add_argument("--seed", type=int, default=3500)
     transit = sub.add_parser("transit")
@@ -301,6 +370,7 @@ def _parser() -> argparse.ArgumentParser:
     demo = sub.add_parser("demo")
     demo.add_argument("state", type=Path)
     demo.add_argument("--old-stars", type=int, default=64)
+    demo.add_argument("--old-sectors", type=int, default=19)
     demo.add_argument("--cells", type=int, default=10)
     demo.add_argument("--seed", type=int, default=3500)
     return parser
@@ -311,7 +381,7 @@ def main() -> None:
     store = StateStore(args.state)
     try:
         if args.command == "init":
-            state = create_state(args.old_stars, args.cells, args.seed)
+            state = create_state(args.old_stars, args.cells, args.seed, args.old_sectors)
             store.save(state)
         elif args.command == "transit":
             state = begin_transit(store, args.crash_after)
@@ -325,13 +395,16 @@ def main() -> None:
             state = store.load()
             validate_state(state)
         else:
-            state = run_demo(store, args.old_stars, args.cells, args.seed)
+            state = run_demo(
+                store, args.old_stars, args.cells, args.seed, args.old_sectors
+            )
     except SimulatedCrash as exc:
         print(f"CRASH: {exc}")
         raise SystemExit(75) from exc
     print(
         f"OK: arm={state['current_arm']} day={state['current_day']} "
         f"cells={state['cargo']['CE_Item_ResonanceCell']} "
+        f"sectors={state['maps']['SECOND_HOME']['sector_count']} "
         f"transits={len(state['history'])} revision={state['revision']}"
     )
 
