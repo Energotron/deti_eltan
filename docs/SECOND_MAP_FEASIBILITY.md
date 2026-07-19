@@ -63,6 +63,14 @@ ABI 5 подтвердил rolling read-only наблюдение `CurTurn 300 -
 ни `Turn`, ни `Init` до следующего игрового дня. Результат зафиксирован в
 `GALAXY_LAYOUT_ABI5_RESULTS.md`; stale PID теперь отклоняется анализатором.
 
+Следующий gate больше не зависит от RScript callback: отдельный PE32
+`ce_galaxy_attach.exe` открывает `Rangers.exe` только на query/read, сканирует
+подтверждённые 256-байтные признаки и не публикует адреса или сырые данные.
+Синтетический end-to-end самотест пройден. На загруженном save строгий и
+устойчивый профили оба нашли ровно один одинаковый кандидат, закрыв same-turn
+read-only discovery без RScript callback. Контракт описан в
+`GALAXY_READONLY_ATTACH.md`.
+
 ## Решение для планирования
 
 1. CE-P00 и War Apart snapshot можно делать обычным RScript-модом.
@@ -72,4 +80,4 @@ ABI 5 подтвердил rolling read-only наблюдение `CurTurn 300 -
    `20648864`, не перенося предположения между версиями.
 5. Native switch и расширение save реализовывать отдельными capability gates.
 
-Статус: **OFFLINE SPIKE PASSED / ABI 4 THREE-PROCESS SAMPLE PASSED / ABI 5 TURN SAMPLE PASSED / SAME-TURN LOAD HOOK BLOCKED / NATIVE SWITCH BLOCKED**.
+Статус: **OFFLINE SPIKE PASSED / ABI 4 THREE-PROCESS SAMPLE PASSED / ABI 5 TURN SAMPLE PASSED / SAME-TURN READ-ONLY ATTACH PASSED / NATIVE SWITCH BLOCKED**.

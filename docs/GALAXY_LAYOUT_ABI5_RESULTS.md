@@ -51,7 +51,13 @@ load-hook. Поэтому честное сравнение `after` и `reload` 
 
 ## Следующий gate
 
-Найти подтверждённый engine/load callback либо разработать отдельный строго
-read-only attach-инструмент, способный получить текущий Galaxy без DLL injection.
-До этого запрещены process injection, запись в Galaxy, native switch и расширение
-save. `CEAdapterSupportsNativeMultiGalaxy()` остаётся `0`.
+Создан отдельный строго read-only attach scanner, который ищет кандидатов по
+пересечению подтверждённых zero/readable-pointer масок без DLL injection. На
+same-turn загрузке строгий и устойчивый профили нашли ровно один одинаковый
+кандидат, хотя RScript latest остался устаревшим. Контракт и доказательства
+описаны в `GALAXY_READONLY_ATTACH.md`.
+
+Следующий gate — автоматически архивировать обезличенный reload fingerprint и
+сравнить его с `after`. По-прежнему запрещены process injection, запись в Galaxy,
+native switch и расширение save. `CEAdapterSupportsNativeMultiGalaxy()` остаётся
+`0`.
