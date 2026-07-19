@@ -18,7 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 ARMS = ("OLD_ARM", "SECOND_HOME")
 MAP_SCHEMA = json.loads(
     (Path(__file__).resolve().parents[1] / "data" / "second_home_map.schema.json").read_text(
@@ -846,7 +846,7 @@ def validate_state(state: dict[str, Any]) -> None:
             discovery_day = invasion.get("discovery_day")
             arrival_day = invasion.get("arrival_day")
             if not isinstance(discovery_day, int) or \
-                    arrival_day != discovery_day + rule["arrival_delay_days"] or \
+                    arrival_day != discovery_day + _dominator_arrival_delay(state, series) or \
                     state["current_day"] >= arrival_day or controlled_ids or converted_ids:
                 raise StateError("invalid dominator tracking state")
         elif status == "ESTABLISHED":
@@ -1043,7 +1043,12 @@ def _schedule_pirate_migration(state: dict[str, Any], passage_day: int) -> None:
 def _pirate_arrival_delay(state: dict[str, Any]) -> int:
     if state["war_apart_state"] == "PLAYER_PIRATE":
         return PIRATE_MIGRATION_RULE["player_pirate_arrival_delay_days"]
-    return PIRATE_MIGRATION_RULE["arrival_delay_days"]
+    minimum, maximum = PIRATE_MIGRATION_RULE["arrival_delay_days_range"]
+    return minimum + (
+        _stable_int(
+            state["maps"]["SECOND_HOME"]["seed"], "pirate-arrival-delay"
+        ) % (maximum - minimum + 1)
+    )
 
 
 def _update_pirate_migration(state: dict[str, Any], target_day: int) -> None:
@@ -1101,9 +1106,21 @@ def _schedule_dominator_invasions(state: dict[str, Any], passage_day: int) -> No
         invasion["status"] = "TRACKING"
         invasion["discovery_day"] = passage_day
         invasion["arrival_day"] = (
-            passage_day +
-            DOMINATOR_INVASION_RULE["series"][series]["arrival_delay_days"]
+            passage_day + _dominator_arrival_delay(state, series)
         )
+
+
+def _dominator_arrival_delay(state: dict[str, Any], series: str) -> int:
+    minimum, maximum = DOMINATOR_INVASION_RULE["series"][series][
+        "arrival_delay_days_range"
+    ]
+    return minimum + (
+        _stable_int(
+            state["maps"]["SECOND_HOME"]["seed"],
+            "dominator-arrival-delay",
+            series,
+        ) % (maximum - minimum + 1)
+    )
 
 
 def _update_dominator_invasions(state: dict[str, Any], target_day: int) -> None:

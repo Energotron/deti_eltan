@@ -157,6 +157,7 @@ def main():
         if len(bounds)!=2 or bounds[0]<0 or bounds[0]>=bounds[1]:
             raise SystemExit(f'invalid Second Home {range_name}')
     migration=second.get('interarm_pirate_migration',{})
+    pirate_delay_range=migration.get('arrival_delay_days_range',[])
     if set(migration.get('eligible_war_apart_states',[]))!={
         'NOT_STARTED','CLAN_ACTIVE','PIRATE_VICTORY','PLAYER_PIRATE'
     } or set(migration.get('destroyed_war_apart_states',[]))!={'COALITION_VICTORY'} or \
@@ -165,7 +166,8 @@ def main():
             migration.get('destroyed_initial_status')!='EXTINCT' or \
             migration.get('unknown_initial_status')!='UNRESOLVED' or \
             migration.get('trigger')!='first_completed_old_arm_to_second_home_transit' or \
-            migration.get('arrival_delay_days',0)<1 or \
+            len(pirate_delay_range)!=2 or pirate_delay_range[0]<1 or \
+            pirate_delay_range[0]>=pirate_delay_range[1] or \
             migration.get('player_pirate_arrival_delay_days')!=0 or \
             migration.get('preferred_archetype')!='ASH_BORDER':
         raise SystemExit('War Apart pirate migration outcome matrix is invalid')
@@ -177,18 +179,19 @@ def main():
         raise SystemExit('local Ash corsairs must remain separate from War Apart pirate branches')
     dominators=second.get('interarm_dominator_invasions',{})
     expected_series={
-        'BLAZER': ('CE_DOMINATOR_BLAZEROIDS',15,'OUTER_ASH_APPROACH',{'ASH_BORDER'}),
-        'KELLER': ('CE_DOMINATOR_KELLEROIDS',7,'BLACK_HOLE_SCAR',{'KLISSAN_SCAR'}),
-        'TERRON': ('CE_DOMINATOR_TERRONOIDS',30,'INNER_FREIGHT_NETWORK',{'MEDIUM','INTELL'}),
+        'BLAZER': ('CE_DOMINATOR_BLAZEROIDS',(12,20),'OUTER_ASH_APPROACH',{'ASH_BORDER'}),
+        'KELLER': ('CE_DOMINATOR_KELLEROIDS',(5,10),'BLACK_HOLE_SCAR',{'KLISSAN_SCAR'}),
+        'TERRON': ('CE_DOMINATOR_TERRONOIDS',(24,40),'INNER_FREIGHT_NETWORK',{'MEDIUM','INTELL'}),
     }
     if dominators.get('trigger')!='first_completed_old_arm_to_second_home_transit' or \
             set(dominators.get('boss_state_values',[]))!={'ACTIVE','ELIMINATED'} or \
             set(dominators.get('series',{}))!=set(expected_series):
         raise SystemExit('Second Home dominator invasion matrix is incomplete')
     invasion_fronts=[]
-    for series,(controller,delay,front,archetypes) in expected_series.items():
+    for series,(controller,delay_range,front,archetypes) in expected_series.items():
         rule=dominators['series'][series]
-        if rule.get('controller')!=controller or rule.get('arrival_delay_days')!=delay or \
+        if rule.get('controller')!=controller or \
+                tuple(rule.get('arrival_delay_days_range',[]))!=delay_range or \
                 rule.get('entry_front')!=front or \
                 set(rule.get('preferred_archetypes',[]))!=archetypes or not rule.get('route'):
             raise SystemExit(f'invalid Second Home {series} invasion rule')

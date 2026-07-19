@@ -262,7 +262,7 @@
     "unknown_initial_status": "UNRESOLVED",
     "trigger": "first_completed_old_arm_to_second_home_transit",
     "route_explanation": "pirate_scouts_copy_twin_home_anchor_resonance_wake",
-    "arrival_delay_days": 30,
+    "arrival_delay_days_range": [25, 40],
     "player_pirate_arrival_delay_days": 0,
     "first_wave_min_outposts": 1,
     "first_wave_max_outposts": 3,
@@ -276,21 +276,21 @@
         "controller": "CE_DOMINATOR_BLAZEROIDS",
         "route": "intercept_gate_calibration_and_defense_telemetry",
         "entry_front": "OUTER_ASH_APPROACH",
-        "arrival_delay_days": 15,
+        "arrival_delay_days_range": [12, 20],
         "preferred_archetypes": ["ASH_BORDER"]
       },
       "KELLER": {
         "controller": "CE_DOMINATOR_KELLEROIDS",
         "route": "trace_new_hyperspace_topology_through_black_holes",
         "entry_front": "BLACK_HOLE_SCAR",
-        "arrival_delay_days": 7,
+        "arrival_delay_days_range": [5, 10],
         "preferred_archetypes": ["KLISSAN_SCAR"]
       },
       "TERRON": {
         "controller": "CE_DOMINATOR_TERRONOIDS",
         "route": "hide_conversion_seed_in_automated_gate_logistics",
         "entry_front": "INNER_FREIGHT_NETWORK",
-        "arrival_delay_days": 30,
+        "arrival_delay_days_range": [24, 40],
         "preferred_archetypes": ["MEDIUM", "INTELL"]
       }
     },

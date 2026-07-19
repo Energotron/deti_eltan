@@ -172,8 +172,9 @@ class SecondMapSpikeTests(unittest.TestCase):
         self.store.save(state)
         state = begin_transit(self.store)
         self.assertEqual(state["pirate_migration"]["status"], "SCOUTING")
-        self.assertEqual(state["pirate_migration"]["arrival_day"], 30)
-        simulate_days(state, 29)
+        arrival_day = state["pirate_migration"]["arrival_day"]
+        self.assertTrue(25 <= arrival_day <= 40)
+        simulate_days(state, arrival_day - 1)
         self.assertEqual(state["pirate_migration"]["status"], "SCOUTING")
         self.assertFalse(any(
             system["controller"] == "CE_FACTION_PIRATES"
@@ -205,6 +206,17 @@ class SecondMapSpikeTests(unittest.TestCase):
         corsair["controller"] = "CE_FACTION_PIRATES"
         with self.assertRaises(StateError):
             validate_state(state)
+
+    def test_pirate_arrival_delay_varies_by_seed_inside_its_window(self):
+        delays = set()
+        for seed in range(2441, 2451):
+            store = StateStore(Path(self.temp.name) / f"pirate-{seed}.json")
+            store.save(create_state(80, 5, seed, old_sector_count=19))
+            state = begin_transit(store)
+            delay = state["pirate_migration"]["arrival_day"]
+            self.assertTrue(25 <= delay <= 40)
+            delays.add(delay)
+        self.assertGreater(len(delays), 1)
 
     def test_destroyed_or_unknown_war_apart_clan_never_migrates(self):
         for outcome, expected_status in (
@@ -249,7 +261,14 @@ class SecondMapSpikeTests(unittest.TestCase):
             {series: branch["status"] for series, branch in state["dominator_invasions"].items()},
             {"BLAZER": "TRACKING", "KELLER": "TRACKING", "TERRON": "TRACKING"},
         )
-        simulate_days(state, 6)
+        arrival_days = {
+            series: branch["arrival_day"]
+            for series, branch in state["dominator_invasions"].items()
+        }
+        self.assertTrue(5 <= arrival_days["KELLER"] <= 10)
+        self.assertTrue(12 <= arrival_days["BLAZER"] <= 20)
+        self.assertTrue(24 <= arrival_days["TERRON"] <= 40)
+        simulate_days(state, arrival_days["KELLER"] - 1)
         self.assertFalse(any(
             system["controller"].startswith("CE_DOMINATOR_")
             for system in state["maps"]["SECOND_HOME"]["systems"]
@@ -257,13 +276,13 @@ class SecondMapSpikeTests(unittest.TestCase):
         simulate_days(state, 1)
         self.assertEqual(state["dominator_invasions"]["KELLER"]["status"], "ESTABLISHED")
         self.assertEqual(state["dominator_invasions"]["BLAZER"]["status"], "TRACKING")
-        simulate_days(state, 8)
+        simulate_days(state, arrival_days["BLAZER"] - state["current_day"])
         self.assertEqual(state["dominator_invasions"]["BLAZER"]["status"], "ESTABLISHED")
         self.assertEqual(state["dominator_invasions"]["TERRON"]["status"], "TRACKING")
         self.store.save(state)
         state = self.store.load()
         validate_state(state)
-        simulate_days(state, 15)
+        simulate_days(state, arrival_days["TERRON"] - state["current_day"])
         self.assertTrue(all(
             branch["status"] == "ESTABLISHED"
             for branch in state["dominator_invasions"].values()
@@ -287,8 +306,8 @@ class SecondMapSpikeTests(unittest.TestCase):
         initial = begin_transit(self.store)
         one_jump = json.loads(json.dumps(initial))
         daily = json.loads(json.dumps(initial))
-        simulate_days(one_jump, 30)
-        for _ in range(30):
+        simulate_days(one_jump, 50)
+        for _ in range(50):
             simulate_days(daily, 1)
         self.assertEqual(one_jump["pirate_migration"], daily["pirate_migration"])
         self.assertEqual(one_jump["dominator_invasions"], daily["dominator_invasions"])
@@ -301,13 +320,18 @@ class SecondMapSpikeTests(unittest.TestCase):
             [event for event in daily["history"] if "ARRIVE" in event["type"]],
         )
 
-    def test_dominator_footholds_are_randomized_by_seed_and_never_overlap(self):
+    def test_dominator_footholds_and_delays_are_randomized_by_seed(self):
         locations_by_seed = []
+        delays_by_seed = []
         for seed in (2441, 2442):
             state = create_state(80, 5, seed, old_sector_count=19)
             self.store.save(state)
             state = begin_transit(self.store)
-            simulate_days(state, 30)
+            delays_by_seed.append({
+                series: branch["arrival_day"]
+                for series, branch in state["dominator_invasions"].items()
+            })
+            simulate_days(state, 50)
             locations = {
                 series: tuple(branch["converted_system_ids"])
                 for series, branch in state["dominator_invasions"].items()
@@ -316,6 +340,7 @@ class SecondMapSpikeTests(unittest.TestCase):
             self.assertEqual(len(flattened), len(set(flattened)))
             locations_by_seed.append(locations)
         self.assertNotEqual(locations_by_seed[0], locations_by_seed[1])
+        self.assertNotEqual(delays_by_seed[0], delays_by_seed[1])
 
     def test_each_eliminated_boss_forbids_only_its_own_series(self):
         controllers_by_series = {
