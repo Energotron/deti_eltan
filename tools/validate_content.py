@@ -135,7 +135,7 @@ def main():
     controllers=set(population_rule.get('controllers',[]))
     expected_controllers={
         'CE_FACTION_STRONG','CE_FACTION_AGILL','CE_FACTION_MEDIUM','CE_FACTION_INTELL',
-        'CE_FACTION_PIRATES','CE_HOSTILE_KLISSAN','CE_UNCLAIMED'
+        'CE_FACTION_PIRATES','CE_LOCAL_ASH_CORSAIRS','CE_HOSTILE_KLISSAN','CE_UNCLAIMED'
     }
     if controllers!=expected_controllers:
         raise SystemExit(f'Second Home controller set mismatch: {controllers ^ expected_controllers}')
@@ -155,6 +155,18 @@ def main():
         bounds=population_rule.get(range_name,[])
         if len(bounds)!=2 or bounds[0]<0 or bounds[0]>=bounds[1]:
             raise SystemExit(f'invalid Second Home {range_name}')
+    migration=second.get('interarm_pirate_migration',{})
+    if migration.get('initial_status')!='LOCKED' or \
+            migration.get('trigger')!='first_completed_old_arm_to_second_home_transit' or \
+            migration.get('arrival_delay_days',0)<1 or \
+            migration.get('preferred_archetype')!='ASH_BORDER':
+        raise SystemExit('War Apart pirate migration must begin only after the first interarm passage')
+    if migration.get('route_explanation')!='pirate_scouts_copy_twin_home_anchor_resonance_wake':
+        raise SystemExit('War Apart pirate arrival route is not justified')
+    pirate_faction=next(faction for faction in factions if faction['id']=='CE_FACTION_PIRATES')
+    if 'Пепельные корсары' in pirate_faction.get('subfactions',[]) or \
+            'Пепельные каперы' not in pirate_faction.get('subfactions',[]):
+        raise SystemExit('local Ash corsairs must remain separate from War Apart pirate branches')
 
     pirate_ids={x['id'] for x in pirate['states']}
     expected={'UNKNOWN','NOT_STARTED','CLAN_ACTIVE','COALITION_VICTORY','PIRATE_VICTORY','PLAYER_PIRATE'}

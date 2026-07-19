@@ -18,7 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 ARMS = ("OLD_ARM", "SECOND_HOME")
 MAP_SCHEMA = json.loads(
     (Path(__file__).resolve().parents[1] / "data" / "second_home_map.schema.json").read_text(
@@ -37,6 +37,7 @@ STARTING_SECTOR_COUNT = MAP_SCHEMA["story_progression"]["starting_open_sector_co
 MIN_LATE_STORY_DEPTH = MAP_SCHEMA["story_progression"]["minimum_late_story_map_purchases"]
 DISCOVERY_RULE = MAP_SCHEMA["sector_discovery_rule"]
 POPULATION_RULE = MAP_SCHEMA["system_population_rule"]
+PIRATE_MIGRATION_RULE = MAP_SCHEMA["interarm_pirate_migration"]
 CORE_FACTION_BY_ARCHETYPE = {
     "STRONG": "CE_FACTION_STRONG",
     "AGILL": "CE_FACTION_AGILL",
@@ -120,6 +121,13 @@ def create_state(
             "CE_Item_ResonanceCell": cells,
         },
         "credits": initial_credits,
+        "pirate_migration": {
+            "status": PIRATE_MIGRATION_RULE["initial_status"],
+            "first_passage_day": None,
+            "arrival_day": None,
+            "arrivals": 0,
+            "converted_system_ids": [],
+        },
         "transit": None,
         "maps": {
             "OLD_ARM": _new_map(seed, old_star_count, old_sector_count, (), (), ()),
@@ -432,11 +440,11 @@ def _apply_system_profiles(seed: int, systems: list[dict[str, Any]]) -> None:
             controller = CORE_FACTION_BY_ARCHETYPE[archetype]
             if not system["government_map_office"] and roll >= 85:
                 controller = (
-                    "CE_FACTION_PIRATES" if roll < 95 else "CE_UNCLAIMED"
+                    "CE_LOCAL_ASH_CORSAIRS" if roll < 95 else "CE_UNCLAIMED"
                 )
         elif archetype == "ASH_BORDER":
             if system["government_map_office"] or roll < 50:
-                controller = "CE_FACTION_PIRATES"
+                controller = "CE_LOCAL_ASH_CORSAIRS"
             elif roll < 80:
                 controller = "CE_UNCLAIMED"
             else:
@@ -716,6 +724,38 @@ def validate_state(state: dict[str, Any]) -> None:
     if state.get("credits", -1) < 0:
         raise StateError("credit balance cannot be negative")
 
+    migration = state.get("pirate_migration", {})
+    migration_status = migration.get("status")
+    if migration_status not in {"LOCKED", "SCOUTING", "ESTABLISHED"}:
+        raise StateError("invalid interarm pirate migration status")
+    pirate_system_ids = {
+        system["id"] for system in systems
+        if system["controller"] == "CE_FACTION_PIRATES"
+    }
+    converted_ids = migration.get("converted_system_ids", [])
+    if len(converted_ids) != len(set(converted_ids)):
+        raise StateError("interarm pirate migration duplicated a system")
+    if migration_status == "LOCKED":
+        if pirate_system_ids or migration.get("first_passage_day") is not None or \
+                migration.get("arrival_day") is not None or \
+                migration.get("arrivals") != 0 or converted_ids:
+            raise StateError("War Apart pirates exist before the interarm route opens")
+    elif migration_status == "SCOUTING":
+        first_day = migration.get("first_passage_day")
+        arrival_day = migration.get("arrival_day")
+        if not isinstance(first_day, int) or \
+                arrival_day != first_day + PIRATE_MIGRATION_RULE["arrival_delay_days"] or \
+                state["current_day"] >= arrival_day or pirate_system_ids or \
+                migration.get("arrivals") != 0 or converted_ids:
+            raise StateError("invalid War Apart pirate scouting state")
+    else:
+        if state["current_day"] < migration.get("arrival_day", state["current_day"] + 1) or \
+                migration.get("arrivals") != len(converted_ids) or \
+                not PIRATE_MIGRATION_RULE["first_wave_min_outposts"] <= len(converted_ids) <= \
+                PIRATE_MIGRATION_RULE["first_wave_max_outposts"] or \
+                pirate_system_ids != set(converted_ids):
+            raise StateError("invalid established War Apart pirate foothold")
+
     transit = state.get("transit")
     if transit is not None:
         if transit.get("phase") not in TRANSIT_PHASES:
@@ -837,6 +877,7 @@ def simulate_days(state: dict[str, Any], days: int) -> None:
     inactive = _other_arm(active)
     state["maps"][active]["last_sim_day"] = target_day
     _simulate_inactive(state["maps"][inactive], target_day)
+    _update_pirate_migration(state, target_day)
     state["current_day"] = target_day
     state["revision"] += 1
     validate_state(state)
@@ -886,6 +927,64 @@ def _simulate_inactive(map_state: dict[str, Any], target_day: int) -> None:
         map_state["event_serial"] += 1
         day = next_day
     map_state["last_sim_day"] = target_day
+
+
+def _schedule_pirate_migration(state: dict[str, Any], passage_day: int) -> None:
+    migration = state["pirate_migration"]
+    if migration["status"] != "LOCKED":
+        return
+    migration["status"] = "SCOUTING"
+    migration["first_passage_day"] = passage_day
+    migration["arrival_day"] = (
+        passage_day + PIRATE_MIGRATION_RULE["arrival_delay_days"]
+    )
+
+
+def _update_pirate_migration(state: dict[str, Any], target_day: int) -> None:
+    migration = state["pirate_migration"]
+    if migration["status"] != "SCOUTING" or target_day < migration["arrival_day"]:
+        return
+    systems = state["maps"]["SECOND_HOME"]["systems"]
+    preferred = PIRATE_MIGRATION_RULE["preferred_archetype"]
+    candidates = sorted(
+        (
+            system for system in systems
+            if system["archetype"] == preferred and
+            system["controller"] in {"CE_LOCAL_ASH_CORSAIRS", "CE_UNCLAIMED"}
+        ),
+        key=lambda system: _stable_int(
+            state["maps"]["SECOND_HOME"]["seed"],
+            "war-apart-pirate-arrival",
+            system["id"],
+        ),
+    )
+    wave_span = (
+        PIRATE_MIGRATION_RULE["first_wave_max_outposts"] -
+        PIRATE_MIGRATION_RULE["first_wave_min_outposts"] + 1
+    )
+    wave_size = PIRATE_MIGRATION_RULE["first_wave_min_outposts"] + (
+        _stable_int(
+            state["maps"]["SECOND_HOME"]["seed"], "pirate-wave-size"
+        ) % wave_span
+    )
+    selected = candidates[:wave_size]
+    if len(selected) < PIRATE_MIGRATION_RULE["first_wave_min_outposts"]:
+        raise StateError("no valid Ash Border foothold for War Apart pirates")
+    converted_ids = []
+    for system in selected:
+        system["controller"] = "CE_FACTION_PIRATES"
+        converted_ids.append(system["id"])
+    migration["status"] = "ESTABLISHED"
+    migration["arrivals"] = len(converted_ids)
+    migration["converted_system_ids"] = converted_ids
+    state["history"].append(
+        {
+            "type": "CE_WAR_APART_PIRATES_ARRIVE",
+            "day": migration["arrival_day"],
+            "system_ids": converted_ids,
+            "route": PIRATE_MIGRATION_RULE["route_explanation"],
+        }
+    )
 
 
 def begin_transit(store: StateStore, crash_after: str | None = None) -> dict[str, Any]:
@@ -945,6 +1044,8 @@ def recover_transit(store: StateStore, crash_after: str | None = None) -> dict[s
                 "to_arm": transit["to_arm"],
             }
         )
+        if transit["from_arm"] == "OLD_ARM" and transit["to_arm"] == "SECOND_HOME":
+            _schedule_pirate_migration(state, transit["day"])
         state["transit"] = None
         _commit(store, state)
     return state

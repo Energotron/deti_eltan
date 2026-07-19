@@ -227,6 +227,7 @@
       "CE_FACTION_MEDIUM",
       "CE_FACTION_INTELL",
       "CE_FACTION_PIRATES",
+      "CE_LOCAL_ASH_CORSAIRS",
       "CE_HOSTILE_KLISSAN",
       "CE_UNCLAIMED"
     ],
@@ -243,6 +244,15 @@
     "economy_range": [100, 2000],
     "security_range": [0, 1000],
     "population_thousands_range": [0, 9000000]
+  },
+  "interarm_pirate_migration": {
+    "initial_status": "LOCKED",
+    "trigger": "first_completed_old_arm_to_second_home_transit",
+    "route_explanation": "pirate_scouts_copy_twin_home_anchor_resonance_wake",
+    "arrival_delay_days": 30,
+    "first_wave_min_outposts": 1,
+    "first_wave_max_outposts": 3,
+    "preferred_archetype": "ASH_BORDER"
   },
   "inactive_map_simulation": {
     "light_tick_days": 1,

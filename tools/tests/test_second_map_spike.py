@@ -35,7 +35,10 @@ class SecondMapSpikeTests(unittest.TestCase):
         state = run_demo(self.store, old_stars=80, cells=5, seed=2441)
         self.assertEqual(state["current_arm"], "SECOND_HOME")
         self.assertEqual(state["cargo"]["CE_Item_ResonanceCell"], 2)
-        self.assertEqual(len(state["history"]), 3)
+        self.assertEqual(
+            sum(event["type"] == "CE_TRANSIT_COMPLETE" for event in state["history"]),
+            3,
+        )
         self.assertEqual(state["maps"]["OLD_ARM"]["star_count"], 80)
         self.assertEqual(state["maps"]["SECOND_HOME"]["star_count"], 80)
         self.assertEqual(state["maps"]["OLD_ARM"]["sector_count"], 19)
@@ -129,9 +132,10 @@ class SecondMapSpikeTests(unittest.TestCase):
             "CE_FACTION_AGILL",
             "CE_FACTION_MEDIUM",
             "CE_FACTION_INTELL",
-            "CE_FACTION_PIRATES",
+            "CE_LOCAL_ASH_CORSAIRS",
             "CE_HOSTILE_KLISSAN",
         } <= controllers)
+        self.assertNotIn("CE_FACTION_PIRATES", controllers)
         self.assertTrue(any(system["condition"] == "DEAD" for system in systems))
         self.assertTrue(any(system["condition"] == "INFESTED" for system in systems))
         self.assertTrue(all(100 <= system["economy_index"] <= 2000 for system in systems))
@@ -154,6 +158,50 @@ class SecondMapSpikeTests(unittest.TestCase):
             validate_state(state)
         state = create_state(80, 5, 2441, old_sector_count=19)
         state["maps"]["SECOND_HOME"]["systems"][0]["controller"] = "CE_FACTION_UNKNOWN"
+        with self.assertRaises(StateError):
+            validate_state(state)
+
+    def test_war_apart_pirates_arrive_only_after_player_opens_the_route(self):
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        self.assertEqual(state["pirate_migration"]["status"], "LOCKED")
+        self.assertFalse(any(
+            system["controller"] == "CE_FACTION_PIRATES"
+            for system in state["maps"]["SECOND_HOME"]["systems"]
+        ))
+        self.store.save(state)
+        state = begin_transit(self.store)
+        self.assertEqual(state["pirate_migration"]["status"], "SCOUTING")
+        self.assertEqual(state["pirate_migration"]["arrival_day"], 30)
+        simulate_days(state, 29)
+        self.assertEqual(state["pirate_migration"]["status"], "SCOUTING")
+        self.assertFalse(any(
+            system["controller"] == "CE_FACTION_PIRATES"
+            for system in state["maps"]["SECOND_HOME"]["systems"]
+        ))
+        self.store.save(state)
+        state = self.store.load()
+        validate_state(state)
+        simulate_days(state, 1)
+        self.assertEqual(state["pirate_migration"]["status"], "ESTABLISHED")
+        pirate_systems = {
+            system["id"] for system in state["maps"]["SECOND_HOME"]["systems"]
+            if system["controller"] == "CE_FACTION_PIRATES"
+        }
+        self.assertEqual(
+            pirate_systems,
+            set(state["pirate_migration"]["converted_system_ids"]),
+        )
+        self.assertTrue(1 <= len(pirate_systems) <= 3)
+        self.store.save(state)
+        validate_state(self.store.load())
+
+    def test_war_apart_pirates_cannot_exist_before_the_first_passage(self):
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        corsair = next(
+            system for system in state["maps"]["SECOND_HOME"]["systems"]
+            if system["controller"] == "CE_LOCAL_ASH_CORSAIRS"
+        )
+        corsair["controller"] = "CE_FACTION_PIRATES"
         with self.assertRaises(StateError):
             validate_state(state)
 
