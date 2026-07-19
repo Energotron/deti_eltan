@@ -16,6 +16,7 @@ class GalaxyLayoutAnalysisTests(unittest.TestCase):
             "reported_count": 1,
             "candidates": [{
                 "block_fnv1a32": [1, 2, 3, 4],
+                "pointer_normalized_fnv1a32": [11, 12, 13, 14],
                 "zero_mask": "0D58404000000400",
                 "readable_pointer_mask": "00070001F000F801",
             }],
@@ -41,6 +42,7 @@ class GalaxyLayoutAnalysisTests(unittest.TestCase):
             "sequence": sequence,
             "sample_bytes": 256,
             "block_fnv1a32": [11, 22, 33, process_id],
+            "pointer_normalized_fnv1a32": [11, 22, 33, process_id],
             "zero_mask": zero_mask,
             "readable_pointer_mask": "0000000000000002",
             "raw_values_included": False,
@@ -78,9 +80,11 @@ class GalaxyLayoutAnalysisTests(unittest.TestCase):
             after = self.make_record(10, observation_tag=101, sequence=2)
             after["phase"] = "after"
             after["block_fnv1a32"] = [41, 42, 43, 44]
+            after["pointer_normalized_fnv1a32"] = [41, 42, 43, 44]
             reloaded = self.make_record(20, observation_tag=101, sequence=1)
             reloaded["phase"] = "reload"
             reloaded["block_fnv1a32"] = [51, 52, 43, 54]
+            reloaded["pointer_normalized_fnv1a32"] = [51, 52, 43, 54]
             path.write_text(
                 "\n".join(json.dumps(record) for record in (before, after, reloaded)),
                 encoding="utf-8",

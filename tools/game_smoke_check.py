@@ -13,12 +13,13 @@ import subprocess
 import sys
 import time
 
-EXPECTED_ABI = 5
+EXPECTED_ABI = 6
 EXPECTED_MARKER = 1128616787
 CAP_SMOKE_MARKER = 1 << 4
 CAP_READONLY_FINGERPRINT = 1 << 5
 CAP_READONLY_LAYOUT_SAMPLE = 1 << 6
 CAP_READONLY_LAYOUT_LATEST = 1 << 7
+CAP_POINTER_NORMALIZED_HASH = 1 << 8
 ERROR_WORDS = (
     "access violation", "exception", "fatal", "script error", "cannot load",
     "loadlibrary failed", "ce_map", "cesecondmapadapter",
@@ -142,6 +143,7 @@ def report(state_file: Path, marker_file: Path, fingerprint_file: Path, layout_f
                 and marker.get("capabilities", 0) & CAP_READONLY_FINGERPRINT
                 and marker.get("capabilities", 0) & CAP_READONLY_LAYOUT_SAMPLE
                 and marker.get("capabilities", 0) & CAP_READONLY_LAYOUT_LATEST
+                and marker.get("capabilities", 0) & CAP_POINTER_NORMALIZED_HASH
             )
         except (OSError, ValueError):
             marker_ok = False
@@ -176,6 +178,9 @@ def report(state_file: Path, marker_file: Path, fingerprint_file: Path, layout_f
                     and isinstance(layout.get("block_fnv1a32"), list)
                     and len(layout["block_fnv1a32"]) == 4
                     and all(isinstance(value, int) and value != 0 for value in layout["block_fnv1a32"])
+                    and isinstance(layout.get("pointer_normalized_fnv1a32"), list)
+                    and len(layout["pointer_normalized_fnv1a32"]) == 4
+                    and all(isinstance(value, int) and value != 0 for value in layout["pointer_normalized_fnv1a32"])
                     and mask_value(layout, "zero_mask") >= 0
                     and mask_value(layout, "readable_pointer_mask") >= 0
                     and layout.get("raw_values_included") is False
@@ -204,12 +209,16 @@ def analyze_layouts(layout_file: Path, minimum: int) -> int:
     for record in records:
         try:
             hashes = record.get("block_fnv1a32")
+            normalized = record.get("pointer_normalized_fnv1a32")
             if (
                 record.get("abi") == EXPECTED_ABI
                 and record.get("sample_bytes") == 256
                 and isinstance(hashes, list)
                 and len(hashes) == 4
                 and all(isinstance(value, int) for value in hashes)
+                and isinstance(normalized, list)
+                and len(normalized) == 4
+                and all(isinstance(value, int) for value in normalized)
                 and isinstance(record.get("process_id"), int)
                 and record["process_id"] > 0
                 and record.get("raw_values_included") is False
@@ -271,6 +280,8 @@ def capture_layout(
             and isinstance(record.get("process_id"), int)
             and isinstance(record.get("observation_tag"), int)
             and isinstance(record.get("sequence"), int)
+            and isinstance(record.get("pointer_normalized_fnv1a32"), list)
+            and len(record["pointer_normalized_fnv1a32"]) == 4
             and record.get("raw_values_included") is False
             and record.get("read_only") is True
         )
@@ -324,10 +335,14 @@ def attach_timeline_record(
         raise ValueError("attach scan did not return exactly one read-only candidate")
     candidate = candidates[0]
     hashes = candidate.get("block_fnv1a32")
+    normalized = candidate.get("pointer_normalized_fnv1a32")
     if (
         not isinstance(hashes, list)
         or len(hashes) != 4
         or not all(isinstance(value, int) and value > 0 for value in hashes)
+        or not isinstance(normalized, list)
+        or len(normalized) != 4
+        or not all(isinstance(value, int) and value > 0 for value in normalized)
     ):
         raise ValueError("invalid attach candidate hashes")
     mask_value(candidate, "zero_mask")
@@ -340,6 +355,7 @@ def attach_timeline_record(
         "sequence": 0,
         "sample_bytes": 256,
         "block_fnv1a32": hashes,
+        "pointer_normalized_fnv1a32": normalized,
         "zero_mask": candidate["zero_mask"],
         "readable_pointer_mask": candidate["readable_pointer_mask"],
         "raw_values_included": False,
@@ -393,6 +409,7 @@ def analyze_timeline(layout_file: Path) -> int:
     for record in layout_records(layout_file):
         try:
             hashes = record.get("block_fnv1a32")
+            normalized = record.get("pointer_normalized_fnv1a32")
             if (
                 record.get("abi") == EXPECTED_ABI
                 and record.get("sample_bytes") == 256
@@ -405,6 +422,9 @@ def analyze_timeline(layout_file: Path) -> int:
                 and isinstance(hashes, list)
                 and len(hashes) == 4
                 and all(isinstance(value, int) for value in hashes)
+                and isinstance(normalized, list)
+                and len(normalized) == 4
+                and all(isinstance(value, int) for value in normalized)
                 and record.get("raw_values_included") is False
                 and record.get("read_only") is True
             ):
@@ -444,11 +464,17 @@ def analyze_timeline(layout_file: Path) -> int:
         index for index in range(4)
         if after["block_fnv1a32"][index] == reload_record["block_fnv1a32"][index]
     ]
+    normalized_equal_blocks = [
+        index for index in range(4)
+        if after["pointer_normalized_fnv1a32"][index] ==
+        reload_record["pointer_normalized_fnv1a32"][index]
+    ]
     print(
         f"Reload comparison: turn {after['observation_tag']} in PID "
         f"{after['process_id']} vs PID {reload_record['process_id']}"
     )
     print(f"Blocks identical across save/load: {equal_blocks}")
+    print(f"Pointer-normalized blocks identical across save/load: {normalized_equal_blocks}")
     print(
         "Zero mask preserved across save/load: "
         f"{mask_value(after, 'zero_mask') == mask_value(reload_record, 'zero_mask')}"
@@ -457,8 +483,8 @@ def analyze_timeline(layout_file: Path) -> int:
         "Pointer-class mask preserved across save/load: "
         f"{mask_value(after, 'readable_pointer_mask') == mask_value(reload_record, 'readable_pointer_mask')}"
     )
-    if not equal_blocks:
-        print("FAIL: no 64-byte block remained identical across save/load")
+    if not normalized_equal_blocks:
+        print("FAIL: no pointer-normalized 64-byte block remained identical across save/load")
         return 3
     print("PASS: turn advance and cross-process save/load samples are comparable")
     return 0
@@ -491,7 +517,7 @@ def main() -> int:
     p_attach = sub.add_parser("attach-capture")
     p_attach.add_argument("--scanner", type=Path, required=True)
     p_attach.add_argument("--process-id", type=int, required=True)
-    p_attach.add_argument("--phase", choices=("reload",), default="reload")
+    p_attach.add_argument("--phase", choices=("before", "after", "reload"), default="reload")
     p_attach.add_argument("--expected-turn", type=int, required=True)
     p_attach.add_argument("--zero-mask", default="0D58404000000400")
     p_attach.add_argument("--pointer-mask", default="00070001F000F801")

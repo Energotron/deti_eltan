@@ -10,6 +10,7 @@ static volatile LONG g_ce_fingerprint_hash = 0;
 static volatile LONG g_ce_fingerprint_bytes = 0;
 static volatile LONG g_ce_layout_written = 0;
 static volatile LONG g_ce_layout_block_hash[4] = {0, 0, 0, 0};
+static volatile LONG g_ce_layout_normalized_block_hash[4] = {0, 0, 0, 0};
 static volatile LONG g_ce_layout_zero_mask_low = 0;
 static volatile LONG g_ce_layout_zero_mask_high = 0;
 static volatile LONG g_ce_layout_pointer_mask_low = 0;
@@ -30,7 +31,8 @@ uint32_t CE_CALL CEAdapterCapabilities(void) {
     return CE_CAP_BIND_GALAXY_POINTER | CE_CAP_SMOKE_MARKER |
         CE_CAP_READONLY_GALAXY_FINGERPRINT |
         CE_CAP_READONLY_GALAXY_LAYOUT_SAMPLE |
-        CE_CAP_READONLY_GALAXY_LAYOUT_LATEST;
+        CE_CAP_READONLY_GALAXY_LAYOUT_LATEST |
+        CE_CAP_POINTER_NORMALIZED_LAYOUT_HASH;
 }
 
 uint32_t CE_CALL CEAdapterBindGalaxy(uint32_t galaxy_ptr) {
@@ -224,12 +226,14 @@ static int ce_is_readable_pointer(uint32_t candidate) {
 
 uint32_t CE_CALL CEAdapterSampleGalaxyLayout(uint32_t galaxy_ptr, uint32_t sample_tag) {
     unsigned char sample[256];
+    unsigned char normalized[256];
     MEMORY_BASIC_INFORMATION memory;
     SIZE_T bytes_read = 0;
     uintptr_t address = (uintptr_t)galaxy_ptr;
     uintptr_t region_start;
     uintptr_t region_end;
     uint32_t block_hash[4];
+    uint32_t normalized_hash[4];
     uint32_t zero_low = 0;
     uint32_t zero_high = 0;
     uint32_t pointer_low = 0;
@@ -238,7 +242,7 @@ uint32_t CE_CALL CEAdapterSampleGalaxyLayout(uint32_t galaxy_ptr, uint32_t sampl
     char temp_path[MAX_PATH];
     char marker_dir[MAX_PATH];
     char marker_path[MAX_PATH];
-    char payload[768];
+    char payload[1024];
     int payload_size;
     HANDLE file;
     DWORD written = 0;
@@ -261,10 +265,7 @@ uint32_t CE_CALL CEAdapterSampleGalaxyLayout(uint32_t galaxy_ptr, uint32_t sampl
         InterlockedExchange(&g_ce_layout_written, 0);
         return 0;
     }
-    for (index = 0; index < 4; ++index) {
-        block_hash[index] = ce_fnv1a32(sample + index * 64u, 64u);
-        InterlockedExchange(&g_ce_layout_block_hash[index], (LONG)block_hash[index]);
-    }
+    memcpy(normalized, sample, sizeof(normalized));
     for (index = 0; index < 64; ++index) {
         uint32_t word;
         uint32_t bit = 1u << (index & 31u);
@@ -273,7 +274,16 @@ uint32_t CE_CALL CEAdapterSampleGalaxyLayout(uint32_t galaxy_ptr, uint32_t sampl
             if (index < 32) zero_low |= bit; else zero_high |= bit;
         } else if (ce_is_readable_pointer(word)) {
             if (index < 32) pointer_low |= bit; else pointer_high |= bit;
+            memset(normalized + index * sizeof(word), 0, sizeof(word));
         }
+    }
+    for (index = 0; index < 4; ++index) {
+        block_hash[index] = ce_fnv1a32(sample + index * 64u, 64u);
+        normalized_hash[index] = ce_fnv1a32(normalized + index * 64u, 64u);
+        InterlockedExchange(&g_ce_layout_block_hash[index], (LONG)block_hash[index]);
+        InterlockedExchange(
+            &g_ce_layout_normalized_block_hash[index], (LONG)normalized_hash[index]
+        );
     }
     InterlockedExchange(&g_ce_layout_zero_mask_low, (LONG)zero_low);
     InterlockedExchange(&g_ce_layout_zero_mask_high, (LONG)zero_high);
@@ -300,6 +310,7 @@ uint32_t CE_CALL CEAdapterSampleGalaxyLayout(uint32_t galaxy_ptr, uint32_t sampl
         "{\"abi\":%u,\"process_id\":%lu,\"sample_tag\":%u,"
         "\"observation_tag\":%u,\"sequence\":%u,\"sample_bytes\":256,"
         "\"block_fnv1a32\":[%u,%u,%u,%u],\"zero_mask\":\"%08lX%08lX\","
+        "\"pointer_normalized_fnv1a32\":[%u,%u,%u,%u],"
         "\"readable_pointer_mask\":\"%08lX%08lX\",\"raw_values_included\":false,"
         "\"read_only\":true}\r\n",
         CEAdapterAbiVersion(), (unsigned long)GetCurrentProcessId(), sample_tag,
@@ -307,6 +318,7 @@ uint32_t CE_CALL CEAdapterSampleGalaxyLayout(uint32_t galaxy_ptr, uint32_t sampl
         (uint32_t)InterlockedCompareExchange(&g_ce_layout_observation_sequence, 0, 0),
         block_hash[0], block_hash[1], block_hash[2], block_hash[3],
         (unsigned long)zero_high, (unsigned long)zero_low,
+        normalized_hash[0], normalized_hash[1], normalized_hash[2], normalized_hash[3],
         (unsigned long)pointer_high, (unsigned long)pointer_low
     );
     if (payload_size <= 0 || (size_t)payload_size >= sizeof(payload)) {
@@ -375,6 +387,13 @@ uint32_t CE_CALL CEAdapterGetLayoutObservationCount(void) {
 uint32_t CE_CALL CEAdapterGetLayoutBlockHash(uint32_t block_index) {
     if (block_index >= 4) return 0;
     return (uint32_t)InterlockedCompareExchange(&g_ce_layout_block_hash[block_index], 0, 0);
+}
+
+uint32_t CE_CALL CEAdapterGetLayoutNormalizedBlockHash(uint32_t block_index) {
+    if (block_index >= 4) return 0;
+    return (uint32_t)InterlockedCompareExchange(
+        &g_ce_layout_normalized_block_hash[block_index], 0, 0
+    );
 }
 
 uint32_t CE_CALL CEAdapterGetLayoutZeroMaskLow(void) {

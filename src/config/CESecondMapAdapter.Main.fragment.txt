@@ -17,6 +17,7 @@ Data {
             CEAdapterObserveGalaxyLayout=dword,CEAdapterObserveGalaxyLayout,dword,dword,dword
             CEAdapterGetLayoutObservationCount=dword,CEAdapterGetLayoutObservationCount
             CEAdapterGetLayoutBlockHash=dword,CEAdapterGetLayoutBlockHash,dword
+            CEAdapterGetLayoutNormalizedBlockHash=dword,CEAdapterGetLayoutNormalizedBlockHash,dword
             CEAdapterGetLayoutZeroMaskLow=dword,CEAdapterGetLayoutZeroMaskLow
             CEAdapterGetLayoutZeroMaskHigh=dword,CEAdapterGetLayoutZeroMaskHigh
             CEAdapterGetLayoutReadablePointerMaskLow=dword,CEAdapterGetLayoutReadablePointerMaskLow

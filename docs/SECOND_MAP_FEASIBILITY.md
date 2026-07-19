@@ -46,7 +46,7 @@ DLL; для него собран минимальный безопасный а
 транзакцию после сбоя. Это исполняемая модель контракта, а не финальная нативная
 карта.
 
-## CE Second Map Adapter ABI 5
+## CE Second Map Adapter ABI 6
 
 Собран PE32/i386 `CESecondMapAdapter.dll`. Отдельный x86 host и реальная новая
 игра подтвердили загрузку ABI 3, `cdecl`, передачу ненулевого `GalaxyPtr()` и
@@ -71,6 +71,10 @@ ABI 5 подтвердил rolling read-only наблюдение `CurTurn 300 -
 read-only discovery без RScript callback. Контракт описан в
 `GALAXY_READONLY_ATTACH.md`.
 
+ABI 6 добавляет pointer-normalized hashes в in-process adapter и внешний attach
+scanner. Offline build/host gate пройден; реальный save/load gate ожидает новый
+цикл с ABI 6.
+
 ## Решение для планирования
 
 1. CE-P00 и War Apart snapshot можно делать обычным RScript-модом.
@@ -80,4 +84,4 @@ read-only discovery без RScript callback. Контракт описан в
    `20648864`, не перенося предположения между версиями.
 5. Native switch и расширение save реализовывать отдельными capability gates.
 
-Статус: **OFFLINE SPIKE PASSED / ABI 4 THREE-PROCESS SAMPLE PASSED / ABI 5 TURN SAMPLE PASSED / SAME-TURN READ-ONLY ATTACH PASSED / NATIVE SWITCH BLOCKED**.
+Статус: **OFFLINE SPIKE PASSED / ABI 5 TURN SAMPLE PASSED / SAME-TURN READ-ONLY ATTACH PASSED / ABI 6 NORMALIZED OFFLINE PASSED / ABI 6 IN-GAME PENDING / NATIVE SWITCH BLOCKED**.

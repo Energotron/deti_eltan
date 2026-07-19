@@ -37,6 +37,11 @@
   отдельным источником и без подделки sequence RScript.
 - Реальный timeline подтвердил одинаковые zero/pointer masks после reload, но
   отклонил raw block hashes; следующий gate требует pointer normalization.
+- Проверен cnc-ddraw 7.1: он поддерживает оригинальный Space Rangers, но не
+  загрузился в Steam HD/D3D9 build и был полностью удалён. Причина ошибки захвата
+  — недоступный `IsBorderRequired` на Windows 10 build 19045, а не renderer игры.
+- ABI 6 добавляет одинаковые pointer-normalized hashes в DLL и внешний scanner;
+  readable pointer-class dword обнуляются только в локальной 256-байтной копии.
 
 ## 0.0.5 — Local technical audit
 

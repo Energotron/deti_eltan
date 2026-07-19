@@ -18,6 +18,7 @@
 
 typedef struct ce_candidate {
     uint32_t hashes[4];
+    uint32_t normalized_hashes[4];
     uint64_t zero_mask;
     uint64_t pointer_mask;
 } ce_candidate;
@@ -107,14 +108,25 @@ static int ce_match_sample(
     uint64_t zeros = ce_zero_mask(sample);
     uint64_t pointers;
     unsigned block;
+    unsigned word_index;
+    unsigned char normalized[CE_SAMPLE_BYTES];
     if ((zeros & expected_zero) != expected_zero) return 0;
     if (exact && zeros != expected_zero) return 0;
     if (!ce_required_pointers_match(process, sample, expected_pointer)) return 0;
     pointers = ce_pointer_mask(process, sample);
     if (exact && pointers != expected_pointer) return 0;
     if ((pointers & expected_pointer) != expected_pointer) return 0;
+    memcpy(normalized, sample, sizeof(normalized));
+    for (word_index = 0; word_index < CE_DWORD_COUNT; ++word_index) {
+        if ((pointers & (UINT64_C(1) << word_index)) != 0) {
+            memset(normalized + word_index * 4u, 0, 4u);
+        }
+    }
     for (block = 0; block < 4; ++block) {
         candidate->hashes[block] = ce_fnv1a32(sample + block * 64u, 64u);
+        candidate->normalized_hashes[block] = ce_fnv1a32(
+            normalized + block * 64u, 64u
+        );
     }
     candidate->zero_mask = zeros;
     candidate->pointer_mask = pointers;
@@ -244,10 +256,13 @@ static void ce_print_result(
         if (index != 0) putchar(',');
         printf(
             "{\"block_fnv1a32\":[%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 "],"
+            "\"pointer_normalized_fnv1a32\":[%" PRIu32 ",%" PRIu32 ",%" PRIu32 ",%" PRIu32 "],"
             "\"zero_mask\":\"%016" PRIX64 "\","
             "\"readable_pointer_mask\":\"%016" PRIX64 "\"}",
             candidate->hashes[0], candidate->hashes[1],
             candidate->hashes[2], candidate->hashes[3],
+            candidate->normalized_hashes[0], candidate->normalized_hashes[1],
+            candidate->normalized_hashes[2], candidate->normalized_hashes[3],
             candidate->zero_mask, candidate->pointer_mask
         );
     }

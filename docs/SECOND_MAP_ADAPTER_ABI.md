@@ -6,8 +6,9 @@
 build-specific слоем второй галактики. ABI 3 подтверждён внутри Steam build
 `20648864`: игра загрузила DLL, RScript вызвал smoke-экспорт, передал ненулевой
 `GalaxyPtr()` и выполнил ограниченный read-only fingerprint. ABI 4 добавил
-сравнимый layout sample без сырых значений или адресов. ABI 5 добавляет rolling
-latest-наблюдение по подтверждённому `CurTurn()`.
+сравнимый layout sample без сырых значений или адресов. ABI 5 добавил rolling
+latest-наблюдение по подтверждённому `CurTurn()`. ABI 6 добавляет hashes локальной
+копии, в которой dword, классифицированные как readable pointers, заменены нулями.
 
 ## Подтверждённая цепочка
 
@@ -20,12 +21,12 @@ latest-наблюдение по подтверждённому `CurTurn()`.
 `Script functions list.txt:3804,3819-3829,3878-3902` в зафиксированном
 репозитории референсов.
 
-## Экспорты ABI 5
+## Экспорты ABI 6
 
 | Экспорт | Контракт |
 |---|---|
-| `CEAdapterAbiVersion()` | возвращает `5` |
-| `CEAdapterCapabilities()` | bind, smoke, fingerprint, sample и rolling latest (`241`) |
+| `CEAdapterAbiVersion()` | возвращает `6` |
+| `CEAdapterCapabilities()` | bind, smoke, fingerprint, sample, rolling latest и normalized hash (`497`) |
 | `CEAdapterBindGalaxy(dword)` | принимает ненулевой непрозрачный адрес и сохраняет его |
 | `CEAdapterGetBoundGalaxy()` | возвращает последний сохранённый адрес |
 | `CEAdapterEchoDword(dword)` | безопасный smoke-вызов без доступа к игре |
@@ -37,6 +38,7 @@ latest-наблюдение по подтверждённому `CurTurn()`.
 | `CEAdapterObserveGalaxyLayout(dword,dword,dword)` | перезаписывает latest для нового `CurTurn` |
 | `CEAdapterGetLayoutObservationCount()` | число уникальных ходов, увиденных процессом |
 | `CEAdapterGetLayoutBlockHash(dword)` | FNV-1a одного из четырёх 64-байтных блоков |
+| `CEAdapterGetLayoutNormalizedBlockHash(dword)` | FNV-1a блока после обнуления pointer-class dword в копии |
 | `CEAdapterGetLayoutZeroMaskLow/High()` | 64-битная маска нулевых dword двумя половинами |
 | `CEAdapterGetLayoutReadablePointerMaskLow/High()` | маска dword, похожих на читаемые выровненные указатели |
 | `CEAdapterGetLayoutSampleBytes()` | `256` после успешного sample |
@@ -53,6 +55,7 @@ latest-наблюдение по подтверждённому `CurTurn()`.
 - повтор одного `CurTurn` не создаёт нового наблюдения;
 - rolling-файл перезаписывается и не растёт со временем;
 - JSONL не содержит сырые байты, `GalaxyPtr` или адрес региона;
+- `pointer_normalized_fnv1a32` не меняет память игры и содержит только hashes;
 - readable-pointer mask является только классификацией, а не доказательством поля;
 - четыре 64-байтных FNV-1a хеша нужны только для межпроцессного сравнения.
 
@@ -105,3 +108,11 @@ offsets и ограничения вывода записаны в `GALAXY_LAYOU
 заблокирован жизненным циклом RScript: ни `Turn`, ни проверенный `Init` не вызвали
 DLL после открытия save в новом процессе. Детали и защита от stale PID записаны в
 `GALAXY_LAYOUT_ABI5_RESULTS.md`.
+
+## ABI 6 gate
+
+ABI 5 attach reload сохранил zero/pointer masks, но не сохранил ни один raw
+64-байтный hash между процессами. ABI 6 вычисляет второй набор hashes после
+обнуления всех значений, классифицированных как readable pointers, исключительно
+в 256-байтной локальной копии. DLL и внешний scanner используют один алгоритм.
+Offline x86 host пройден; in-game turn/save/load цикл ещё требуется.
