@@ -1,0 +1,158 @@
+[
+  {
+    "id": "CE_FACTION_STRONG",
+    "name_ru": "Стронги",
+    "origin": "Потомки малоков; программа «Крепость»",
+    "combat_role": "Тяжёлый фронтальный флот и защита союзников",
+    "reputation_variable": "vCE_StrongRep",
+    "front_variable": "vCE_FrontStrong",
+    "required_ship_roles": [
+      "RANGER",
+      "TRADER",
+      "TRANSPORT",
+      "LINER",
+      "DIPLOMAT",
+      "MILITARY",
+      "FLAGSHIP",
+      "PIRATE",
+      "SCIENTIST",
+      "RESCUE"
+    ],
+    "required_base_roles": [
+      "MILITARY_BASE",
+      "SCIENCE_BASE",
+      "BUSINESS_CENTER",
+      "MEDICAL_BASE",
+      "RANGER_CENTER",
+      "PIRATE_BASE"
+    ],
+    "unique_ship_assets_required": true,
+    "unique_base_assets_required": true
+  },
+  {
+    "id": "CE_FACTION_AGILL",
+    "name_ru": "Агиллы",
+    "origin": "Потомки пеленгов; программа «Тень»",
+    "combat_role": "Разведка, маскировка и диверсии",
+    "reputation_variable": "vCE_AgillRep",
+    "front_variable": "vCE_FrontAgill",
+    "required_ship_roles": [
+      "RANGER",
+      "TRADER",
+      "TRANSPORT",
+      "LINER",
+      "DIPLOMAT",
+      "MILITARY",
+      "FLAGSHIP",
+      "PIRATE",
+      "SCIENTIST",
+      "RESCUE"
+    ],
+    "required_base_roles": [
+      "MILITARY_BASE",
+      "SCIENCE_BASE",
+      "BUSINESS_CENTER",
+      "MEDICAL_BASE",
+      "RANGER_CENTER",
+      "PIRATE_BASE"
+    ],
+    "unique_ship_assets_required": true,
+    "unique_base_assets_required": true
+  },
+  {
+    "id": "CE_FACTION_MEDIUM",
+    "name_ru": "Медиумы",
+    "origin": "Потомки людей; программа «Наследник»",
+    "combat_role": "Логистика, оккупация и сбалансированный флот",
+    "reputation_variable": "vCE_MediumRep",
+    "front_variable": "vCE_FrontMedium",
+    "required_ship_roles": [
+      "RANGER",
+      "TRADER",
+      "TRANSPORT",
+      "LINER",
+      "DIPLOMAT",
+      "MILITARY",
+      "FLAGSHIP",
+      "PIRATE",
+      "SCIENTIST",
+      "RESCUE"
+    ],
+    "required_base_roles": [
+      "MILITARY_BASE",
+      "SCIENCE_BASE",
+      "BUSINESS_CENTER",
+      "MEDICAL_BASE",
+      "RANGER_CENTER",
+      "PIRATE_BASE"
+    ],
+    "unique_ship_assets_required": true,
+    "unique_base_assets_required": true
+  },
+  {
+    "id": "CE_FACTION_INTELL",
+    "name_ru": "Интеллы",
+    "origin": "Гаальско-фэянский синтез; программа «Слияние»",
+    "combat_role": "Энергетическая поддержка, контроль и Решётка памяти",
+    "reputation_variable": "vCE_IntellRep",
+    "front_variable": "vCE_FrontIntell",
+    "required_ship_roles": [
+      "RANGER",
+      "TRADER",
+      "TRANSPORT",
+      "LINER",
+      "DIPLOMAT",
+      "MILITARY",
+      "FLAGSHIP",
+      "PIRATE",
+      "SCIENTIST",
+      "RESCUE"
+    ],
+    "required_base_roles": [
+      "MILITARY_BASE",
+      "SCIENCE_BASE",
+      "BUSINESS_CENTER",
+      "MEDICAL_BASE",
+      "RANGER_CENTER",
+      "PIRATE_BASE"
+    ],
+    "unique_ship_assets_required": true,
+    "unique_base_assets_required": true
+  },
+  {
+    "id": "CE_FACTION_PIRATES",
+    "name_ru": "Пиратские силы War Apart",
+    "origin": "Пиратский клан, его наследники и расколы",
+    "combat_role": "Контрабанда, рейды, контроль маршрутов и межрукавных врат",
+    "reputation_variable": "vCE_PirateRep",
+    "front_variable": "vCE_PirateClanStrength",
+    "subfactions": [
+      "Старый клан",
+      "Пепельные корсары",
+      "Вольные капитаны",
+      "Чёрная Паутина"
+    ],
+    "required_ship_roles": [
+      "RANGER",
+      "TRADER",
+      "TRANSPORT",
+      "LINER",
+      "DIPLOMAT",
+      "MILITARY",
+      "FLAGSHIP",
+      "PIRATE",
+      "SCIENTIST",
+      "RESCUE"
+    ],
+    "required_base_roles": [
+      "MILITARY_BASE",
+      "SCIENCE_BASE",
+      "BUSINESS_CENTER",
+      "MEDICAL_BASE",
+      "RANGER_CENTER",
+      "PIRATE_BASE"
+    ],
+    "unique_ship_assets_required": true,
+    "unique_base_assets_required": true
+  }
+]

@@ -1,0 +1,28 @@
+BV ^{
+    OnStart ^{
+        0DayScripts ^{
+            CE_MapSmoke=ScriptRun(ShipStar(Player()),GetShipPlanet(Player()),'CE_MapSmoke');
+        }
+    }
+}
+Data ^{
+    Script ^{
+        CE_MapSmoke=1,Script.CE_MapSmoke
+    }
+    ScriptLibs ^{
+        CESecondMapAdapter ^{
+            Path=Mods\ChildrenOfEltanSmoke\DATA\CESecondMapAdapter.dll
+            CEAdapterAbiVersion=dword,CEAdapterAbiVersion
+            CEAdapterCapabilities=dword,CEAdapterCapabilities
+            CEAdapterBindGalaxy=dword,CEAdapterBindGalaxy,dword
+            CEAdapterGetBoundGalaxy=dword,CEAdapterGetBoundGalaxy
+            CEAdapterEchoDword=dword,CEAdapterEchoDword,dword
+            CEAdapterRunSmoke=dword,CEAdapterRunSmoke,dword,dword
+            CEAdapterProbeGalaxy=dword,CEAdapterProbeGalaxy,dword,dword
+            CEAdapterGetLastFingerprintHash=dword,CEAdapterGetLastFingerprintHash
+            CEAdapterGetLastFingerprintBytes=dword,CEAdapterGetLastFingerprintBytes
+            CEAdapterSupportsNativeMultiGalaxy=dword,CEAdapterSupportsNativeMultiGalaxy
+        }
+        CE_MapSmoke=CESecondMapAdapter
+    }
+}

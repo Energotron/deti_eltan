@@ -1,0 +1,35 @@
+{
+  "id": "CE_PIRATE_STATE_MODEL",
+  "states": [
+    {
+      "id": "NOT_STARTED",
+      "description_ru": "Оригинальная пиратская кампания не начата"
+    },
+    {
+      "id": "CLAN_ACTIVE",
+      "description_ru": "Пиратский клан существует и действует"
+    },
+    {
+      "id": "COALITION_VICTORY",
+      "description_ru": "Коалиция победила в War Apart"
+    },
+    {
+      "id": "PIRATE_VICTORY",
+      "description_ru": "Пираты победили или доминируют"
+    },
+    {
+      "id": "PLAYER_PIRATE",
+      "description_ru": "Игрок связан с Пиратским кланом"
+    },
+    {
+      "id": "UNKNOWN",
+      "description_ru": "Состояние не распознано; нейтральный fallback"
+    }
+  ],
+  "subfactions": [
+    "OLD_CLAN",
+    "ASH_CORSAIRS",
+    "FREE_CAPTAINS",
+    "BLACK_WEB"
+  ]
+}

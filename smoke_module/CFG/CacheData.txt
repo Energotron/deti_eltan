@@ -1,0 +1,3 @@
+Script ^{
+    CE_MapSmoke=data\Script\CE_MapSmoke.scr
+}

@@ -1,0 +1,66 @@
+[CmdletBinding()]
+param(
+    [string]$OutputRoot = ""
+)
+
+$ErrorActionPreference = "Stop"
+$projectRoot = Split-Path -Parent $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $OutputRoot = Join-Path $projectRoot "dist\ChildrenOfEltanSmoke"
+}
+$dataRoot = Join-Path $OutputRoot "DATA"
+$scriptRoot = Join-Path $dataRoot "Script"
+$cfgRoot = Join-Path $OutputRoot "CFG"
+$langRoot = Join-Path $cfgRoot "Rus"
+$rscript = Join-Path $projectRoot "references\tools\RScript_4.10f\RScript.exe"
+$blockPar = Join-Path $projectRoot "references\tools\BlockParEditor_1.9\BlockParEditor.exe"
+$sourceRson = Join-Path $projectRoot "src\scripts\CE_MapSmoke.rson"
+$sourceMain = Join-Path $projectRoot "src\config\CE_MapSmoke.Main.txt"
+$sourceCache = Join-Path $projectRoot "smoke_module\CFG\CacheData.txt"
+$outputScr = Join-Path $scriptRoot "CE_MapSmoke.scr"
+$outputText = Join-Path $langRoot "CE_MapSmoke.txt"
+$outputMain = Join-Path $cfgRoot "Main.dat"
+$outputCache = Join-Path $cfgRoot "CacheData.dat"
+$outputPackage = Join-Path $OutputRoot "ChildrenOfEltanSmoke.pkg"
+
+foreach ($required in @($rscript, $blockPar, $sourceRson, $sourceMain, $sourceCache)) {
+    if (-not (Test-Path -LiteralPath $required)) { throw "Missing required file: $required" }
+}
+New-Item -ItemType Directory -Path $scriptRoot, $langRoot -Force | Out-Null
+
+& (Join-Path $PSScriptRoot "build-engine-adapter.ps1") -OutputRoot $dataRoot
+if ($LASTEXITCODE -ne 0) { throw "Engine adapter build failed" }
+
+$rscriptBefore = @(Get-Process RScript -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+$buildStarted = Get-Date
+& $rscript --cli --build --full $sourceRson $outputScr $outputText
+Start-Sleep -Milliseconds 750
+$newRscript = @(Get-Process RScript -ErrorAction SilentlyContinue | Where-Object { $_.Id -notin $rscriptBefore })
+if ($newRscript) { $newRscript | Stop-Process -Force -ErrorAction SilentlyContinue }
+if (-not (Test-Path -LiteralPath $outputScr) -or
+    (Get-Item -LiteralPath $outputScr).Length -lt 64 -or
+    (Get-Item -LiteralPath $outputScr).LastWriteTimeUtc -lt $buildStarted.ToUniversalTime().AddSeconds(-1)) {
+    throw "RScript did not produce CE_MapSmoke.scr"
+}
+
+& $blockPar --cli --convert $sourceMain $outputMain
+Start-Sleep -Milliseconds 500
+if (-not (Test-Path -LiteralPath $outputMain) -or (Get-Item -LiteralPath $outputMain).Length -lt 64) {
+    throw "BlockParEditor did not produce CFG\Main.dat"
+}
+
+& $blockPar --cli --convert $sourceCache $outputCache
+Start-Sleep -Milliseconds 500
+if (-not (Test-Path -LiteralPath $outputCache) -or (Get-Item -LiteralPath $outputCache).Length -lt 32) {
+    throw "BlockParEditor did not produce CFG\CacheData.dat"
+}
+
+& python (Join-Path $PSScriptRoot "build_smoke_pkg.py") $outputScr $outputPackage
+if ($LASTEXITCODE -ne 0) { throw "PKG build failed" }
+
+Copy-Item -LiteralPath (Join-Path $projectRoot "smoke_module\ModuleInfo.txt") -Destination $OutputRoot -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot "smoke_module\INSTALL.TXT") -Destination $OutputRoot -Force
+
+& python (Join-Path $PSScriptRoot "game_smoke_check.py") preflight --module $OutputRoot
+if ($LASTEXITCODE -ne 0) { throw "Smoke module preflight failed" }
+Write-Output "OK: smoke module built at $OutputRoot"

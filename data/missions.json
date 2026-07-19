@@ -1,0 +1,176 @@
+[
+  {
+    "id": "CE-P00",
+    "act": "PROLOGUE",
+    "name_ru": "Пепел в помехах",
+    "prerequisites": [],
+    "status": "vertical_slice"
+  },
+  {
+    "id": "CE-A1-01",
+    "act": "ACT_1",
+    "name_ru": "Исчезнувший караван",
+    "prerequisites": [
+      "CE-P00"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A1-02",
+    "act": "ACT_1",
+    "name_ru": "Чёрный ящик, которого не было",
+    "prerequisites": [
+      "CE-P00"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A1-03",
+    "act": "ACT_1",
+    "name_ru": "Семь цен Мгагучи",
+    "prerequisites": [
+      "CE-A1-02"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A1-04",
+    "act": "ACT_1",
+    "name_ru": "Четыре сигнатуры",
+    "prerequisites": [
+      "CE-A1-01"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A1-05",
+    "act": "ACT_1",
+    "name_ru": "Граница горит",
+    "prerequisites": [
+      "CE-A1-04"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-01",
+    "act": "ACT_2",
+    "name_ru": "Совет девяти голосов",
+    "prerequisites": [
+      "CE-A1-05"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A3-01",
+    "act": "ACT_3",
+    "name_ru": "Врата Пепла",
+    "prerequisites": [
+      "CE-A2-01",
+      "CE-A1-03"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A4-01",
+    "act": "ACT_4",
+    "name_ru": "Кому принадлежит прошлое",
+    "prerequisites": [
+      "CE-A3-01"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-01",
+    "act": "PIRATE_ARC",
+    "name_ru": "Покупатели с четырьмя руками",
+    "prerequisites": [
+      "CE-P00"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-02",
+    "act": "PIRATE_ARC",
+    "name_ru": "Наследство клана",
+    "prerequisites": [
+      "CE-PIR-01"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-03",
+    "act": "PIRATE_ARC",
+    "name_ru": "Пепельный капер",
+    "prerequisites": [
+      "CE-PIR-01"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-04",
+    "act": "PIRATE_ARC",
+    "name_ru": "Контрабанда памяти",
+    "prerequisites": [
+      "CE-A1-01"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-05",
+    "act": "PIRATE_ARC",
+    "name_ru": "Ячейка без заряда",
+    "prerequisites": [
+      "CE-A3-00"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-06",
+    "act": "PIRATE_ARC",
+    "name_ru": "Чёрная Паутина",
+    "prerequisites": [
+      "CE-PIR-03"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-07",
+    "act": "PIRATE_ARC",
+    "name_ru": "Вольница",
+    "prerequisites": [
+      "CE-PIR-02",
+      "CE-PIR-06"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-08",
+    "act": "FINALE",
+    "name_ru": "Третий флаг",
+    "prerequisites": [
+      "CE-PIR-07",
+      "CE-A4-01"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A3-00",
+    "act": "ACT_3",
+    "name_ru": "Якорь Двух Домов",
+    "prerequisites": [
+      "CE-A2-01",
+      "CE-A1-03"
+    ],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A3-01B",
+    "act": "ACT_3",
+    "name_ru": "Нулевой коридор",
+    "prerequisites": [
+      "CE-A3-00",
+      "CE-A3-01"
+    ],
+    "status": "designed"
+  }
+]

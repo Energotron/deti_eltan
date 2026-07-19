@@ -1,0 +1,69 @@
+{
+  "id": "CE_SECOND_HOME_MAP",
+  "scale_rule": {
+    "target": "mirror_old_arm_star_count",
+    "allowed_deviation_percent": 10
+  },
+  "maps": [
+    "OLD_ARM",
+    "SECOND_HOME"
+  ],
+  "required_nodes": [
+    "CE_SYS_ELTAN_WOUND",
+    "CE_SYS_FIRST_SHELTER",
+    "CE_SYS_ARK_IV",
+    "CE_SYS_KARH_FORTRESS",
+    "CE_SYS_FACELESS_NODE",
+    "CE_SYS_LUMEN",
+    "CE_SYS_UNITY_PRISM",
+    "CE_SYS_ASH_MARKET",
+    "CE_SYS_ORPHAN_NEST",
+    "CE_SYS_UNLIT_CITY",
+    "CE_SYS_SECOND_GATE"
+  ],
+  "procedural_sectors": [
+    "STRONG",
+    "AGILL",
+    "MEDIUM",
+    "INTELL",
+    "ASH_BORDER",
+    "KLISSAN_SCAR"
+  ],
+  "inactive_map_simulation": {
+    "light_tick_days": 1,
+    "aggregate_tick_min_days": 10,
+    "aggregate_tick_max_days": 30
+  },
+  "living_galaxy_required": true,
+  "required_npc_roles_per_faction": [
+    "RANGER",
+    "TRADER",
+    "TRANSPORT",
+    "LINER",
+    "DIPLOMAT",
+    "MILITARY",
+    "FLAGSHIP",
+    "PIRATE",
+    "SCIENTIST",
+    "RESCUE"
+  ],
+  "required_base_roles_per_faction": [
+    "MILITARY_BASE",
+    "SCIENCE_BASE",
+    "BUSINESS_CENTER",
+    "MEDICAL_BASE",
+    "RANGER_CENTER",
+    "PIRATE_BASE"
+  ],
+  "minimum_unique_ship_hulls": 40,
+  "minimum_unique_racial_bases": 24,
+  "background_simulation": {
+    "trade": true,
+    "piracy": true,
+    "military_patrols": true,
+    "ranger_contracts": true,
+    "diplomacy": true,
+    "passenger_routes": true,
+    "base_production": true
+  }
+}

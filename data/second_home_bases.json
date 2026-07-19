@@ -1,0 +1,214 @@
+{
+  "version": 1,
+  "minimum_unique_racial_bases": 24,
+  "roles": [
+    {
+      "id": "MILITARY_BASE",
+      "name_ru": "Военная база"
+    },
+    {
+      "id": "SCIENCE_BASE",
+      "name_ru": "Научная база"
+    },
+    {
+      "id": "BUSINESS_CENTER",
+      "name_ru": "Бизнес-центр"
+    },
+    {
+      "id": "MEDICAL_BASE",
+      "name_ru": "Медицинская база"
+    },
+    {
+      "id": "RANGER_CENTER",
+      "name_ru": "Центр рейнджеров/контрактов"
+    },
+    {
+      "id": "PIRATE_BASE",
+      "name_ru": "Пиратская/радикальная база"
+    }
+  ],
+  "factions": [
+    {
+      "faction_id": "CE_FACTION_STRONG",
+      "bases": [
+        {
+          "role": "MILITARY_BASE",
+          "base_id": "CE_Base_Strong_WarForge",
+          "name_ru": "Военная кузня",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "SCIENCE_BASE",
+          "base_id": "CE_Base_Strong_AshArchive",
+          "name_ru": "Архив Пепла",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "BUSINESS_CENTER",
+          "base_id": "CE_Base_Strong_BurdenExchange",
+          "name_ru": "Биржа бремени",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "MEDICAL_BASE",
+          "base_id": "CE_Base_Strong_BloodHall",
+          "name_ru": "Зал крови",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "RANGER_CENTER",
+          "base_id": "CE_Base_Strong_OathHall",
+          "name_ru": "Зал свободной клятвы",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "PIRATE_BASE",
+          "base_id": "CE_Base_Strong_OathlessAnchorage",
+          "name_ru": "Стоянка Бесклятвенных",
+          "unique_final_asset_required": true
+        }
+      ]
+    },
+    {
+      "faction_id": "CE_FACTION_AGILL",
+      "bases": [
+        {
+          "role": "MILITARY_BASE",
+          "base_id": "CE_Base_Agill_VeilBastion",
+          "name_ru": "Бастион Завесы",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "SCIENCE_BASE",
+          "base_id": "CE_Base_Agill_MirrorLab",
+          "name_ru": "Зеркальная лаборатория",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "BUSINESS_CENTER",
+          "base_id": "CE_Base_Agill_ShadowExchange",
+          "name_ru": "Теневая биржа",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "MEDICAL_BASE",
+          "base_id": "CE_Base_Agill_QuietSkinClinic",
+          "name_ru": "Клиника тихой кожи",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "RANGER_CENTER",
+          "base_id": "CE_Base_Agill_FreeThreadNode",
+          "name_ru": "Узел свободных нитей",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "PIRATE_BASE",
+          "base_id": "CE_Base_Agill_BlackWebDen",
+          "name_ru": "Логово Чёрной Паутины",
+          "unique_final_asset_required": true
+        }
+      ]
+    },
+    {
+      "faction_id": "CE_FACTION_MEDIUM",
+      "bases": [
+        {
+          "role": "MILITARY_BASE",
+          "base_id": "CE_Base_Medium_QuotaCitadel",
+          "name_ru": "Квотная цитадель",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "SCIENCE_BASE",
+          "base_id": "CE_Base_Medium_MeasureInstitute",
+          "name_ru": "Институт меры",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "BUSINESS_CENTER",
+          "base_id": "CE_Base_Medium_LedgerExchange",
+          "name_ru": "Ведомственная биржа",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "MEDICAL_BASE",
+          "base_id": "CE_Base_Medium_LumenClinic",
+          "name_ru": "Люмен-клиника",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "RANGER_CENTER",
+          "base_id": "CE_Base_Medium_ContractDirectorate",
+          "name_ru": "Директорат контрактов",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "PIRATE_BASE",
+          "base_id": "CE_Base_Medium_BlackLedgerPort",
+          "name_ru": "Порт Чёрной ведомости",
+          "unique_final_asset_required": true
+        }
+      ]
+    },
+    {
+      "faction_id": "CE_FACTION_INTELL",
+      "bases": [
+        {
+          "role": "MILITARY_BASE",
+          "base_id": "CE_Base_Intell_PrismDefense",
+          "name_ru": "Оборонительная призма",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "SCIENCE_BASE",
+          "base_id": "CE_Base_Intell_SynodObservatory",
+          "name_ru": "Обсерватория Синода",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "BUSINESS_CENTER",
+          "base_id": "CE_Base_Intell_ResonanceMarket",
+          "name_ru": "Рынок резонанса",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "MEDICAL_BASE",
+          "base_id": "CE_Base_Intell_HarmonyChamber",
+          "name_ru": "Камера гармонизации",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "RANGER_CENTER",
+          "base_id": "CE_Base_Intell_FreeFacetRelay",
+          "name_ru": "Ретранслятор свободных граней",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "PIRATE_BASE",
+          "base_id": "CE_Base_Intell_FracturedChoirNest",
+          "name_ru": "Гнездо Расколотого хора",
+          "unique_final_asset_required": true
+        }
+      ]
+    }
+  ],
+  "shared_special_bases": [
+    {
+      "id": "CE_Base_AshMarket",
+      "name_ru": "Пепельный рынок"
+    },
+    {
+      "id": "CE_Base_OldArmGate",
+      "name_ru": "Врата Старого Дома"
+    },
+    {
+      "id": "CE_Base_SecondHomeGate",
+      "name_ru": "Врата Второго Дома"
+    },
+    {
+      "id": "CE_Base_ArkIV",
+      "name_ru": "Ковчег-IV"
+    }
+  ]
+}

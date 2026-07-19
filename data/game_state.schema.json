@@ -1,0 +1,404 @@
+{
+  "variables": [
+    {
+      "id": "vCE_SchemaVersion",
+      "type": "int",
+      "default": 1,
+      "min": 1,
+      "max": 999,
+      "save": true
+    },
+    {
+      "id": "vCE_Stage",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 9999,
+      "save": true
+    },
+    {
+      "id": "vCE_PrologueState",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 99,
+      "save": true
+    },
+    {
+      "id": "vCE_Evidence",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_TruthPublic",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_CoalitionUnity",
+      "type": "int",
+      "default": 70,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_EltanUnity",
+      "type": "int",
+      "default": 85,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_InvasionPressure",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_InvasionAlert",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_StrongRep",
+      "type": "int",
+      "default": -20,
+      "min": -100,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_AgillRep",
+      "type": "int",
+      "default": -10,
+      "min": -100,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_MediumRep",
+      "type": "int",
+      "default": -25,
+      "min": -100,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_IntellRep",
+      "type": "int",
+      "default": -15,
+      "min": -100,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_MenzolTrust",
+      "type": "int",
+      "default": 0,
+      "min": -100,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_FrontStrong",
+      "type": "int",
+      "default": 50,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_FrontAgill",
+      "type": "int",
+      "default": 50,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_FrontMedium",
+      "type": "int",
+      "default": 50,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_FrontIntell",
+      "type": "int",
+      "default": 50,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_MemoryGridState",
+      "type": "enum",
+      "default": "LOCKED",
+      "values": [
+        "LOCKED",
+        "ACTIVE_FORCED",
+        "DAMAGED",
+        "LIBERATED",
+        "DESTROYED",
+        "ORPHAN_CONTROLLED"
+      ],
+      "save": true
+    },
+    {
+      "id": "vCE_OrphanState",
+      "type": "enum",
+      "default": "UNKNOWN",
+      "values": [
+        "UNKNOWN",
+        "CONTACTED",
+        "SAMPLED",
+        "DESTROYED",
+        "INTELL_CONTROLLED",
+        "FREE"
+      ],
+      "save": true
+    },
+    {
+      "id": "vCE_UnlitCity",
+      "type": "enum",
+      "default": "UNKNOWN",
+      "values": [
+        "UNKNOWN",
+        "FOUND",
+        "EVACUATED",
+        "BETRAYED",
+        "ARMED",
+        "MEDIATOR"
+      ],
+      "save": true
+    },
+    {
+      "id": "vCE_Debug",
+      "type": "bool",
+      "default": false,
+      "save": false
+    },
+    {
+      "id": "vCE_WarApartState",
+      "type": "enum",
+      "default": "UNKNOWN",
+      "values": [
+        "UNKNOWN",
+        "NOT_STARTED",
+        "CLAN_ACTIVE",
+        "COALITION_VICTORY",
+        "PIRATE_VICTORY",
+        "PLAYER_PIRATE"
+      ],
+      "save": true
+    },
+    {
+      "id": "vCE_PlayerPirateStatus",
+      "type": "bool",
+      "default": false,
+      "save": true
+    },
+    {
+      "id": "vCE_PlayerPirateRank",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_PirateRep",
+      "type": "int",
+      "default": 0,
+      "min": -100,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_PirateClanStrength",
+      "type": "int",
+      "default": 50,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_AshCorsairStrength",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_FreeCaptainStrength",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_BlackWebStrength",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_PirateGateInfluence",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 100,
+      "save": true
+    },
+    {
+      "id": "vCE_CurrentArm",
+      "type": "enum",
+      "default": "OLD_ARM",
+      "values": [
+        "OLD_ARM",
+        "SECOND_HOME",
+        "ZERO_CORRIDOR"
+      ],
+      "save": true
+    },
+    {
+      "id": "vCE_OldArmSeed",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 2147483647,
+      "save": true
+    },
+    {
+      "id": "vCE_SecondHomeSeed",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 2147483647,
+      "save": true
+    },
+    {
+      "id": "vCE_OldArmStarCount",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 1000,
+      "save": true
+    },
+    {
+      "id": "vCE_SecondHomeStarCount",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 1000,
+      "save": true
+    },
+    {
+      "id": "vCE_AnchorState",
+      "type": "enum",
+      "default": "NOT_ASSEMBLED",
+      "values": [
+        "NOT_ASSEMBLED",
+        "ASSEMBLY",
+        "IN_CARGO",
+        "LOST",
+        "RECOVERY"
+      ],
+      "save": true
+    },
+    {
+      "id": "vCE_AnchorInCargo",
+      "type": "bool",
+      "default": false,
+      "save": true
+    },
+    {
+      "id": "vCE_ResonanceCells",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 999,
+      "save": true
+    },
+    {
+      "id": "vCE_OldGateState",
+      "type": "enum",
+      "default": "LOCKED",
+      "values": [
+        "LOCKED",
+        "BUILDING",
+        "READY",
+        "COOLDOWN",
+        "BLOCKED",
+        "DAMAGED",
+        "DESTROYED"
+      ],
+      "save": true
+    },
+    {
+      "id": "vCE_SecondGateState",
+      "type": "enum",
+      "default": "UNKNOWN",
+      "values": [
+        "UNKNOWN",
+        "LOCKED",
+        "READY",
+        "COOLDOWN",
+        "BLOCKED",
+        "DAMAGED",
+        "DESTROYED"
+      ],
+      "save": true
+    },
+    {
+      "id": "vCE_TransitState",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 99,
+      "save": true
+    },
+    {
+      "id": "vCE_TransitCooldownDays",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 999,
+      "save": true
+    },
+    {
+      "id": "vCE_OldArmLastSimDay",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 999999,
+      "save": true
+    },
+    {
+      "id": "vCE_SecondHomeLastSimDay",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 999999,
+      "save": true
+    }
+  ]
+}

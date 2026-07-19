@@ -1,0 +1,20 @@
+// TODO: VERIFY_IN_GAME before merging into Main.dat.
+// Syntax is based on Script functions list.txt lines 3889-3902.
+Data {
+    ScriptLibs ^{
+        CESecondMapAdapter ^{
+            Path=Mods\ChildrenOfEltan\DATA\CESecondMapAdapter.dll
+            CEAdapterAbiVersion=dword,CEAdapterAbiVersion
+            CEAdapterCapabilities=dword,CEAdapterCapabilities
+            CEAdapterBindGalaxy=dword,CEAdapterBindGalaxy,dword
+            CEAdapterGetBoundGalaxy=dword,CEAdapterGetBoundGalaxy
+            CEAdapterEchoDword=dword,CEAdapterEchoDword,dword
+            CEAdapterRunSmoke=dword,CEAdapterRunSmoke,dword,dword
+            CEAdapterProbeGalaxy=dword,CEAdapterProbeGalaxy,dword,dword
+            CEAdapterGetLastFingerprintHash=dword,CEAdapterGetLastFingerprintHash
+            CEAdapterGetLastFingerprintBytes=dword,CEAdapterGetLastFingerprintBytes
+            CEAdapterSupportsNativeMultiGalaxy=dword,CEAdapterSupportsNativeMultiGalaxy
+        }
+        Mod_CE_MapBridge=CESecondMapAdapter
+    }
+}

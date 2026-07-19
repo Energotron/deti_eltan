@@ -1,0 +1,28 @@
+# Reproducible build output
+/dist/
+
+# Downloaded third-party references and toolchains
+/references/downloads/
+/references/game-build-20648864/
+/references/OpenSR/
+/references/Space-Rangers-Mods-Sources/
+/references/Space-Rangers-Universe-Sources/
+/references/tools/
+
+# Python caches and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local runtime artifacts
+*.log
+*.tmp
+*.bak
+
+# Editor and Windows metadata
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini

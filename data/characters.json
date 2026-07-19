@@ -1,0 +1,72 @@
+[
+  {
+    "id": "CE_CHAR_KARH_ORT",
+    "name_ru": "Карх Орт",
+    "title_ru": "Первый Молот",
+    "faction_id": "CE_FACTION_STRONG",
+    "role": "Лидер военного фронта Стронгов"
+  },
+  {
+    "id": "CE_CHAR_IRSHA",
+    "name_ru": "Ирша Тенекож",
+    "title_ru": "Старший узел Паутины",
+    "faction_id": "CE_FACTION_AGILL",
+    "role": "Разведчица и возможный двойной агент"
+  },
+  {
+    "id": "CE_CHAR_SERA_VALT",
+    "name_ru": "Сера Вальт",
+    "title_ru": "Архонт возвращения",
+    "faction_id": "CE_FACTION_MEDIUM",
+    "role": "Политический лидер Союза"
+  },
+  {
+    "id": "CE_CHAR_LIAN_EI",
+    "name_ru": "Лиан-Эй",
+    "title_ru": "Грань Тихой формулы",
+    "faction_id": "CE_FACTION_INTELL",
+    "role": "Учёный и сторонник прекращения принудительной памяти"
+  },
+  {
+    "id": "CE_CHAR_KERA_VOSS",
+    "name_ru": "Кера Восс",
+    "title_ru": "Адмирал объединённого фронта",
+    "faction_id": "CE_FACTION_COALITION",
+    "role": "Командующая силами Коалиции"
+  },
+  {
+    "id": "CE_CHAR_AASH_LI",
+    "name_ru": "Ааш-Ли",
+    "title_ru": "Архивист",
+    "faction_id": "CE_FACTION_COALITION",
+    "role": "Исследователь удалённых архивов"
+  },
+  {
+    "id": "CE_CHAR_GTAO",
+    "name_ru": "Гтао Два-Раза",
+    "title_ru": "Посол мензолов",
+    "faction_id": "CE_FACTION_MENZOL",
+    "role": "Нейтральный посредник"
+  },
+  {
+    "id": "CE_CHAR_RASKOL",
+    "name_ru": "Равен Раскол",
+    "title_ru": "Капитан Старого клана",
+    "faction_id": "CE_FACTION_PIRATES",
+    "role": "Сторонник независимого грабительского клана"
+  },
+  {
+    "id": "CE_CHAR_ASH_CORSAIR",
+    "name_ru": "Сола Пепельная",
+    "title_ru": "Первый капер",
+    "faction_id": "CE_FACTION_PIRATES",
+    "role": "Лидер пиратов, перешедших на службу Союзу"
+  },
+  {
+    "id": "CE_CHAR_FREE_CAPTAIN",
+    "name_ru": "Тарн Без-Флага",
+    "title_ru": "Голос Вольных капитанов",
+    "faction_id": "CE_FACTION_PIRATES",
+    "role": "Организатор Пепельной вольницы"
+  }
+]

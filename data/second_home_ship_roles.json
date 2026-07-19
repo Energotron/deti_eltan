@@ -1,0 +1,308 @@
+{
+  "version": 1,
+  "minimum_unique_hulls": 40,
+  "roles": [
+    {
+      "id": "RANGER",
+      "name_ru": "Независимый рейнджер"
+    },
+    {
+      "id": "TRADER",
+      "name_ru": "Торговец"
+    },
+    {
+      "id": "TRANSPORT",
+      "name_ru": "Тяжёлый транспорт"
+    },
+    {
+      "id": "LINER",
+      "name_ru": "Пассажирский лайнер"
+    },
+    {
+      "id": "DIPLOMAT",
+      "name_ru": "Дипломат"
+    },
+    {
+      "id": "MILITARY",
+      "name_ru": "Военный корабль"
+    },
+    {
+      "id": "FLAGSHIP",
+      "name_ru": "Военный флагман"
+    },
+    {
+      "id": "PIRATE",
+      "name_ru": "Пират/радикальный рейдер"
+    },
+    {
+      "id": "SCIENTIST",
+      "name_ru": "Учёный/исследователь"
+    },
+    {
+      "id": "RESCUE",
+      "name_ru": "Спасатель/сборщик обломков"
+    }
+  ],
+  "factions": [
+    {
+      "faction_id": "CE_FACTION_STRONG",
+      "ships": [
+        {
+          "role": "RANGER",
+          "ship_id": "CE_Strong_Oathseeker",
+          "name_ru": "Искатель клятвы",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "TRADER",
+          "ship_id": "CE_Strong_BurdenBearer",
+          "name_ru": "Несущий бремя",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "TRANSPORT",
+          "ship_id": "CE_Strong_IronCaravan",
+          "name_ru": "Железный караван",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "LINER",
+          "ship_id": "CE_Strong_KinArk",
+          "name_ru": "Ковчег рода",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "DIPLOMAT",
+          "ship_id": "CE_Strong_TruceHammer",
+          "name_ru": "Молот перемирия",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "MILITARY",
+          "ship_id": "CE_Strong_Breaker",
+          "name_ru": "Сокрушитель",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "FLAGSHIP",
+          "ship_id": "CE_Strong_Bastion",
+          "name_ru": "Бастион",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "PIRATE",
+          "ship_id": "CE_Strong_Oathless",
+          "name_ru": "Бесклятвенный",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "SCIENTIST",
+          "ship_id": "CE_Strong_AshSurveyor",
+          "name_ru": "Счётчик пепла",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "RESCUE",
+          "ship_id": "CE_Strong_HullKeeper",
+          "name_ru": "Хранитель корпуса",
+          "unique_final_asset_required": true
+        }
+      ]
+    },
+    {
+      "faction_id": "CE_FACTION_AGILL",
+      "ships": [
+        {
+          "role": "RANGER",
+          "ship_id": "CE_Agill_FreeThread",
+          "name_ru": "Свободная нить",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "TRADER",
+          "ship_id": "CE_Agill_QuietBroker",
+          "name_ru": "Тихий посредник",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "TRANSPORT",
+          "ship_id": "CE_Agill_HollowRoute",
+          "name_ru": "Пустой маршрут",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "LINER",
+          "ship_id": "CE_Agill_ManyMasks",
+          "name_ru": "Множество масок",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "DIPLOMAT",
+          "ship_id": "CE_Agill_OpenPalm",
+          "name_ru": "Открытая ладонь",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "MILITARY",
+          "ship_id": "CE_Agill_Threadcutter",
+          "name_ru": "Нитерез",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "FLAGSHIP",
+          "ship_id": "CE_Agill_Veil",
+          "name_ru": "Завеса",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "PIRATE",
+          "ship_id": "CE_Agill_FalseFlag",
+          "name_ru": "Ложный флаг",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "SCIENTIST",
+          "ship_id": "CE_Agill_BlackEye",
+          "name_ru": "Чёрный глаз",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "RESCUE",
+          "ship_id": "CE_Agill_ShedSkin",
+          "name_ru": "Сброшенная кожа",
+          "unique_final_asset_required": true
+        }
+      ]
+    },
+    {
+      "faction_id": "CE_FACTION_MEDIUM",
+      "ships": [
+        {
+          "role": "RANGER",
+          "ship_id": "CE_Medium_FreeAuditor",
+          "name_ru": "Свободный аудитор",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "TRADER",
+          "ship_id": "CE_Medium_BalanceCarrier",
+          "name_ru": "Носитель баланса",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "TRANSPORT",
+          "ship_id": "CE_Medium_QuotaHauler",
+          "name_ru": "Квотный грузовик",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "LINER",
+          "ship_id": "CE_Medium_Inheritance",
+          "name_ru": "Наследство",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "DIPLOMAT",
+          "ship_id": "CE_Medium_ClaimsEnvoy",
+          "name_ru": "Посланник требований",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "MILITARY",
+          "ship_id": "CE_Medium_Procurator",
+          "name_ru": "Прокуратор",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "FLAGSHIP",
+          "ship_id": "CE_Medium_Archon",
+          "name_ru": "Архонт",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "PIRATE",
+          "ship_id": "CE_Medium_BlackLedger",
+          "name_ru": "Чёрная ведомость",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "SCIENTIST",
+          "ship_id": "CE_Medium_Assessor",
+          "name_ru": "Оценщик",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "RESCUE",
+          "ship_id": "CE_Medium_Reclaimer",
+          "name_ru": "Возвращатель",
+          "unique_final_asset_required": true
+        }
+      ]
+    },
+    {
+      "faction_id": "CE_FACTION_INTELL",
+      "ships": [
+        {
+          "role": "RANGER",
+          "ship_id": "CE_Intell_SingularFacet",
+          "name_ru": "Одиночная грань",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "TRADER",
+          "ship_id": "CE_Intell_ExchangeChorus",
+          "name_ru": "Хор обмена",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "TRANSPORT",
+          "ship_id": "CE_Intell_Continuum",
+          "name_ru": "Континуум",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "LINER",
+          "ship_id": "CE_Intell_Concordance",
+          "name_ru": "Согласование",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "DIPLOMAT",
+          "ship_id": "CE_Intell_QuietFormula",
+          "name_ru": "Тихая формула",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "MILITARY",
+          "ship_id": "CE_Intell_Prism",
+          "name_ru": "Призма",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "FLAGSHIP",
+          "ship_id": "CE_Intell_Synapse",
+          "name_ru": "Синапс",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "PIRATE",
+          "ship_id": "CE_Intell_FracturedChoir",
+          "name_ru": "Расколотый хор",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "SCIENTIST",
+          "ship_id": "CE_Intell_Refraction",
+          "name_ru": "Преломление",
+          "unique_final_asset_required": true
+        },
+        {
+          "role": "RESCUE",
+          "ship_id": "CE_Intell_Recomposer",
+          "name_ru": "Пересборщик",
+          "unique_final_asset_required": true
+        }
+      ]
+    }
+  ]
+}
