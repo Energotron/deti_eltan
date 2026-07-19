@@ -18,13 +18,18 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 ARMS = ("OLD_ARM", "SECOND_HOME")
+DATA_ROOT = Path(__file__).resolve().parents[1] / "data"
 MAP_SCHEMA = json.loads(
-    (Path(__file__).resolve().parents[1] / "data" / "second_home_map.schema.json").read_text(
+    (DATA_ROOT / "second_home_map.schema.json").read_text(
         encoding="utf-8"
     )
 )
+MISSION_DEFINITIONS = json.loads(
+    (DATA_ROOT / "missions.json").read_text(encoding="utf-8")
+)
+MISSION_BY_ID = {mission["id"]: mission for mission in MISSION_DEFINITIONS}
 SECTOR_ARCHETYPES = tuple(MAP_SCHEMA["sector_archetypes"])
 SECTOR_NAME_POOL = tuple(MAP_SCHEMA["sector_name_pool"])
 SYSTEM_NAME_POOL = tuple(MAP_SCHEMA["system_name_pool"])
@@ -177,6 +182,10 @@ def create_state(
             "node_order": list(_generate_story_node_order(second_seed)),
             "completed_node_ids": [],
         },
+        "missions": {
+            "order": list(_generate_mission_order(second_seed)),
+            "completed_ids": [],
+        },
         "transit": None,
         "maps": {
             "OLD_ARM": _new_map(seed, old_star_count, old_sector_count, (), (), ()),
@@ -200,6 +209,29 @@ def _generate_story_node_order(seed: int) -> tuple[str, ...]:
                 seed, "story-deck", stage_id, node_id
             ),
         ))
+    return tuple(result)
+
+
+def _generate_mission_order(seed: int) -> tuple[str, ...]:
+    remaining = set(MISSION_BY_ID)
+    completed = set()
+    result = []
+    while remaining:
+        eligible = [
+            mission_id for mission_id in remaining
+            if set(MISSION_BY_ID[mission_id].get("prerequisites", ())) <= completed
+        ]
+        if not eligible:
+            raise StateError("mission prerequisite graph contains a cycle")
+        mission_id = min(
+            eligible,
+            key=lambda candidate: _stable_int(
+                seed, "mission-priority", candidate
+            ),
+        )
+        result.append(mission_id)
+        completed.add(mission_id)
+        remaining.remove(mission_id)
     return tuple(result)
 
 
@@ -749,6 +781,23 @@ def validate_state(state: dict[str, Any]) -> None:
     if not isinstance(completed_node_ids, list) or \
             completed_node_ids != node_order[:len(completed_node_ids)]:
         raise StateError("Second Home story completion is not a deck prefix")
+    missions = state.get("missions", {})
+    mission_order = missions.get("order", [])
+    expected_mission_order = list(_generate_mission_order(
+        state["maps"]["SECOND_HOME"]["seed"]
+    ))
+    completed_mission_ids = missions.get("completed_ids", [])
+    if mission_order != expected_mission_order or \
+            set(mission_order) != set(MISSION_BY_ID):
+        raise StateError("mission deck does not match its seed")
+    if not isinstance(completed_mission_ids, list) or \
+            completed_mission_ids != mission_order[:len(completed_mission_ids)]:
+        raise StateError("mission completion is not a deck prefix")
+    earlier_missions = set()
+    for mission_id in mission_order:
+        if not set(MISSION_BY_ID[mission_id].get("prerequisites", ())) <= earlier_missions:
+            raise StateError("mission deck violates a prerequisite")
+        earlier_missions.add(mission_id)
     office_counts = {
         sector_id: sum(
             system.get("government_map_office") is True and
@@ -1039,6 +1088,41 @@ def complete_story_target(state: dict[str, Any], story_node_id: str) -> None:
     validate_state(state)
 
 
+def current_mission(state: dict[str, Any]) -> dict[str, Any] | None:
+    validate_state(state)
+    missions = state["missions"]
+    index = len(missions["completed_ids"])
+    if index == len(missions["order"]):
+        return None
+    mission_id = missions["order"][index]
+    definition = MISSION_BY_ID[mission_id]
+    return {
+        "mission_id": mission_id,
+        "name_ru": definition["name_ru"],
+        "act": definition["act"],
+        "prerequisites": list(definition.get("prerequisites", ())),
+        "sequence_index": index,
+    }
+
+
+def complete_current_mission(state: dict[str, Any], mission_id: str) -> None:
+    mission = current_mission(state)
+    if mission is None:
+        raise StateError("randomized mission deck is already complete")
+    if mission_id != mission["mission_id"]:
+        raise StateError("mission is not the current randomized target")
+    state["missions"]["completed_ids"].append(mission_id)
+    state["history"].append(
+        {
+            "type": "CE_MISSION_COMPLETED",
+            "day": state["current_day"],
+            "mission_id": mission_id,
+        }
+    )
+    state["revision"] += 1
+    validate_state(state)
+
+
 def simulate_days(state: dict[str, Any], days: int) -> None:
     if days < 0:
         raise StateError("days cannot be negative")
@@ -1280,6 +1364,27 @@ def begin_transit(store: StateStore, crash_after: str | None = None) -> dict[str
     return recover_transit(store, crash_after)
 
 
+def debug_open_second_home(store: StateStore) -> dict[str, Any]:
+    state = store.load()
+    validate_state(state)
+    if state["transit"] is not None:
+        raise StateError("recover pending transit before using the debug entrance")
+    if state["current_arm"] == "SECOND_HOME":
+        return state
+    state["current_arm"] = "SECOND_HOME"
+    state["history"].append(
+        {
+            "type": "CE_DEBUG_SECOND_HOME_OPENED",
+            "day": state["current_day"],
+        }
+    )
+    _schedule_pirate_migration(state, state["current_day"])
+    _schedule_dominator_invasions(state, state["current_day"])
+    _update_interarm_arrivals(state, state["current_day"])
+    _commit(store, state)
+    return state
+
+
 def recover_transit(store: StateStore, crash_after: str | None = None) -> dict[str, Any]:
     state = store.load()
     validate_state(state)
@@ -1384,6 +1489,8 @@ def _parser() -> argparse.ArgumentParser:
     transit.add_argument("--crash-after", choices=TRANSIT_PHASES)
     recover = sub.add_parser("recover")
     recover.add_argument("state", type=Path)
+    debug_open = sub.add_parser("debug-open-second-home")
+    debug_open.add_argument("state", type=Path)
     simulate = sub.add_parser("simulate")
     simulate.add_argument("state", type=Path)
     simulate.add_argument("--days", type=int, required=True)
@@ -1430,6 +1537,8 @@ def main() -> None:
             state = begin_transit(store, args.crash_after)
         elif args.command == "recover":
             state = recover_transit(store)
+        elif args.command == "debug-open-second-home":
+            state = debug_open_second_home(store)
         elif args.command == "simulate":
             state = store.load()
             simulate_days(state, args.days)

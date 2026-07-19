@@ -1,7 +1,7 @@
 # Сборка и локальная установка
 
-Статус: процедура подтверждена для компиляции отдельного `.rson`; сборка полного
-CE-модуля ещё не выполнялась.
+Статус: процедура подтверждена для компиляции отдельного `.rson` и изолированного
+smoke-модуля; сборка полного игрового CE-модуля ещё не выполнялась.
 
 ## Требования
 
@@ -19,6 +19,19 @@ python -m unittest discover -s tools/tests -v
 python tools/second_map_spike.py demo dist/second-map-spike/demo-state.json `
   --old-stars 80 --old-sectors 19 --cells 10 --seed 2441
 ```
+
+Временный debug-вход в офлайн-модель пропускает сборку Якоря и не расходует
+резонансную ячейку:
+
+```powershell
+python tools/second_map_spike.py init dist/second-map-spike/preview-state.json `
+  --old-stars 80 --old-sectors 19 --cells 0 --seed 2441
+python tools/second_map_spike.py debug-open-second-home `
+  dist/second-map-spike/preview-state.json
+```
+
+Это пока не игровая UI-кнопка: native multi-galaxy остаётся отключён, поэтому
+игровой smoke-мод не может честно открыть отсутствующий объект второй карты.
 
 ## Сборка безопасного engine-adapter
 

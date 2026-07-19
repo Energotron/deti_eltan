@@ -5,6 +5,7 @@ from pathlib import Path
 
 from tools.second_map_spike import (
     EARLY_STORY_NODES,
+    MISSION_BY_ID,
     REQUIRED_NODES,
     SECTOR_ARCHETYPES,
     SimulatedCrash,
@@ -13,8 +14,11 @@ from tools.second_map_spike import (
     available_sector_maps,
     begin_transit,
     complete_story_target,
+    complete_current_mission,
     create_state,
     current_story_target,
+    current_mission,
+    debug_open_second_home,
     purchase_sector_map,
     recover_transit,
     run_demo,
@@ -46,6 +50,30 @@ class SecondMapSpikeTests(unittest.TestCase):
         self.assertEqual(state["maps"]["OLD_ARM"]["sector_count"], 19)
         self.assertEqual(state["maps"]["SECOND_HOME"]["sector_count"], 19)
         self.assertEqual(set(state["maps"]["SECOND_HOME"]["required_nodes"]), set(REQUIRED_NODES))
+
+    def test_debug_entrance_opens_second_home_without_anchor_quest_or_cell_cost(self):
+        state = create_state(80, 0, 2441, old_sector_count=19)
+        self.store.save(state)
+        state = debug_open_second_home(self.store)
+        self.assertEqual(state["current_arm"], "SECOND_HOME")
+        self.assertEqual(state["cargo"]["CE_Item_ResonanceCell"], 0)
+        self.assertEqual(
+            sum(event["type"] == "CE_DEBUG_SECOND_HOME_OPENED" for event in state["history"]),
+            1,
+        )
+        self.assertTrue(all(
+            branch["status"] == "TRACKING"
+            for branch in state["dominator_invasions"].values()
+        ))
+        state = debug_open_second_home(self.store)
+        self.assertEqual(
+            sum(event["type"] == "CE_DEBUG_SECOND_HOME_OPENED" for event in state["history"]),
+            1,
+        )
+        self.assertEqual(
+            sum(event["type"] == "CE_TRANSIT_COMPLETE" for event in state["history"]),
+            0,
+        )
 
     def test_recovery_after_every_persisted_phase_is_idempotent(self):
         for phase in ("PREPARED", "DEBITED", "SWITCHED"):
@@ -463,6 +491,30 @@ class SecondMapSpikeTests(unittest.TestCase):
             current_story_target(loaded)["story_node_id"],
             left_order[4],
         )
+
+    def test_mission_deck_is_randomized_but_preserves_every_prerequisite(self):
+        left = create_state(80, 5, 2441, old_sector_count=19)
+        right = create_state(80, 5, 2442, old_sector_count=19)
+        left_order = left["missions"]["order"]
+        right_order = right["missions"]["order"]
+        self.assertNotEqual(left_order, right_order)
+        self.assertEqual(left_order[0], "CE-P00")
+        positions = {mission_id: index for index, mission_id in enumerate(left_order)}
+        for mission_id, mission in MISSION_BY_ID.items():
+            self.assertTrue(all(
+                positions[requirement] < positions[mission_id]
+                for requirement in mission.get("prerequisites", ())
+            ))
+
+        with self.assertRaises(StateError):
+            complete_current_mission(left, left_order[1])
+        for mission_id in left_order[:5]:
+            self.assertEqual(current_mission(left)["mission_id"], mission_id)
+            complete_current_mission(left, mission_id)
+        self.store.save(left)
+        loaded = self.store.load()
+        self.assertEqual(loaded["missions"], left["missions"])
+        self.assertEqual(current_mission(loaded)["mission_id"], left_order[5])
 
     def test_first_story_nodes_are_open_and_later_nodes_start_hidden(self):
         state = create_state(80, 5, 2441, old_sector_count=19)

@@ -39,6 +39,16 @@ def main():
         for req in m.get('prerequisites',[]):
             if req not in mids:
                 raise SystemExit(f"unknown mission prerequisite {req} in {m['id']}")
+    unresolved={mission['id']: set(mission.get('prerequisites',[])) for mission in missions}
+    resolved=set()
+    while unresolved:
+        available={mission_id for mission_id,requirements in unresolved.items()
+                   if requirements<=resolved}
+        if not available:
+            raise SystemExit('mission prerequisite graph contains a cycle')
+        resolved|=available
+        for mission_id in available:
+            del unresolved[mission_id]
     for v in variables:
         if v['type']=='int' and not v['min'] <= v['default'] <= v['max']:
             raise SystemExit(f"bad range {v['id']}")
