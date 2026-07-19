@@ -301,6 +301,22 @@ class SecondMapSpikeTests(unittest.TestCase):
             [event for event in daily["history"] if "ARRIVE" in event["type"]],
         )
 
+    def test_dominator_footholds_are_randomized_by_seed_and_never_overlap(self):
+        locations_by_seed = []
+        for seed in (2441, 2442):
+            state = create_state(80, 5, seed, old_sector_count=19)
+            self.store.save(state)
+            state = begin_transit(self.store)
+            simulate_days(state, 30)
+            locations = {
+                series: tuple(branch["converted_system_ids"])
+                for series, branch in state["dominator_invasions"].items()
+            }
+            flattened = [system_id for ids in locations.values() for system_id in ids]
+            self.assertEqual(len(flattened), len(set(flattened)))
+            locations_by_seed.append(locations)
+        self.assertNotEqual(locations_by_seed[0], locations_by_seed[1])
+
     def test_each_eliminated_boss_forbids_only_its_own_series(self):
         controllers_by_series = {
             "BLAZER": "CE_DOMINATOR_BLAZEROIDS",
