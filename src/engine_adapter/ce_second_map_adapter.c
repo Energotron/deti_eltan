@@ -636,6 +636,14 @@ uint32_t CE_CALL CEAdapterCreateAndEnterSecondGalaxy(
         (const void *)(uintptr_t)(galaxy_ptr + 0x50u), 0x10u);
     memcpy((void *)(uintptr_t)(second + 0x188u),
         (const void *)(uintptr_t)(galaxy_ptr + 0x188u), 0x27u);
+    /* CE_RVA_TGALAXY_GENERATE_STARS (disassembled from the installed exe)
+       reads its star-count target from [self+0x160] and `jle`-skips the
+       whole generation loop when it is <= 0. The raw Delphi constructor
+       call never sets it, so the field is zero on a synthetic instance;
+       copy the real galaxy's target so the second arm generates the same
+       number of stars. */
+    memcpy((void *)(uintptr_t)(second + 0x160u),
+        (const void *)(uintptr_t)(galaxy_ptr + 0x160u), 0x4u);
     *(uint32_t *)(uintptr_t)(second + 0x1d4u) = second_seed;
 
     InterlockedExchange(&g_ce_old_galaxy_ptr, (LONG)galaxy_ptr);
@@ -650,7 +658,11 @@ uint32_t CE_CALL CEAdapterCreateAndEnterSecondGalaxy(
     ce_write_native_stage(3u, 0u);
     ce_call_delphi_method_byte(second, player_race,
         module_base + CE_RVA_TGALAXY_GENERATE_STARS);
-    star_list = *(uint32_t *)(uintptr_t)(second + 0x2cu);
+    /* GenerateStars clears and fills the list at [self+0x164] (a TList
+       subclass: Clear() via its vtable, Add() per created star), not the
+       field at +0x2c the previous ABI 8 build read back from; +0x2c is a
+       different, unrelated pointer and always read back as empty. */
+    star_list = *(uint32_t *)(uintptr_t)(second + 0x164u);
     if (ce_region_has_access((const void *)(uintptr_t)star_list, 12u, 0)) {
         star_count = *(uint32_t *)(uintptr_t)(star_list + 8u);
     }
@@ -662,7 +674,10 @@ uint32_t CE_CALL CEAdapterCreateAndEnterSecondGalaxy(
         InterlockedExchange(&g_ce_native_switch_lock, 0);
         return 1;
     }
-    InterlockedExchange(&g_ce_second_generation_status, 3);
+    /* Leave status at 0 (not a permanent 3) so the next day-skip retries
+       instead of going silent forever; the failed `second` instance is
+       abandoned (small leak, acceptable for this dev-only smoke module). */
+    InterlockedExchange(&g_ce_second_generation_status, 0);
     ce_write_native_stage(5u, 0u);
     InterlockedExchange(&g_ce_native_switch_lock, 0);
     return 0;
