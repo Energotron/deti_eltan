@@ -60,6 +60,7 @@ CE_EXPORT uint32_t CE_CALL CEAdapterSecondGalaxyStatus(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterEnterReadySecondGalaxy(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterReturnToOldGalaxy(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterActiveArm(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterAbandonEmptySecondGalaxy(uint32_t galaxy_ptr);
 
 #ifdef __cplusplus
 }

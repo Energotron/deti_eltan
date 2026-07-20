@@ -786,3 +786,35 @@ uint32_t CE_CALL CEAdapterReturnToOldGalaxy(uint32_t galaxy_ptr) {
 uint32_t CE_CALL CEAdapterActiveArm(void) {
     return (uint32_t)InterlockedCompareExchange(&g_ce_active_arm, 0, 0);
 }
+
+/* GenerateStars alone leaves a TGalaxy missing everything the engine's own
+   post-generation bootstrap fills in (name assignment, sectors, economy),
+   so an entered-but-empty second galaxy will never become non-empty on a
+   later day. Without this, status stays at 2 forever and CE_MapSmoke's Turn
+   code re-enters/re-returns the same broken instance every single day-skip
+   for the rest of the session -- repeatedly flipping the live engine's
+   Galaxy slot in place, which is the likely cause of the save failure seen
+   after this happened once. Mark the attempt terminal instead of retrying. */
+uint32_t CE_CALL CEAdapterAbandonEmptySecondGalaxy(uint32_t galaxy_ptr) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t class_ref;
+    uint32_t old_galaxy;
+    uint32_t second_galaxy;
+
+    if (InterlockedCompareExchange(&g_ce_native_switch_lock, 1, 0) != 0) return 0;
+    second_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
+    old_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_old_galaxy_ptr, 0, 0);
+    if (second_galaxy == 0 || old_galaxy == 0 || galaxy_ptr != second_galaxy ||
+        !ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &class_ref)) {
+        InterlockedExchange(&g_ce_native_switch_lock, 0);
+        return 0;
+    }
+    *galaxy_slot = old_galaxy;
+    InterlockedExchange(&g_ce_active_arm, 0);
+    InterlockedExchange(&g_ce_second_galaxy_ptr, 0);
+    InterlockedExchange(&g_ce_second_generation_status, 4);
+    InterlockedExchange(&g_ce_native_switch_lock, 0);
+    return 1;
+}

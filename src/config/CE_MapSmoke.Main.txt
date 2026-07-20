@@ -39,6 +39,7 @@ Data ^{
             CEAdapterReturnToOldGalaxy=dword,CEAdapterReturnToOldGalaxy,dword
             CEAdapterActiveArm=dword,CEAdapterActiveArm
             CEAdapterDumpGalaxyWords=dword,CEAdapterDumpGalaxyWords,dword,dword
+            CEAdapterAbandonEmptySecondGalaxy=dword,CEAdapterAbandonEmptySecondGalaxy,dword
         }
         CE_MapSmoke=CESecondMapAdapter
     }

@@ -31,6 +31,7 @@ Data {
             CEAdapterReturnToOldGalaxy=dword,CEAdapterReturnToOldGalaxy,dword
             CEAdapterActiveArm=dword,CEAdapterActiveArm
             CEAdapterDumpGalaxyWords=dword,CEAdapterDumpGalaxyWords,dword,dword
+            CEAdapterAbandonEmptySecondGalaxy=dword,CEAdapterAbandonEmptySecondGalaxy,dword
         }
         Mod_CE_MapBridge=CESecondMapAdapter
     }
