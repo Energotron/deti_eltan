@@ -21,6 +21,7 @@ int main(int argc, char **argv) {
     ce_noarg_fn capabilities;
     ce_noarg_fn get_bound;
     ce_noarg_fn supports_multi;
+    ce_noarg_fn active_arm;
     ce_dword_fn bind;
     ce_dword_fn echo;
     typedef uint32_t (__cdecl *ce_two_dword_fn)(uint32_t, uint32_t);
@@ -29,6 +30,11 @@ int main(int argc, char **argv) {
     ce_two_dword_fn probe;
     ce_two_dword_fn sample_layout;
     ce_three_dword_fn observe_layout;
+    ce_dword_fn probe_engine_galaxy;
+    ce_three_dword_fn create_second_galaxy;
+    ce_dword_fn return_old_galaxy;
+    ce_noarg_fn second_galaxy_status;
+    ce_dword_fn enter_ready_second_galaxy;
     ce_noarg_fn fingerprint_hash;
     ce_noarg_fn fingerprint_bytes;
     ce_dword_fn layout_block_hash;
@@ -75,8 +81,19 @@ int main(int argc, char **argv) {
     layout_pointer_high = (ce_noarg_fn)require_export(module, "CEAdapterGetLayoutReadablePointerMaskHigh");
     layout_sample_bytes = (ce_noarg_fn)require_export(module, "CEAdapterGetLayoutSampleBytes");
     supports_multi = (ce_noarg_fn)require_export(module, "CEAdapterSupportsNativeMultiGalaxy");
+    probe_engine_galaxy = (ce_dword_fn)require_export(module, "CEAdapterProbeEngineGalaxy");
+    create_second_galaxy = (ce_three_dword_fn)require_export(
+        module, "CEAdapterCreateAndEnterSecondGalaxy"
+    );
+    second_galaxy_status = (ce_noarg_fn)require_export(module, "CEAdapterSecondGalaxyStatus");
+    enter_ready_second_galaxy = (ce_dword_fn)require_export(module, "CEAdapterEnterReadySecondGalaxy");
+    return_old_galaxy = (ce_dword_fn)require_export(module, "CEAdapterReturnToOldGalaxy");
+    active_arm = (ce_noarg_fn)require_export(module, "CEAdapterActiveArm");
 
-    if (abi() != 6 || capabilities() != 497 || supports_multi() != 0) return 3;
+    if (abi() != 8 || capabilities() != 1009 || supports_multi() != 0) return 3;
+    if (probe_engine_galaxy(marker) != 0 || create_second_galaxy(marker, 1, 0) != 0 ||
+        second_galaxy_status() != 0 || enter_ready_second_galaxy(marker) != 0 ||
+        return_old_galaxy(marker) != 0 || active_arm() != 0) return 17;
     if (echo(marker) != marker || bind(0) != 0 || bind(marker) != 1) return 4;
     if (get_bound() != marker) return 5;
     if (run_smoke(0, 1128616787u) != 0 || run_smoke(marker, 1128616787u) != 1) return 6;
@@ -108,6 +125,6 @@ int main(int argc, char **argv) {
     if (observe_layout((uint32_t)(uintptr_t)sample.bytes, marker, 132) != 1 ||
         layout_observation_count() != 33) return 15;
     FreeLibrary(module);
-    printf("OK: ABI=6 pointer-normalized layout passed; native multi-galaxy remains disabled\n");
+    printf("OK: ABI=8 sync engine-galaxy generator exported; host remains safely disabled\n");
     return 0;
 }

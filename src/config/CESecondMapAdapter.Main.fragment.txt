@@ -24,6 +24,12 @@ Data {
             CEAdapterGetLayoutReadablePointerMaskHigh=dword,CEAdapterGetLayoutReadablePointerMaskHigh
             CEAdapterGetLayoutSampleBytes=dword,CEAdapterGetLayoutSampleBytes
             CEAdapterSupportsNativeMultiGalaxy=dword,CEAdapterSupportsNativeMultiGalaxy
+            CEAdapterProbeEngineGalaxy=dword,CEAdapterProbeEngineGalaxy,dword
+            CEAdapterCreateAndEnterSecondGalaxy=dword,CEAdapterCreateAndEnterSecondGalaxy,dword,dword,dword
+            CEAdapterSecondGalaxyStatus=dword,CEAdapterSecondGalaxyStatus
+            CEAdapterEnterReadySecondGalaxy=dword,CEAdapterEnterReadySecondGalaxy,dword
+            CEAdapterReturnToOldGalaxy=dword,CEAdapterReturnToOldGalaxy,dword
+            CEAdapterActiveArm=dword,CEAdapterActiveArm
         }
         Mod_CE_MapBridge=CESecondMapAdapter
     }

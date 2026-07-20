@@ -16,7 +16,7 @@ extern "C" {
 #endif
 
 enum {
-    CE_ADAPTER_ABI_VERSION = 6,
+    CE_ADAPTER_ABI_VERSION = 8,
     CE_CAP_BIND_GALAXY_POINTER = 1u << 0,
     CE_CAP_NATIVE_MULTI_GALAXY = 1u << 1,
     CE_CAP_NATIVE_SWITCH = 1u << 2,
@@ -25,7 +25,8 @@ enum {
     CE_CAP_READONLY_GALAXY_FINGERPRINT = 1u << 5,
     CE_CAP_READONLY_GALAXY_LAYOUT_SAMPLE = 1u << 6,
     CE_CAP_READONLY_GALAXY_LAYOUT_LATEST = 1u << 7,
-    CE_CAP_POINTER_NORMALIZED_LAYOUT_HASH = 1u << 8
+    CE_CAP_POINTER_NORMALIZED_LAYOUT_HASH = 1u << 8,
+    CE_CAP_EXPERIMENTAL_ENGINE_GALAXY = 1u << 9
 };
 
 CE_EXPORT uint32_t CE_CALL CEAdapterAbiVersion(void);
@@ -50,6 +51,14 @@ CE_EXPORT uint32_t CE_CALL CEAdapterGetLayoutReadablePointerMaskLow(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterGetLayoutReadablePointerMaskHigh(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterGetLayoutSampleBytes(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterSupportsNativeMultiGalaxy(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterProbeEngineGalaxy(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterCreateAndEnterSecondGalaxy(
+    uint32_t galaxy_ptr, uint32_t second_seed, uint32_t player_race
+);
+CE_EXPORT uint32_t CE_CALL CEAdapterSecondGalaxyStatus(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterEnterReadySecondGalaxy(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterReturnToOldGalaxy(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterActiveArm(void);
 
 #ifdef __cplusplus
 }

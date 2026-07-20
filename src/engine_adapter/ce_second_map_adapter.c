@@ -22,6 +22,22 @@ static volatile LONG g_ce_layout_observation_count = 0;
 static volatile LONG g_ce_layout_observation_lock = 0;
 static volatile LONG g_ce_layout_last_observation_tag = 0;
 static volatile LONG g_ce_layout_output_latest = 0;
+static volatile LONG g_ce_old_galaxy_ptr = 0;
+static volatile LONG g_ce_second_galaxy_ptr = 0;
+static volatile LONG g_ce_active_arm = 0;
+static volatile LONG g_ce_native_switch_lock = 0;
+static volatile LONG g_ce_second_generation_status = 0;
+
+/* Steam build 20648864 / Rangers.exe 2.1.2500.0 only. */
+enum {
+    CE_RANGERS_TIMESTAMP = 0x68eccc46u,
+    CE_RANGERS_IMAGE_SIZE = 0x004d1000u,
+    CE_RVA_GALAXY_IMPORT_CELL = 0x0048263cu,
+    CE_RVA_TGALAXY_CLASS_CELL = 0x00438d90u,
+    CE_RVA_TGALAXY_CONSTRUCTOR = 0x00439198u,
+    CE_RVA_TGALAXY_INITIALIZE = 0x0043a034u,
+    CE_RVA_TGALAXY_GENERATE_STARS = 0x0044ff74u
+};
 
 uint32_t CE_CALL CEAdapterAbiVersion(void) {
     return CE_ADAPTER_ABI_VERSION;
@@ -32,7 +48,8 @@ uint32_t CE_CALL CEAdapterCapabilities(void) {
         CE_CAP_READONLY_GALAXY_FINGERPRINT |
         CE_CAP_READONLY_GALAXY_LAYOUT_SAMPLE |
         CE_CAP_READONLY_GALAXY_LAYOUT_LATEST |
-        CE_CAP_POINTER_NORMALIZED_LAYOUT_HASH;
+        CE_CAP_POINTER_NORMALIZED_LAYOUT_HASH |
+        CE_CAP_EXPERIMENTAL_ENGINE_GALAXY;
 }
 
 uint32_t CE_CALL CEAdapterBindGalaxy(uint32_t galaxy_ptr) {
@@ -417,5 +434,288 @@ uint32_t CE_CALL CEAdapterGetLayoutSampleBytes(void) {
 }
 
 uint32_t CE_CALL CEAdapterSupportsNativeMultiGalaxy(void) {
+    return InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0) != 0 ? 1u : 0u;
+}
+
+static int ce_region_has_access(const void *pointer, size_t bytes, int need_write) {
+    MEMORY_BASIC_INFORMATION memory;
+    uintptr_t address = (uintptr_t)pointer;
+    uintptr_t region_start;
+    uintptr_t region_end;
+    DWORD base;
+
+    if (pointer == NULL || bytes == 0 ||
+        VirtualQuery(pointer, &memory, sizeof(memory)) != sizeof(memory)) {
+        return 0;
+    }
+    region_start = (uintptr_t)memory.BaseAddress;
+    region_end = region_start + memory.RegionSize;
+    base = memory.Protect & 0xffu;
+    if (memory.State != MEM_COMMIT || (memory.Protect & PAGE_GUARD) != 0 ||
+        address < region_start || address > region_end || bytes > region_end - address) {
+        return 0;
+    }
+    if (need_write) {
+        return base == PAGE_READWRITE || base == PAGE_WRITECOPY ||
+            base == PAGE_EXECUTE_READWRITE || base == PAGE_EXECUTE_WRITECOPY;
+    }
+    return ce_is_readable_protection(memory.Protect);
+}
+
+static int ce_resolve_engine_galaxy(
+    uint32_t galaxy_ptr,
+    uintptr_t *module_base_out,
+    uint32_t **galaxy_slot_out,
+    uint32_t *class_ref_out
+) {
+    static const unsigned char constructor_signature[] = {
+        0x55, 0x8b, 0xec, 0xb9, 0x0a, 0x00, 0x00, 0x00,
+        0x6a, 0x00, 0x6a, 0x00, 0x49, 0x75, 0xf9, 0x51
+    };
+    static const unsigned char initializer_signature[] = {
+        0x55, 0x8b, 0xec, 0x83, 0xc4, 0xf8, 0x89, 0x45,
+        0xfc, 0x8b, 0x45, 0xfc, 0x33, 0xd2, 0x89, 0x50
+    };
+    static const unsigned char generator_signature[] = {
+        0x55, 0x8b, 0xec, 0x81, 0xc4, 0x6c, 0xfe, 0xff,
+        0xff, 0x53, 0x56, 0x57, 0x33, 0xc9, 0x89, 0x4d
+    };
+    HMODULE module = GetModuleHandleA(NULL);
+    const IMAGE_DOS_HEADER *dos;
+    const IMAGE_NT_HEADERS32 *nt;
+    uintptr_t base;
+    uint32_t **import_cell;
+    uint32_t *slot;
+    uint32_t class_ref;
+
+    if (module == NULL || galaxy_ptr == 0) return 0;
+    base = (uintptr_t)module;
+    dos = (const IMAGE_DOS_HEADER *)base;
+    if (!ce_region_has_access(dos, sizeof(*dos), 0) || dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        return 0;
+    }
+    nt = (const IMAGE_NT_HEADERS32 *)(base + (uintptr_t)dos->e_lfanew);
+    if (!ce_region_has_access(nt, sizeof(*nt), 0) || nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->FileHeader.Machine != IMAGE_FILE_MACHINE_I386 ||
+        nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP ||
+        nt->OptionalHeader.SizeOfImage != CE_RANGERS_IMAGE_SIZE) {
+        return 0;
+    }
+    if (memcmp((const void *)(base + CE_RVA_TGALAXY_CONSTRUCTOR),
+            constructor_signature, sizeof(constructor_signature)) != 0 ||
+        memcmp((const void *)(base + CE_RVA_TGALAXY_INITIALIZE),
+            initializer_signature, sizeof(initializer_signature)) != 0 ||
+        memcmp((const void *)(base + CE_RVA_TGALAXY_GENERATE_STARS),
+            generator_signature, sizeof(generator_signature)) != 0) {
+        return 0;
+    }
+    import_cell = (uint32_t **)(base + CE_RVA_GALAXY_IMPORT_CELL);
+    if (!ce_region_has_access(import_cell, sizeof(*import_cell), 0)) return 0;
+    slot = *import_cell;
+    if (!ce_region_has_access(slot, sizeof(*slot), 1) || *slot != galaxy_ptr ||
+        !ce_region_has_access((const void *)(uintptr_t)galaxy_ptr, 0x1dcu, 0)) {
+        return 0;
+    }
+    class_ref = *(const uint32_t *)(base + CE_RVA_TGALAXY_CLASS_CELL);
+    if (!ce_region_has_access((const void *)(uintptr_t)class_ref, sizeof(uint32_t), 0) ||
+        *(const uint32_t *)(uintptr_t)galaxy_ptr != class_ref) {
+        return 0;
+    }
+    *module_base_out = base;
+    *galaxy_slot_out = slot;
+    *class_ref_out = class_ref;
+    return 1;
+}
+
+static uint32_t ce_call_delphi_constructor(uint32_t class_ref, uintptr_t function_address) {
+    uint32_t result;
+    __asm__ volatile(
+        "movb $1, %%dl\n\t"
+        "movl %1, %%eax\n\t"
+        "call *%2\n\t"
+        "movl %%eax, %0"
+        : "=r"(result)
+        : "r"(class_ref), "r"(function_address)
+        : "eax", "ecx", "edx", "memory"
+    );
+    return result;
+}
+
+static void ce_call_delphi_method(uint32_t self, uintptr_t function_address) {
+    __asm__ volatile(
+        "movl %0, %%eax\n\t"
+        "call *%1"
+        :
+        : "r"(self), "r"(function_address)
+        : "eax", "ecx", "edx", "memory"
+    );
+}
+
+static void ce_call_delphi_method_byte(
+    uint32_t self, uint32_t byte_argument, uintptr_t function_address
+) {
+    __asm__ volatile(
+        "movb %b1, %%dl\n\t"
+        "movl %0, %%eax\n\t"
+        "call *%2"
+        :
+        : "r"(self), "q"(byte_argument), "r"(function_address)
+        : "eax", "ecx", "edx", "memory"
+    );
+}
+
+static void ce_write_native_stage(uint32_t stage, uint32_t star_count) {
+    char temp_path[MAX_PATH];
+    char marker_dir[MAX_PATH];
+    char marker_path[MAX_PATH];
+    char payload[160];
+    HANDLE file;
+    DWORD written = 0;
+    int payload_size;
+
+    if (GetTempPathA(MAX_PATH, temp_path) == 0) return;
+    if (snprintf(marker_dir, sizeof(marker_dir), "%sChildrenOfEltan", temp_path) < 0) return;
+    if (!CreateDirectoryA(marker_dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return;
+    if (snprintf(marker_path, sizeof(marker_path), "%s\\native-second-galaxy.json", marker_dir) < 0) return;
+    payload_size = snprintf(payload, sizeof(payload),
+        "{\"abi\":%u,\"stage\":%u,\"stars\":%u}\r\n",
+        CEAdapterAbiVersion(), stage, star_count);
+    if (payload_size <= 0 || (size_t)payload_size >= sizeof(payload)) return;
+    file = CreateFileA(marker_path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return;
+    WriteFile(file, payload, (DWORD)payload_size, &written, NULL);
+    FlushFileBuffers(file);
+    CloseHandle(file);
+}
+
+uint32_t CE_CALL CEAdapterProbeEngineGalaxy(uint32_t galaxy_ptr) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t class_ref;
+    return ce_resolve_engine_galaxy(
+        galaxy_ptr, &module_base, &galaxy_slot, &class_ref
+    ) ? 1u : 0u;
+}
+
+uint32_t CE_CALL CEAdapterCreateAndEnterSecondGalaxy(
+    uint32_t galaxy_ptr, uint32_t second_seed, uint32_t player_race
+) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t class_ref;
+    uint32_t second;
+    uint32_t star_count = 0;
+    uint32_t star_list;
+
+    if (second_seed == 0 || player_race > 7u ||
+        InterlockedCompareExchange(&g_ce_native_switch_lock, 1, 0) != 0) {
+        return 0;
+    }
+    if (!ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &class_ref)) {
+        InterlockedExchange(&g_ce_native_switch_lock, 0);
+        return 0;
+    }
+    second = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
+    if (second != 0) {
+        InterlockedExchange(&g_ce_native_switch_lock, 0);
+        return 2u;
+    }
+
+    second = ce_call_delphi_constructor(
+        class_ref, module_base + CE_RVA_TGALAXY_CONSTRUCTOR
+    );
+    if (second == 0 || !ce_region_has_access((const void *)(uintptr_t)second, 0x1dcu, 1) ||
+        *(const uint32_t *)(uintptr_t)second != class_ref) {
+        InterlockedExchange(&g_ce_native_switch_lock, 0);
+        return 0;
+    }
+
+    memcpy((void *)(uintptr_t)(second + 0x50u),
+        (const void *)(uintptr_t)(galaxy_ptr + 0x50u), 0x10u);
+    memcpy((void *)(uintptr_t)(second + 0x188u),
+        (const void *)(uintptr_t)(galaxy_ptr + 0x188u), 0x27u);
+    *(uint32_t *)(uintptr_t)(second + 0x1d4u) = second_seed;
+
+    InterlockedExchange(&g_ce_old_galaxy_ptr, (LONG)galaxy_ptr);
+    InterlockedExchange(&g_ce_second_generation_status, 1);
+    ce_write_native_stage(1u, 0u);
+
+    /* Runs synchronously on the caller (engine main) thread: the engine's
+       Initialize/GenerateStars are not thread-safe, and the global Galaxy
+       slot must only be swapped while no other engine code can observe it. */
+    *galaxy_slot = second;
+    ce_call_delphi_method(second, module_base + CE_RVA_TGALAXY_INITIALIZE);
+    ce_write_native_stage(3u, 0u);
+    ce_call_delphi_method_byte(second, player_race,
+        module_base + CE_RVA_TGALAXY_GENERATE_STARS);
+    star_list = *(uint32_t *)(uintptr_t)(second + 0x2cu);
+    if (ce_region_has_access((const void *)(uintptr_t)star_list, 12u, 0)) {
+        star_count = *(uint32_t *)(uintptr_t)(star_list + 8u);
+    }
+    *galaxy_slot = galaxy_ptr;
+    if (star_count != 0u) {
+        InterlockedExchange(&g_ce_second_galaxy_ptr, (LONG)second);
+        InterlockedExchange(&g_ce_second_generation_status, 2);
+        ce_write_native_stage(4u, star_count);
+        InterlockedExchange(&g_ce_native_switch_lock, 0);
+        return 1;
+    }
+    InterlockedExchange(&g_ce_second_generation_status, 3);
+    ce_write_native_stage(5u, 0u);
+    InterlockedExchange(&g_ce_native_switch_lock, 0);
     return 0;
+}
+
+uint32_t CE_CALL CEAdapterSecondGalaxyStatus(void) {
+    return (uint32_t)InterlockedCompareExchange(&g_ce_second_generation_status, 0, 0);
+}
+
+uint32_t CE_CALL CEAdapterEnterReadySecondGalaxy(uint32_t galaxy_ptr) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t class_ref;
+    uint32_t old_galaxy;
+    uint32_t second_galaxy;
+
+    if (InterlockedCompareExchange(&g_ce_second_generation_status, 0, 0) != 2 ||
+        InterlockedCompareExchange(&g_ce_native_switch_lock, 1, 0) != 0) return 0;
+    old_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_old_galaxy_ptr, 0, 0);
+    second_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
+    if (galaxy_ptr != old_galaxy || second_galaxy == 0 ||
+        !ce_resolve_engine_galaxy(galaxy_ptr, &module_base, &galaxy_slot, &class_ref)) {
+        InterlockedExchange(&g_ce_native_switch_lock, 0);
+        return 0;
+    }
+    *galaxy_slot = second_galaxy;
+    InterlockedExchange(&g_ce_active_arm, 1);
+    InterlockedExchange(&g_ce_native_switch_lock, 0);
+    return 1;
+}
+
+uint32_t CE_CALL CEAdapterReturnToOldGalaxy(uint32_t galaxy_ptr) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t class_ref;
+    uint32_t old_galaxy;
+    uint32_t second_galaxy;
+
+    if (InterlockedCompareExchange(&g_ce_native_switch_lock, 1, 0) != 0) return 0;
+    second_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
+    old_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_old_galaxy_ptr, 0, 0);
+    if (second_galaxy == 0 || old_galaxy == 0 || galaxy_ptr != second_galaxy ||
+        !ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &class_ref)) {
+        InterlockedExchange(&g_ce_native_switch_lock, 0);
+        return 0;
+    }
+    *galaxy_slot = old_galaxy;
+    InterlockedExchange(&g_ce_active_arm, 0);
+    InterlockedExchange(&g_ce_native_switch_lock, 0);
+    return 1;
+}
+
+uint32_t CE_CALL CEAdapterActiveArm(void) {
+    return (uint32_t)InterlockedCompareExchange(&g_ce_active_arm, 0, 0);
 }
