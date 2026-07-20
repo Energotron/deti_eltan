@@ -787,6 +787,56 @@ uint32_t CE_CALL CEAdapterActiveArm(void) {
     return (uint32_t)InterlockedCompareExchange(&g_ce_active_arm, 0, 0);
 }
 
+/* RScript's own GalaxyStars()/GalaxyStar() read a count the post-generation
+   orchestrator (name assignment, sectors, economy -- not yet reproduced
+   here) fills in, so they report 0 for a galaxy GenerateStars alone built.
+   The list GenerateStars actually Clear()s/Add()s into at [self+0x164] is a
+   plain Delphi TList (FList ptr @+4, FCount @+8) and its entries are real
+   star-class instances (built via the same class GenerateStars uses for
+   every star it creates), so read that list directly instead of going
+   through the not-yet-populated engine-level accessors. */
+static uint32_t ce_read_generated_star_list(
+    uint32_t galaxy_ptr, uint32_t *list_out, uint32_t *count_out
+) {
+    uint32_t star_list;
+    uint32_t count;
+
+    if (galaxy_ptr == 0 ||
+        !ce_region_has_access((const void *)(uintptr_t)galaxy_ptr, 0x168u, 0)) {
+        return 0;
+    }
+    star_list = *(const uint32_t *)(uintptr_t)(galaxy_ptr + 0x164u);
+    if (!ce_region_has_access((const void *)(uintptr_t)star_list, 12u, 0)) {
+        return 0;
+    }
+    count = *(const uint32_t *)(uintptr_t)(star_list + 8u);
+    *list_out = star_list;
+    *count_out = count;
+    return 1;
+}
+
+uint32_t CE_CALL CEAdapterGetGeneratedStarCount(uint32_t galaxy_ptr) {
+    uint32_t star_list;
+    uint32_t count;
+    if (!ce_read_generated_star_list(galaxy_ptr, &star_list, &count)) return 0;
+    return count;
+}
+
+uint32_t CE_CALL CEAdapterGetGeneratedStarByIndex(uint32_t galaxy_ptr, uint32_t index) {
+    uint32_t star_list;
+    uint32_t count;
+    uint32_t array_ptr;
+
+    if (!ce_read_generated_star_list(galaxy_ptr, &star_list, &count) || index >= count) {
+        return 0;
+    }
+    array_ptr = *(const uint32_t *)(uintptr_t)(star_list + 4u);
+    if (!ce_region_has_access((const void *)(uintptr_t)array_ptr, (index + 1u) * 4u, 0)) {
+        return 0;
+    }
+    return *(const uint32_t *)(uintptr_t)(array_ptr + index * 4u);
+}
+
 /* GenerateStars alone leaves a TGalaxy missing everything the engine's own
    post-generation bootstrap fills in (name assignment, sectors, economy),
    so an entered-but-empty second galaxy will never become non-empty on a

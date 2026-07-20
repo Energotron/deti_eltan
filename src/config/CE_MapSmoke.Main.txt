@@ -40,6 +40,8 @@ Data ^{
             CEAdapterActiveArm=dword,CEAdapterActiveArm
             CEAdapterDumpGalaxyWords=dword,CEAdapterDumpGalaxyWords,dword,dword
             CEAdapterAbandonEmptySecondGalaxy=dword,CEAdapterAbandonEmptySecondGalaxy,dword
+            CEAdapterGetGeneratedStarCount=dword,CEAdapterGetGeneratedStarCount,dword
+            CEAdapterGetGeneratedStarByIndex=dword,CEAdapterGetGeneratedStarByIndex,dword,dword
         }
         CE_MapSmoke=CESecondMapAdapter
     }
