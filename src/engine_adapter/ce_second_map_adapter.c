@@ -787,6 +787,20 @@ uint32_t CE_CALL CEAdapterActiveArm(void) {
     return (uint32_t)InterlockedCompareExchange(&g_ce_active_arm, 0, 0);
 }
 
+/* CEAdapterEnterReadySecondGalaxy (*galaxy_slot = second_galaxy, then back)
+   twice reproduced a Rangers.exe crash in TGalaxy.NextDay right after being
+   exercised in-game -- once after an empty-galaxy round trip, once even on
+   a fresh save on the very next day-skip. The cause is not understood yet
+   (TGalaxy.NextDay is not one of the three methods this adapter calls), so
+   CE_MapSmoke stops calling Enter/Return/Abandon entirely and only marks
+   the attempt terminal through this no-pointer-touching call: no engine
+   memory is written, nothing is switched, only the internal status flag
+   moves so the Turn code stops retrying. */
+uint32_t CE_CALL CEAdapterMarkSecondGalaxyEntryDisabled(void) {
+    InterlockedExchange(&g_ce_second_generation_status, 4);
+    return 1;
+}
+
 /* RScript's own GalaxyStars()/GalaxyStar() read a count the post-generation
    orchestrator (name assignment, sectors, economy -- not yet reproduced
    here) fills in, so they report 0 for a galaxy GenerateStars alone built.
