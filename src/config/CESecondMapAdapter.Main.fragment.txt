@@ -30,6 +30,7 @@ Data {
             CEAdapterEnterReadySecondGalaxy=dword,CEAdapterEnterReadySecondGalaxy,dword
             CEAdapterReturnToOldGalaxy=dword,CEAdapterReturnToOldGalaxy,dword
             CEAdapterActiveArm=dword,CEAdapterActiveArm
+            CEAdapterDumpGalaxyWords=dword,CEAdapterDumpGalaxyWords,dword,dword
         }
         Mod_CE_MapBridge=CESecondMapAdapter
     }

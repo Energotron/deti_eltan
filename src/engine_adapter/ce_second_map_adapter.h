@@ -51,6 +51,7 @@ CE_EXPORT uint32_t CE_CALL CEAdapterGetLayoutReadablePointerMaskLow(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterGetLayoutReadablePointerMaskHigh(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterGetLayoutSampleBytes(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterSupportsNativeMultiGalaxy(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterDumpGalaxyWords(uint32_t galaxy_ptr, uint32_t tag);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeEngineGalaxy(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterCreateAndEnterSecondGalaxy(
     uint32_t galaxy_ptr, uint32_t second_seed, uint32_t player_race

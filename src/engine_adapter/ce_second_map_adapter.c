@@ -589,6 +589,58 @@ static void ce_write_native_stage(uint32_t stage, uint32_t star_count) {
     CloseHandle(file);
 }
 
+/* Dev-only diagnostic: dumps raw dwords [0x00, 0x200) of galaxy_ptr so two
+   snapshots (a known-working real galaxy vs. the synthetic second one) can
+   be diffed offline to find which field GalaxyStars() actually reads. Not
+   part of the read-only fingerprint capability (that one intentionally
+   never emits raw values); this is throwaway spike tooling. */
+uint32_t CE_CALL CEAdapterDumpGalaxyWords(uint32_t galaxy_ptr, uint32_t tag) {
+    static const uint32_t dump_bytes = 0x200u;
+    char temp_path[MAX_PATH];
+    char marker_dir[MAX_PATH];
+    char marker_path[MAX_PATH];
+    char payload[4096];
+    int offset = 0;
+    int written_chars;
+    uint32_t index;
+    HANDLE file;
+    DWORD written = 0;
+
+    if (galaxy_ptr == 0 ||
+        !ce_region_has_access((const void *)(uintptr_t)galaxy_ptr, dump_bytes, 0)) {
+        return 0;
+    }
+    if (GetTempPathA(MAX_PATH, temp_path) == 0) return 0;
+    if (snprintf(marker_dir, sizeof(marker_dir), "%sChildrenOfEltan", temp_path) < 0) return 0;
+    if (!CreateDirectoryA(marker_dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return 0;
+    if (snprintf(marker_path, sizeof(marker_path), "%s\\galaxy-dump-%u.json", marker_dir, tag) < 0) {
+        return 0;
+    }
+    written_chars = snprintf(payload, sizeof(payload), "{\"abi\":%u,\"tag\":%u,\"words\":[",
+        CEAdapterAbiVersion(), tag);
+    if (written_chars <= 0) return 0;
+    offset = written_chars;
+    for (index = 0; index < dump_bytes / 4u; ++index) {
+        uint32_t value = *(const uint32_t *)(uintptr_t)(galaxy_ptr + index * 4u);
+        written_chars = snprintf(payload + offset, sizeof(payload) - (size_t)offset,
+            index == 0 ? "%u" : ",%u", value);
+        if (written_chars <= 0 || (size_t)(offset + written_chars) >= sizeof(payload)) return 0;
+        offset += written_chars;
+    }
+    written_chars = snprintf(payload + offset, sizeof(payload) - (size_t)offset, "]}\r\n");
+    if (written_chars <= 0 || (size_t)(offset + written_chars) >= sizeof(payload)) return 0;
+    offset += written_chars;
+    file = CreateFileA(marker_path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+    if (!WriteFile(file, payload, (DWORD)offset, &written, NULL) || !FlushFileBuffers(file)) {
+        CloseHandle(file);
+        return 0;
+    }
+    CloseHandle(file);
+    return written == (DWORD)offset ? 1u : 0u;
+}
+
 uint32_t CE_CALL CEAdapterProbeEngineGalaxy(uint32_t galaxy_ptr) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;
