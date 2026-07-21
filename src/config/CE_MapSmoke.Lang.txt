@@ -6,7 +6,7 @@ Script ^{
                 0=int ceGenerationStatus = ceStatus();
                 0=if(ceGenerationStatus!=2)
                 0 ~{
-                    0=Ether(6,'CE_Button_NotReady','РўРµСЃС‚ В«Р”РµС‚РµР№ Р­Р»СЊС‚Р°РЅВ»: РІС‚РѕСЂР°СЏ РіР°Р»Р°РєС‚РёРєР° РµС‰С‘ РЅРµ РіРѕС‚РѕРІР°, РїСЂРѕРїСѓСЃС‚РёС‚Рµ РґРµРЅСЊ.');
+                    0=Ether(6,'CE_Button_NotReady','Тест «Детей Эльтан»: вторая галактика ещё не готова, пропустите день.');
                 }
                 0 ~{
                     0=unknown ceCreateDest = ImportedFunction('CESecondMapAdapter','CEAdapterCreateSecondDestination');
@@ -16,25 +16,25 @@ Script ^{
                     0=int ceDestOk = ceCreateDest(GalaxyPtr());
                     0=if(ceDestOk==0)
                     0 ~{
-                        0=Ether(6,'CE_SecondHome_Fail','РўРµСЃС‚ В«Р”РµС‚РµР№ Р­Р»СЊС‚Р°РЅВ»: СЃРѕР·РґР°РЅРёРµ TCon РЅРµ СѓРґР°Р»РѕСЃСЊ.');
+                        0=Ether(6,'CE_SecondHome_Fail','Тест «Детей Эльтан»: создание TCon не удалось.');
                         0=ceDisable();
                     }
                     0 ~{
                         0=int ceNextDayOk = ceProbeNextDay(GalaxyPtr());
                         0=if(ceNextDayOk==0)
                         0 ~{
-                            0=Ether(6,'CE_NextDay_Fail','РўРµСЃС‚ В«Р”РµС‚РµР№ Р­Р»СЊС‚Р°РЅВ»: NextDay РІС‚РѕСЂРѕР№ РіР°Р»Р°РєС‚РёРєРё СѓРїР°Р».');
+                            0=Ether(6,'CE_NextDay_Fail','Тест «Детей Эльтан»: NextDay второй галактики упал.');
                             0=ceDisable();
                         }
                         0 ~{
                             0=int ceEnterOk = ceEnterReady(GalaxyPtr());
                             0=if(ceEnterOk==0)
                             0 ~{
-                                0=Ether(6,'CE_SecondHome_Fail','РўРµСЃС‚ В«Р”РµС‚РµР№ Р­Р»СЊС‚Р°РЅВ»: РїРµСЂРµС…РѕРґ РЅРµ СѓРґР°Р»СЃСЏ.');
+                                0=Ether(6,'CE_SecondHome_Fail','Тест «Детей Эльтан»: переход не удался.');
                                 0=ceDisable();
                             }
                             0 ~{
-                                0=Ether(6,'CE_SecondHome_Enter','РўРµСЃС‚ В«Р”РµС‚РµР№ Р­Р»СЊС‚Р°РЅВ»: РїРµСЂРµС…РѕРґ РІРѕ РІС‚РѕСЂСѓСЋ РіР°Р»Р°РєС‚РёРєСѓ РІС‹РїРѕР»РЅРµРЅ!');
+                                0=Ether(6,'CE_SecondHome_Enter','Тест «Детей Эльтан»: переход во вторую галактику выполнен!');
                             }
                         }
                     }
