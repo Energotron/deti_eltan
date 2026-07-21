@@ -46,7 +46,7 @@
         },
         {
           "Type": "Top", "Name": "Adapter smoke", "Pos.x": 240, "Pos.y": 80,
-          "Parent": -1, "#": 6, "Total.Lines": 36, "Code.Type": "Turn",
+          "Parent": -1, "#": 6, "Total.Lines": 45, "Code.Type": "Turn",
           "Code": [
             "unknown ceSmoke = ImportedFunction('CESecondMapAdapter','CEAdapterRunSmoke');",
             "ceSmoke(GalaxyPtr(),1128616787);",
@@ -79,9 +79,18 @@
             "        }",
             "    } else if(ceGenerationStatus==2)",
             "    {",
+            "        unknown ceCreateDest = ImportedFunction('CESecondMapAdapter','CEAdapterCreateSecondDestination');",
+            "        unknown ceProbeNextDay = ImportedFunction('CESecondMapAdapter','CEAdapterProbeNextDayOnSecondGalaxy');",
             "        unknown ceDisable = ImportedFunction('CESecondMapAdapter','CEAdapterMarkSecondGalaxyEntryDisabled');",
+            "        if(ceCreateDest(GalaxyPtr())>0)",
+            "            Ether(6,'CE_SecondHome_Ready','Тест «Детей Эльтан»: точка входа TCon создана без крэша. Смотри con-build-progress.log.');",
+            "        else",
+            "            Ether(6,'CE_SecondHome_Fail','Тест «Детей Эльтан»: создание TCon не удалось. Смотри con-build-progress.log.');",
+            "        if(ceProbeNextDay(GalaxyPtr())>0)",
+            "            Ether(6,'CE_NextDay_Ready','Тест «Детей Эльтан»: NextDay второй галактики отработал без крэша.');",
+            "        else",
+            "            Ether(6,'CE_NextDay_Fail','Тест «Детей Эльтан»: NextDay второй галактики упал, см. con-build-progress.log.');",
             "        ceDisable();",
-            "        Ether(6,'CE_SecondHome_Fail','Тест «Детей Эльтан»: см. con-vmt-dump.json для анализа офлайн.');",
             "    }",
             "}"
           ]

@@ -22,6 +22,10 @@
 static jmp_buf g_ce_recovery_point;
 static volatile LONG g_ce_guard_active = 0;
 static volatile LONG g_ce_veh_installed = 0;
+static volatile LONG g_ce_fault_code = 0;
+static volatile LONG g_ce_fault_eip = 0;
+static volatile LONG g_ce_fault_access_type = -1;
+static volatile LONG g_ce_fault_access_address = 0;
 
 static LONG WINAPI ce_veh_handler(EXCEPTION_POINTERS *info) {
     DWORD code;
@@ -32,6 +36,18 @@ static LONG WINAPI ce_veh_handler(EXCEPTION_POINTERS *info) {
     if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION ||
         code == EXCEPTION_PRIV_INSTRUCTION || code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
         code == EXCEPTION_STACK_OVERFLOW) {
+        InterlockedExchange(&g_ce_fault_code, (LONG)code);
+        InterlockedExchange(&g_ce_fault_eip, (LONG)(uintptr_t)info->ExceptionRecord->ExceptionAddress);
+        if (code == EXCEPTION_ACCESS_VIOLATION &&
+            info->ExceptionRecord->NumberParameters >= 2) {
+            InterlockedExchange(&g_ce_fault_access_type,
+                (LONG)info->ExceptionRecord->ExceptionInformation[0]);
+            InterlockedExchange(&g_ce_fault_access_address,
+                (LONG)info->ExceptionRecord->ExceptionInformation[1]);
+        } else {
+            InterlockedExchange(&g_ce_fault_access_type, -1);
+            InterlockedExchange(&g_ce_fault_access_address, 0);
+        }
         InterlockedExchange(&g_ce_guard_active, 0);
         longjmp(g_ce_recovery_point, 1);
     }
@@ -75,6 +91,20 @@ static void ce_write_text_marker(const char *file_name, const char *payload, siz
 static void ce_write_progress(const char *label) {
     char payload[128];
     int size = snprintf(payload, sizeof(payload), "%s\r\n", label);
+    if (size > 0) {
+        ce_write_text_marker("con-build-progress.log", payload, (size_t)size);
+    }
+}
+
+static void ce_write_fault_report(const char *label) {
+    char payload[192];
+    int size = snprintf(payload, sizeof(payload),
+        "%s: code=0x%08lx eip=0x%08lx access_type=%ld access_addr=0x%08lx\r\n",
+        label,
+        (unsigned long)InterlockedCompareExchange(&g_ce_fault_code, 0, 0),
+        (unsigned long)InterlockedCompareExchange(&g_ce_fault_eip, 0, 0),
+        (long)InterlockedCompareExchange(&g_ce_fault_access_type, 0, 0),
+        (unsigned long)InterlockedCompareExchange(&g_ce_fault_access_address, 0, 0));
     if (size > 0) {
         ce_write_text_marker("con-build-progress.log", payload, (size_t)size);
     }
@@ -124,6 +154,10 @@ enum {
     CE_RVA_TGALAXY_CONSTRUCTOR = 0x00439198u,
     CE_RVA_TGALAXY_INITIALIZE = 0x0043a034u,
     CE_RVA_TGALAXY_GENERATE_STARS = 0x0044ff74u,
+    /* "Error in procedure TGalaxy.NextDay label = " sits in .text right
+       before this prologue (VA 0x840f08); self in eax, a single boolean
+       in dl (matches ce_call_delphi_method_byte's convention). */
+    CE_RVA_TGALAXY_NEXTDAY = 0x00440f08u,
     /* TCon: the class TransferShip's "system" destination check accepts
        (found by disassembling the validator at VA 0x6403d9, which raises
        "TransferShip - invalid destination" unless the target IsA one of
@@ -1520,6 +1554,46 @@ uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
     ce_write_progress("after-add");
     InterlockedExchange(&g_ce_guard_active, 0);
     return new_con;
+}
+
+/* Empirical probe for the still-unexplained TGalaxy.NextDay crash mentioned
+   on CEAdapterMarkSecondGalaxyEntryDisabled: rather than let the engine's
+   own turn loop call NextDay on whatever the Galaxy slot points to (where a
+   fault is an unguarded, unrecoverable process crash), call it ourselves
+   under the VEH/setjmp guard so a fault is caught and reported instead of
+   taking the game down. ce_write_fault_report logs the exact faulting EIP
+   and (for access violations) the read/write address, which is enough to
+   identify which field NextDay dereferences that GenerateStars alone never
+   populated. Never touches the live Galaxy slot or g_ce_active_arm -- the
+   engine keeps running the real galaxy throughout this call. */
+uint32_t CE_CALL CEAdapterProbeNextDayOnSecondGalaxy(uint32_t old_galaxy_ptr) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    uint32_t second_galaxy;
+
+    if (old_galaxy_ptr == 0 ||
+        !ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        return 0;
+    }
+    second_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
+    if (second_galaxy == 0 ||
+        !ce_region_has_access((const void *)(uintptr_t)second_galaxy, 0x1dcu, 0)) {
+        return 0;
+    }
+
+    ce_ensure_veh_installed();
+    if (setjmp(g_ce_recovery_point) != 0) {
+        ce_write_fault_report("nextday-probe-FAULTED");
+        InterlockedExchange(&g_ce_guard_active, 0);
+        return 0;
+    }
+    InterlockedExchange(&g_ce_guard_active, 1);
+    ce_write_progress("nextday-probe:before");
+    ce_call_delphi_method_byte(second_galaxy, 0u, module_base + CE_RVA_TGALAXY_NEXTDAY);
+    ce_write_progress("nextday-probe:after-ok");
+    InterlockedExchange(&g_ce_guard_active, 0);
+    return 1;
 }
 
 /* GenerateStars alone leaves a TGalaxy missing everything the engine's own
