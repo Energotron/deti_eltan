@@ -887,6 +887,56 @@ uint32_t CE_CALL CEAdapterGetGeneratedStarByIndex(uint32_t galaxy_ptr, uint32_t 
    position from the real galaxy's own first Con so it does not render at
    (0,0). Untested whether downstream code (map rendering, sector lookup)
    tolerates the otherwise-blank instance; that is the next unknown. */
+/* Pure read-only diagnostic: reports whether the TCon class-ref cell looks
+   like a valid pointer yet, without ever constructing anything. Written
+   after CEAdapterCreateSecondDestination crashed for real on turn 1 of a
+   brand new game -- need to know whether/when this cell settles before
+   trying construction again. Safe to call every turn. */
+uint32_t CE_CALL CEAdapterProbeConClass(uint32_t old_galaxy_ptr, uint32_t turn) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    uint32_t con_class_ref;
+    uint32_t cell_readable;
+    uint32_t class_readable;
+    char temp_path[MAX_PATH];
+    char marker_dir[MAX_PATH];
+    char marker_path[MAX_PATH];
+    char payload[256];
+    int payload_size;
+    HANDLE file;
+    DWORD written = 0;
+
+    if (old_galaxy_ptr == 0 ||
+        !ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        return 0;
+    }
+    cell_readable = ce_region_has_access((const void *)(module_base + CE_RVA_TCON_CLASS_CELL), 4u, 0);
+    con_class_ref = cell_readable ? *(const uint32_t *)(module_base + CE_RVA_TCON_CLASS_CELL) : 0;
+    class_readable = cell_readable &&
+        ce_region_has_access((const void *)(uintptr_t)con_class_ref, 4u, 0);
+
+    if (GetTempPathA(MAX_PATH, temp_path) == 0) return 0;
+    if (snprintf(marker_dir, sizeof(marker_dir), "%sChildrenOfEltan", temp_path) < 0) return 0;
+    if (!CreateDirectoryA(marker_dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return 0;
+    if (snprintf(marker_path, sizeof(marker_path), "%s\\con-class-probe.jsonl", marker_dir) < 0) {
+        return 0;
+    }
+    payload_size = snprintf(payload, sizeof(payload),
+        "{\"turn\":%u,\"cell_readable\":%s,\"con_class_ref\":%u,\"class_readable\":%s}\r\n",
+        turn, cell_readable ? "true" : "false", con_class_ref, class_readable ? "true" : "false");
+    if (payload_size <= 0 || (size_t)payload_size >= sizeof(payload)) return 0;
+    file = CreateFileA(marker_path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
+        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+    if (!WriteFile(file, payload, (DWORD)payload_size, &written, NULL) || !FlushFileBuffers(file)) {
+        CloseHandle(file);
+        return 0;
+    }
+    CloseHandle(file);
+    return class_readable ? 1u : 0u;
+}
+
 uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;

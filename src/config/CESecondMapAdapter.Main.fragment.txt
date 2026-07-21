@@ -36,6 +36,7 @@ Data {
             CEAdapterGetGeneratedStarByIndex=dword,CEAdapterGetGeneratedStarByIndex,dword,dword
             CEAdapterMarkSecondGalaxyEntryDisabled=dword,CEAdapterMarkSecondGalaxyEntryDisabled
             CEAdapterCreateSecondDestination=dword,CEAdapterCreateSecondDestination,dword
+            CEAdapterProbeConClass=dword,CEAdapterProbeConClass,dword,dword
         }
         Mod_CE_MapBridge=CESecondMapAdapter
     }
