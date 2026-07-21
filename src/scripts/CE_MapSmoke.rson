@@ -46,8 +46,10 @@
         },
         {
           "Type": "Top", "Name": "Adapter smoke", "Pos.x": 240, "Pos.y": 80,
-          "Parent": -1, "#": 6, "Total.Lines": 45, "Code.Type": "Turn",
+          "Parent": -1, "#": 6, "Total.Lines": 47, "Code.Type": "Turn",
           "Code": [
+            "unknown ceDumpWindows = ImportedFunction('CESecondMapAdapter','CEAdapterDumpProcessWindows');",
+            "ceDumpWindows();",
             "unknown ceSmoke = ImportedFunction('CESecondMapAdapter','CEAdapterRunSmoke');",
             "ceSmoke(GalaxyPtr(),1128616787);",
             "unknown ceProbe = ImportedFunction('CESecondMapAdapter','CEAdapterProbeGalaxy');",

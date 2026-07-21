@@ -1630,3 +1630,78 @@ uint32_t CE_CALL CEAdapterAbandonEmptySecondGalaxy(uint32_t galaxy_ptr) {
     InterlockedExchange(&g_ce_native_switch_lock, 0);
     return 1;
 }
+
+/* One-shot window-tree dump, purely for locating the star-map screen's
+   window/control layout from inside the process (no cross-process handle
+   permissions needed, unlike external inspection tools). Logs every
+   top-level window owned by this process and its full child-window tree
+   to process-windows.log so a map-screen button can be positioned and
+   parented correctly. */
+static BOOL CALLBACK ce_enum_child_proc(HWND hwnd, LPARAM lparam) {
+    char class_name[128];
+    char title[256];
+    RECT rect;
+    char payload[640];
+    int size;
+    HWND parent;
+
+    (void)lparam;
+    class_name[0] = 0;
+    title[0] = 0;
+    GetClassNameA(hwnd, class_name, sizeof(class_name));
+    GetWindowTextA(hwnd, title, sizeof(title));
+    parent = GetParent(hwnd);
+    if (!GetWindowRect(hwnd, &rect)) {
+        rect.left = rect.top = rect.right = rect.bottom = 0;
+    }
+    size = snprintf(payload, sizeof(payload),
+        "  CHILD hwnd=0x%08lx parent=0x%08lx id=%d class=\"%s\" title=\"%s\" visible=%d rect=(%ld,%ld,%ld,%ld)\r\n",
+        (unsigned long)(uintptr_t)hwnd, (unsigned long)(uintptr_t)parent,
+        GetDlgCtrlID(hwnd), class_name, title, IsWindowVisible(hwnd) ? 1 : 0,
+        (long)rect.left, (long)rect.top, (long)rect.right, (long)rect.bottom);
+    if (size > 0) {
+        ce_write_text_marker("process-windows.log", payload, (size_t)size);
+    }
+    return TRUE;
+}
+
+static BOOL CALLBACK ce_enum_top_proc(HWND hwnd, LPARAM lparam) {
+    DWORD pid = 0;
+    char class_name[128];
+    char title[256];
+    RECT rect;
+    char payload[640];
+    int size;
+
+    (void)lparam;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != GetCurrentProcessId()) {
+        return TRUE;
+    }
+    class_name[0] = 0;
+    title[0] = 0;
+    GetClassNameA(hwnd, class_name, sizeof(class_name));
+    GetWindowTextA(hwnd, title, sizeof(title));
+    if (!GetWindowRect(hwnd, &rect)) {
+        rect.left = rect.top = rect.right = rect.bottom = 0;
+    }
+    size = snprintf(payload, sizeof(payload),
+        "TOP hwnd=0x%08lx class=\"%s\" title=\"%s\" visible=%d rect=(%ld,%ld,%ld,%ld)\r\n",
+        (unsigned long)(uintptr_t)hwnd, class_name, title, IsWindowVisible(hwnd) ? 1 : 0,
+        (long)rect.left, (long)rect.top, (long)rect.right, (long)rect.bottom);
+    if (size > 0) {
+        ce_write_text_marker("process-windows.log", payload, (size_t)size);
+    }
+    EnumChildWindows(hwnd, ce_enum_child_proc, 0);
+    return TRUE;
+}
+
+uint32_t CE_CALL CEAdapterDumpProcessWindows(void) {
+    char header[64];
+    int size = snprintf(header, sizeof(header), "--- window dump ---\r\n");
+    if (size > 0) {
+        ce_write_text_marker("process-windows.log", header, (size_t)size);
+    }
+    EnumWindows(ce_enum_top_proc, 0);
+    return 1;
+}

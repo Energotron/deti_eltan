@@ -49,6 +49,7 @@ Data ^{
             CEAdapterDumpConVmt=dword,CEAdapterDumpConVmt,dword,dword
             CEAdapterCreateSecondDestination=dword,CEAdapterCreateSecondDestination,dword
             CEAdapterProbeNextDayOnSecondGalaxy=dword,CEAdapterProbeNextDayOnSecondGalaxy,dword
+            CEAdapterDumpProcessWindows=dword,CEAdapterDumpProcessWindows
             CEAdapterProbeSaveFormatVersion=dword,CEAdapterProbeSaveFormatVersion,dword,dword
             CEAdapterProbeConClass=dword,CEAdapterProbeConClass,dword,dword
         }
