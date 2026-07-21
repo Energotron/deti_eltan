@@ -1636,7 +1636,33 @@ uint32_t CE_CALL CEAdapterAbandonEmptySecondGalaxy(uint32_t galaxy_ptr) {
    permissions needed, unlike external inspection tools). Logs every
    top-level window owned by this process and its full child-window tree
    to process-windows.log so a map-screen button can be positioned and
-   parented correctly. */
+   parented correctly.
+
+   CRASH LESSON (froze the whole game hard enough that even the OS
+   couldn't close it, forcing a taskkill and leaving the desktop briefly
+   broken): plain GetWindowTextA sends a blocking WM_GETTEXT to windows not
+   owned by the calling thread. If Rangers.exe has any window living on a
+   thread other than the one running our Turn-script call (a loading/audio
+   worker, for instance) and that thread is waiting on the main thread for
+   anything, this deadlocks both threads permanently -- classic Win32 GUI
+   deadlock, unrecoverable without killing the process. Use
+   SendMessageTimeoutA with SMTO_ABORTIFHUNG instead, which bounds the wait
+   and returns instead of hanging forever. GetClassNameA/GetWindowRect never
+   send messages (class info and geometry live in kernel window-manager
+   state), so they were never the risk. */
+static void ce_get_window_title_safe(HWND hwnd, char *out, size_t out_size) {
+    DWORD_PTR result = 0;
+    LRESULT sent;
+    out[0] = 0;
+    sent = SendMessageTimeoutA(hwnd, WM_GETTEXT, (WPARAM)out_size, (LPARAM)out,
+        SMTO_ABORTIFHUNG | SMTO_BLOCK, 200, &result);
+    if (sent == 0) {
+        out[0] = 0;
+    } else {
+        out[out_size - 1] = 0;
+    }
+}
+
 static BOOL CALLBACK ce_enum_child_proc(HWND hwnd, LPARAM lparam) {
     char class_name[128];
     char title[256];
@@ -1647,9 +1673,8 @@ static BOOL CALLBACK ce_enum_child_proc(HWND hwnd, LPARAM lparam) {
 
     (void)lparam;
     class_name[0] = 0;
-    title[0] = 0;
     GetClassNameA(hwnd, class_name, sizeof(class_name));
-    GetWindowTextA(hwnd, title, sizeof(title));
+    ce_get_window_title_safe(hwnd, title, sizeof(title));
     parent = GetParent(hwnd);
     if (!GetWindowRect(hwnd, &rect)) {
         rect.left = rect.top = rect.right = rect.bottom = 0;
@@ -1679,9 +1704,8 @@ static BOOL CALLBACK ce_enum_top_proc(HWND hwnd, LPARAM lparam) {
         return TRUE;
     }
     class_name[0] = 0;
-    title[0] = 0;
     GetClassNameA(hwnd, class_name, sizeof(class_name));
-    GetWindowTextA(hwnd, title, sizeof(title));
+    ce_get_window_title_safe(hwnd, title, sizeof(title));
     if (!GetWindowRect(hwnd, &rect)) {
         rect.left = rect.top = rect.right = rect.bottom = 0;
     }
