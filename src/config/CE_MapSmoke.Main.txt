@@ -56,16 +56,17 @@ Data ^{
         CE_MapSmoke=CESecondMapAdapter
     }
 }
-ML ~{
-    StarMap ~{
-        Panel ~{
-            GraphButton ~{
+ML ^{
+    StarMap ^{
+        Panel ^{
+            GraphButton ^{
                 ImageDown=GI,Bm.FormGalaxy2.CreateD
                 ImageNormal=GI,Bm.FormGalaxy2.CreateN
                 ImageNormalA=GI,Bm.FormGalaxy2.CreateA
                 Kind=Normal
                 KindHit=Rect
                 MouseBlocking=True
+                MouseBlockingTest=False
                 Name=CE_SwapButton
                 OnPressCode ~{
                     0=ExecuteCodeFromString(GenerateCodeStringFromBlock('Script.CE_MapSmoke.Functions.SwapButton'));
