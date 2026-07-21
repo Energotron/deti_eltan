@@ -38,6 +38,7 @@ Data {
             CEAdapterCloneRaceRecords=dword,CEAdapterCloneRaceRecords,dword
             CEAdapterProbeSubobjectConstruction=dword,CEAdapterProbeSubobjectConstruction,dword
             CEAdapterProbeBareConAllocation=dword,CEAdapterProbeBareConAllocation,dword
+            CEAdapterDumpConVmt=dword,CEAdapterDumpConVmt,dword,dword
             CEAdapterCreateSecondDestination=dword,CEAdapterCreateSecondDestination,dword
             CEAdapterProbeSaveFormatVersion=dword,CEAdapterProbeSaveFormatVersion,dword,dword
             CEAdapterProbeConClass=dword,CEAdapterProbeConClass,dword,dword

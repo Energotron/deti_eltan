@@ -64,6 +64,7 @@ CE_EXPORT uint32_t CE_CALL CEAdapterAbandonEmptySecondGalaxy(uint32_t galaxy_ptr
 CE_EXPORT uint32_t CE_CALL CEAdapterMarkSecondGalaxyEntryDisabled(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeSubobjectConstruction(uint32_t old_galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeBareConAllocation(uint32_t old_galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterDumpConVmt(uint32_t old_galaxy_ptr, uint32_t turn);
 CE_EXPORT uint32_t CE_CALL CEAdapterCloneRaceRecords(uint32_t old_galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeSaveFormatVersion(uint32_t old_galaxy_ptr, uint32_t turn);

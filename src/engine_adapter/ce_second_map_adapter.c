@@ -1204,6 +1204,77 @@ uint32_t CE_CALL CEAdapterProbeBareConAllocation(uint32_t old_galaxy_ptr) {
     return result;
 }
 
+/* The static (on-disk) value of the TCon class-ref cell is 0x00838fb8, a
+   normal in-module VMT address -- but the *runtime* value read by every
+   probe so far has been a heap address (order of 0x0c400000), nowhere near
+   the module's mapped range (0x400000-0x8d1000). Something patches this
+   cell at runtime, presumably a DLC/plugin-style VMT clone-and-override --
+   a known Delphi pattern. Dump raw dwords around the runtime VMT pointer
+   (covering the usual negative-offset VMT slot range, matching Delphi's
+   classic layout) so they can be diffed against the static file bytes at
+   the original address offline, to find exactly which slot differs. */
+uint32_t CE_CALL CEAdapterDumpConVmt(uint32_t old_galaxy_ptr, uint32_t turn) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    uint32_t con_class_ref;
+    char temp_path[MAX_PATH];
+    char marker_dir[MAX_PATH];
+    char marker_path[MAX_PATH];
+    char payload[2048];
+    int offset;
+    int written_chars;
+    int32_t index;
+    HANDLE file;
+    DWORD written = 0;
+
+    if (old_galaxy_ptr == 0 ||
+        !ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        return 0;
+    }
+    if (!ce_region_has_access((const void *)(module_base + CE_RVA_TCON_CLASS_CELL), 4u, 0)) {
+        return 0;
+    }
+    con_class_ref = *(const uint32_t *)(module_base + CE_RVA_TCON_CLASS_CELL);
+    if (!ce_region_has_access((const void *)(uintptr_t)(con_class_ref - 0x60u), 0x80u, 0)) {
+        return 0;
+    }
+
+    if (GetTempPathA(MAX_PATH, temp_path) == 0) return 0;
+    if (snprintf(marker_dir, sizeof(marker_dir), "%sChildrenOfEltan", temp_path) < 0) return 0;
+    if (!CreateDirectoryA(marker_dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return 0;
+    if (snprintf(marker_path, sizeof(marker_path), "%s\\con-vmt-dump.json", marker_dir) < 0) {
+        return 0;
+    }
+    written_chars = snprintf(payload, sizeof(payload),
+        "{\"turn\":%u,\"con_class_ref\":%u,\"words\":[", turn, con_class_ref);
+    if (written_chars <= 0) return 0;
+    offset = written_chars;
+    /* Offsets -0x60..+0x1c relative to the class ref, 4 bytes at a time:
+       covers the classic Delphi VMT negative slot table plus a little
+       past the pointer itself. */
+    for (index = -0x60; index <= 0x1c; index += 4) {
+        uint32_t value = *(const uint32_t *)(uintptr_t)((int32_t)con_class_ref + index);
+        written_chars = snprintf(payload + offset, sizeof(payload) - (size_t)offset,
+            index == -0x60 ? "%u" : ",%u", value);
+        if (written_chars <= 0 || (size_t)(offset + written_chars) >= sizeof(payload)) return 0;
+        offset += written_chars;
+    }
+    written_chars = snprintf(payload + offset, sizeof(payload) - (size_t)offset, "]}\r\n");
+    if (written_chars <= 0 || (size_t)(offset + written_chars) >= sizeof(payload)) return 0;
+    offset += written_chars;
+
+    file = CreateFileA(marker_path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+    if (!WriteFile(file, payload, (DWORD)offset, &written, NULL) || !FlushFileBuffers(file)) {
+        CloseHandle(file);
+        return 0;
+    }
+    CloseHandle(file);
+    return written == (DWORD)offset ? 1u : 0u;
+}
+
 uint32_t CE_CALL CEAdapterCloneRaceRecords(uint32_t old_galaxy_ptr) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;
