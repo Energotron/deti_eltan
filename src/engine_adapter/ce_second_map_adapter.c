@@ -44,7 +44,15 @@ enum {
        TGalaxy.LoadFromStream constructs into [self+0x2c]). */
     CE_RVA_TCON_CLASS_CELL = 0x00043f6cu,
     CE_RVA_TCON_CONSTRUCTOR = 0x004482f8u,
-    CE_RVA_LIST_ADD = 0x000161c0u
+    CE_RVA_LIST_ADD = 0x000161c0u,
+    /* Globals TCon's own constructor (0x8482f8) touches: an optional
+       "current context" object at CE_RVA_CON_CONTEXT_CELL (guarded by a
+       null check in the engine's own code, so not necessarily a problem),
+       and two sub-object class-ref cells it unconditionally constructs
+       from without any null check. */
+    CE_RVA_CON_CONTEXT_CELL = 0x0048c288u,
+    CE_RVA_CON_SUBLIST_CLASS_CELL = 0x00471184u,
+    CE_RVA_CON_SUBOBJ_CLASS_CELL = 0x00013f74u
 };
 
 uint32_t CE_CALL CEAdapterAbiVersion(void) {
@@ -892,17 +900,29 @@ uint32_t CE_CALL CEAdapterGetGeneratedStarByIndex(uint32_t galaxy_ptr, uint32_t 
    after CEAdapterCreateSecondDestination crashed for real on turn 1 of a
    brand new game -- need to know whether/when this cell settles before
    trying construction again. Safe to call every turn. */
+static uint32_t ce_probe_cell(uintptr_t cell_address, uint32_t *value_out) {
+    uint32_t value;
+    if (!ce_region_has_access((const void *)cell_address, 4u, 0)) {
+        *value_out = 0;
+        return 0;
+    }
+    value = *(const uint32_t *)cell_address;
+    *value_out = value;
+    return value != 0 && ce_region_has_access((const void *)(uintptr_t)value, 4u, 0);
+}
+
 uint32_t CE_CALL CEAdapterProbeConClass(uint32_t old_galaxy_ptr, uint32_t turn) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;
     uint32_t unused_class_ref;
-    uint32_t con_class_ref;
-    uint32_t cell_readable;
-    uint32_t class_readable;
+    uint32_t con_class_ref, con_class_ok;
+    uint32_t context_value, context_ok;
+    uint32_t sublist_class_ref, sublist_ok;
+    uint32_t subobj_class_ref, subobj_ok;
     char temp_path[MAX_PATH];
     char marker_dir[MAX_PATH];
     char marker_path[MAX_PATH];
-    char payload[256];
+    char payload[400];
     int payload_size;
     HANDLE file;
     DWORD written = 0;
@@ -911,10 +931,10 @@ uint32_t CE_CALL CEAdapterProbeConClass(uint32_t old_galaxy_ptr, uint32_t turn) 
         !ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
         return 0;
     }
-    cell_readable = ce_region_has_access((const void *)(module_base + CE_RVA_TCON_CLASS_CELL), 4u, 0);
-    con_class_ref = cell_readable ? *(const uint32_t *)(module_base + CE_RVA_TCON_CLASS_CELL) : 0;
-    class_readable = cell_readable &&
-        ce_region_has_access((const void *)(uintptr_t)con_class_ref, 4u, 0);
+    con_class_ok = ce_probe_cell(module_base + CE_RVA_TCON_CLASS_CELL, &con_class_ref);
+    context_ok = ce_probe_cell(module_base + CE_RVA_CON_CONTEXT_CELL, &context_value);
+    sublist_ok = ce_probe_cell(module_base + CE_RVA_CON_SUBLIST_CLASS_CELL, &sublist_class_ref);
+    subobj_ok = ce_probe_cell(module_base + CE_RVA_CON_SUBOBJ_CLASS_CELL, &subobj_class_ref);
 
     if (GetTempPathA(MAX_PATH, temp_path) == 0) return 0;
     if (snprintf(marker_dir, sizeof(marker_dir), "%sChildrenOfEltan", temp_path) < 0) return 0;
@@ -923,8 +943,14 @@ uint32_t CE_CALL CEAdapterProbeConClass(uint32_t old_galaxy_ptr, uint32_t turn) 
         return 0;
     }
     payload_size = snprintf(payload, sizeof(payload),
-        "{\"turn\":%u,\"cell_readable\":%s,\"con_class_ref\":%u,\"class_readable\":%s}\r\n",
-        turn, cell_readable ? "true" : "false", con_class_ref, class_readable ? "true" : "false");
+        "{\"turn\":%u,\"con_class_ref\":%u,\"con_class_ok\":%s,"
+        "\"context_value\":%u,\"context_ok\":%s,"
+        "\"sublist_class_ref\":%u,\"sublist_ok\":%s,"
+        "\"subobj_class_ref\":%u,\"subobj_ok\":%s}\r\n",
+        turn, con_class_ref, con_class_ok ? "true" : "false",
+        context_value, context_ok ? "true" : "false",
+        sublist_class_ref, sublist_ok ? "true" : "false",
+        subobj_class_ref, subobj_ok ? "true" : "false");
     if (payload_size <= 0 || (size_t)payload_size >= sizeof(payload)) return 0;
     file = CreateFileA(marker_path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
         OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -934,7 +960,7 @@ uint32_t CE_CALL CEAdapterProbeConClass(uint32_t old_galaxy_ptr, uint32_t turn) 
         return 0;
     }
     CloseHandle(file);
-    return class_readable ? 1u : 0u;
+    return (con_class_ok && sublist_ok && subobj_ok) ? 1u : 0u;
 }
 
 uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
