@@ -937,11 +937,14 @@ uint32_t CE_CALL CEAdapterEnterReadySecondGalaxy(uint32_t galaxy_ptr) {
     second_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
     if (galaxy_ptr != old_galaxy || second_galaxy == 0 ||
         !ce_resolve_engine_galaxy(galaxy_ptr, &module_base, &galaxy_slot, &class_ref)) {
+        ce_write_progress("enter-ready:validation-failed");
         InterlockedExchange(&g_ce_native_switch_lock, 0);
         return 0;
     }
+    ce_write_progress("enter-ready:before-swap");
     *galaxy_slot = second_galaxy;
     InterlockedExchange(&g_ce_active_arm, 1);
+    ce_write_progress("enter-ready:after-swap");
     InterlockedExchange(&g_ce_native_switch_lock, 0);
     return 1;
 }
