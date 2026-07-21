@@ -44,6 +44,7 @@ Data ^{
             CEAdapterGetGeneratedStarByIndex=dword,CEAdapterGetGeneratedStarByIndex,dword,dword
             CEAdapterMarkSecondGalaxyEntryDisabled=dword,CEAdapterMarkSecondGalaxyEntryDisabled
             CEAdapterCloneRaceRecords=dword,CEAdapterCloneRaceRecords,dword
+            CEAdapterProbeSubobjectConstruction=dword,CEAdapterProbeSubobjectConstruction,dword
             CEAdapterCreateSecondDestination=dword,CEAdapterCreateSecondDestination,dword
             CEAdapterProbeSaveFormatVersion=dword,CEAdapterProbeSaveFormatVersion,dword,dword
             CEAdapterProbeConClass=dword,CEAdapterProbeConClass,dword,dword

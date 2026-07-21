@@ -119,6 +119,14 @@ enum {
     CE_RVA_CON_CONTEXT_CELL = 0x0048c288u,
     CE_RVA_CON_SUBLIST_CLASS_CELL = 0x00471184u,
     CE_RVA_CON_SUBOBJ_CLASS_CELL = 0x00013f74u,
+    /* Generic constructor trampoline (test dl; call [eax-0xc] i.e. virtual
+       NewInstance) that TCon's own constructor calls 10 times, 6x for
+       CE_RVA_CON_SUBLIST_CLASS_CELL and 4x for CE_RVA_CON_SUBOBJ_CLASS_CELL.
+       Traced with tools/cfg_disasm.py: both classes share the same default
+       NewInstance (VA 0x404544, itself unremarkable GetMem+InitInstance) --
+       no per-class override, so nothing found in static analysis explains
+       the repeat crash. Used to test each nested class in isolation. */
+    CE_RVA_GENERIC_CTOR_TRAMPOLINE = 0x0000457cu,
     /* Raw record allocator (GetMem + zero-fill, not a Delphi constructor --
        no VMT set up) used by TGalaxy.LoadFromStream's header section to
        build [galaxy+0xc4], a list of 0x78-byte per-race records whose
@@ -1097,6 +1105,63 @@ uint32_t CE_CALL CEAdapterProbeSaveFormatVersion(uint32_t old_galaxy_ptr, uint32
    so cloning them from the real galaxy is a plain, low-risk memcpy per
    record, guarded the same way as the rest of this file. Called once
    before ever attempting Con construction. */
+/* Isolated test for which (if either) of TCon's two nested sub-object
+   classes faults when constructed alone, outside TCon's constructor
+   entirely -- narrows down whether the earlier repeat crash is really
+   about one specific class or about the calling context in general.
+   Each attempt is independently SEH-guarded so one faulting doesn't stop
+   the other from being tried, and progress is logged before/after each. */
+uint32_t CE_CALL CEAdapterProbeSubobjectConstruction(uint32_t old_galaxy_ptr) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    uint32_t sublist_class_ref, subobj_class_ref;
+    uint32_t sublist_result = 0, subobj_result = 0;
+
+    if (old_galaxy_ptr == 0 ||
+        !ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        ce_write_progress("subobj-probe-abort:resolve-failed");
+        return 0;
+    }
+    if (!ce_region_has_access((const void *)(module_base + CE_RVA_CON_SUBLIST_CLASS_CELL), 4u, 0) ||
+        !ce_region_has_access((const void *)(module_base + CE_RVA_CON_SUBOBJ_CLASS_CELL), 4u, 0)) {
+        ce_write_progress("subobj-probe-abort:class-cells-unreadable");
+        return 0;
+    }
+    sublist_class_ref = *(const uint32_t *)(module_base + CE_RVA_CON_SUBLIST_CLASS_CELL);
+    subobj_class_ref = *(const uint32_t *)(module_base + CE_RVA_CON_SUBOBJ_CLASS_CELL);
+
+    ce_ensure_veh_installed();
+
+    if (setjmp(g_ce_recovery_point) != 0) {
+        ce_write_progress("subobj-probe:sublist-class-FAULTED");
+    } else {
+        InterlockedExchange(&g_ce_guard_active, 1);
+        ce_write_progress("subobj-probe:before-sublist-class");
+        sublist_result = ce_call_delphi_constructor(
+            sublist_class_ref, module_base + CE_RVA_GENERIC_CTOR_TRAMPOLINE);
+        InterlockedExchange(&g_ce_guard_active, 0);
+        ce_write_progress(sublist_result != 0
+            ? "subobj-probe:sublist-class-ok"
+            : "subobj-probe:sublist-class-returned-null");
+    }
+
+    if (setjmp(g_ce_recovery_point) != 0) {
+        ce_write_progress("subobj-probe:subobj-class-FAULTED");
+    } else {
+        InterlockedExchange(&g_ce_guard_active, 1);
+        ce_write_progress("subobj-probe:before-subobj-class");
+        subobj_result = ce_call_delphi_constructor(
+            subobj_class_ref, module_base + CE_RVA_GENERIC_CTOR_TRAMPOLINE);
+        InterlockedExchange(&g_ce_guard_active, 0);
+        ce_write_progress(subobj_result != 0
+            ? "subobj-probe:subobj-class-ok"
+            : "subobj-probe:subobj-class-returned-null");
+    }
+
+    return (sublist_result != 0 ? 1u : 0u) | (subobj_result != 0 ? 2u : 0u);
+}
+
 uint32_t CE_CALL CEAdapterCloneRaceRecords(uint32_t old_galaxy_ptr) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;
