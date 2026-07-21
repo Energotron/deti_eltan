@@ -22,6 +22,7 @@ int main(int argc, char **argv) {
     ce_noarg_fn get_bound;
     ce_noarg_fn supports_multi;
     ce_noarg_fn active_arm;
+    ce_dword_fn snapshot_galaxy;
     ce_dword_fn bind;
     ce_dword_fn echo;
     typedef uint32_t (__cdecl *ce_two_dword_fn)(uint32_t, uint32_t);
@@ -89,11 +90,13 @@ int main(int argc, char **argv) {
     enter_ready_second_galaxy = (ce_dword_fn)require_export(module, "CEAdapterEnterReadySecondGalaxy");
     return_old_galaxy = (ce_dword_fn)require_export(module, "CEAdapterReturnToOldGalaxy");
     active_arm = (ce_noarg_fn)require_export(module, "CEAdapterActiveArm");
+    snapshot_galaxy = (ce_dword_fn)require_export(module, "CEAdapterSnapshotGalaxy");
 
-    if (abi() != 8 || capabilities() != 1009 || supports_multi() != 0) return 3;
+    if (abi() != 9 || capabilities() != 2033 || supports_multi() != 0) return 3;
     if (probe_engine_galaxy(marker) != 0 || create_second_galaxy(marker, 1, 0) != 0 ||
         second_galaxy_status() != 0 || enter_ready_second_galaxy(marker) != 0 ||
-        return_old_galaxy(marker) != 0 || active_arm() != 0) return 17;
+        return_old_galaxy(marker) != 0 || active_arm() != 0 ||
+        snapshot_galaxy(marker) != 0) return 17;
     if (echo(marker) != marker || bind(0) != 0 || bind(marker) != 1) return 4;
     if (get_bound() != marker) return 5;
     if (run_smoke(0, 1128616787u) != 0 || run_smoke(marker, 1128616787u) != 1) return 6;
@@ -125,6 +128,6 @@ int main(int argc, char **argv) {
     if (observe_layout((uint32_t)(uintptr_t)sample.bytes, marker, 132) != 1 ||
         layout_observation_count() != 33) return 15;
     FreeLibrary(module);
-    printf("OK: ABI=8 sync engine-galaxy generator exported; host remains safely disabled\n");
+    printf("OK: ABI=9 native galaxy snapshot gate exported; host remains safely disabled\n");
     return 0;
 }

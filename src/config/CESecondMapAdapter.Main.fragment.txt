@@ -43,6 +43,7 @@ Data {
             CEAdapterProbeNextDayOnSecondGalaxy=dword,CEAdapterProbeNextDayOnSecondGalaxy,dword
             CEAdapterDumpProcessWindows=dword,CEAdapterDumpProcessWindows
             CEAdapterProbeRawGalaxyPointer=dword,CEAdapterProbeRawGalaxyPointer,dword,dword
+            CEAdapterSnapshotGalaxy=dword,CEAdapterSnapshotGalaxy,dword
             CEAdapterProbeSaveFormatVersion=dword,CEAdapterProbeSaveFormatVersion,dword,dword
             CEAdapterProbeConClass=dword,CEAdapterProbeConClass,dword,dword
         }

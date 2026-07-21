@@ -88,6 +88,27 @@ static void ce_write_text_marker(const char *file_name, const char *payload, siz
     ce_write_one_marker(marker_dir, file_name, payload, length);
 }
 
+static int ce_write_binary_file(
+    const char *dir, const char *file_name, const void *payload, uint32_t length
+) {
+    char marker_path[MAX_PATH];
+    HANDLE file;
+    DWORD written = 0;
+
+    if (!CreateDirectoryA(dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return 0;
+    if (snprintf(marker_path, sizeof(marker_path), "%s\\%s", dir, file_name) < 0) return 0;
+    file = CreateFileA(marker_path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+    if (!WriteFile(file, payload, length, &written, NULL) ||
+        !FlushFileBuffers(file) || written != length) {
+        CloseHandle(file);
+        return 0;
+    }
+    CloseHandle(file);
+    return 1;
+}
+
 static void ce_write_progress(const char *label) {
     char payload[128];
     int size = snprintf(payload, sizeof(payload), "%s\r\n", label);
@@ -144,6 +165,8 @@ static volatile LONG g_ce_second_galaxy_ptr = 0;
 static volatile LONG g_ce_active_arm = 0;
 static volatile LONG g_ce_native_switch_lock = 0;
 static volatile LONG g_ce_second_generation_status = 0;
+static volatile LONG g_ce_snapshot_lock = 0;
+static volatile LONG g_ce_snapshot_done = 0;
 
 /* Steam build 20648864 / Rangers.exe 2.1.2500.0 only. */
 enum {
@@ -153,7 +176,12 @@ enum {
     CE_RVA_TGALAXY_CLASS_CELL = 0x00438d90u,
     CE_RVA_TGALAXY_CONSTRUCTOR = 0x00439198u,
     CE_RVA_TGALAXY_INITIALIZE = 0x0043a034u,
+    CE_RVA_TGALAXY_SAVE_TO_STREAM = 0x0043a1a4u,
+    CE_RVA_TGALAXY_LOAD_FROM_STREAM = 0x0043b6ccu,
     CE_RVA_TGALAXY_GENERATE_STARS = 0x0044ff74u,
+    CE_RVA_BUFFER_CLASS_CELL = 0x0042ea5cu,
+    CE_RVA_BUFFER_CONSTRUCTOR = 0x0042eab0u,
+    CE_RVA_TOBJECT_FREE = 0x000045acu,
     /* "Error in procedure TGalaxy.NextDay label = " sits in .text right
        before this prologue (VA 0x840f08); self in eax, a single boolean
        in dl (matches ce_call_delphi_method_byte's convention). */
@@ -205,7 +233,8 @@ uint32_t CE_CALL CEAdapterCapabilities(void) {
         CE_CAP_READONLY_GALAXY_LAYOUT_SAMPLE |
         CE_CAP_READONLY_GALAXY_LAYOUT_LATEST |
         CE_CAP_POINTER_NORMALIZED_LAYOUT_HASH |
-        CE_CAP_EXPERIMENTAL_ENGINE_GALAXY;
+        CE_CAP_EXPERIMENTAL_ENGINE_GALAXY |
+        CE_CAP_NATIVE_GALAXY_SNAPSHOT;
 }
 
 uint32_t CE_CALL CEAdapterBindGalaxy(uint32_t galaxy_ptr) {
@@ -1745,4 +1774,94 @@ uint32_t CE_CALL CEAdapterProbeRawGalaxyPointer(uint32_t galaxy_ptr, uint32_t tu
         ce_write_text_marker("raw-galaxy-pointer.jsonl", payload, (size_t)size);
     }
     return 1;
+}
+
+uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr) {
+    static const unsigned char save_signature[] = {
+        0x55, 0x8b, 0xec, 0x83, 0xc4, 0xa0, 0x33, 0xc9,
+        0x89, 0x4d, 0xa0, 0x89, 0x55, 0xf8, 0x89, 0x45
+    };
+    static const unsigned char buffer_ctor_signature[] = {
+        0x55, 0x8b, 0xec, 0x83, 0xc4, 0xf8, 0x84, 0xd2,
+        0x74, 0x08, 0x83, 0xc4, 0xf0, 0xe8
+    };
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    uint32_t buffer_class_ref;
+    uint32_t buffer = 0;
+    uint32_t length;
+    uint32_t capacity;
+    uint32_t position;
+    uint32_t data;
+    uint32_t hash;
+    char temp_path[MAX_PATH];
+    char marker_dir[MAX_PATH];
+    char report[192];
+    int report_size;
+    int wrote_temp;
+
+    if (InterlockedCompareExchange(&g_ce_snapshot_done, 0, 0) != 0) return 2;
+    if (InterlockedCompareExchange(&g_ce_snapshot_lock, 1, 0) != 0) return 0;
+    if (!ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref) ||
+        memcmp((const void *)(module_base + CE_RVA_TGALAXY_SAVE_TO_STREAM),
+            save_signature, sizeof(save_signature)) != 0 ||
+        memcmp((const void *)(module_base + CE_RVA_BUFFER_CONSTRUCTOR),
+            buffer_ctor_signature, sizeof(buffer_ctor_signature)) != 0 ||
+        !ce_region_has_access(
+            (const void *)(module_base + CE_RVA_BUFFER_CLASS_CELL), 4u, 0)) {
+        InterlockedExchange(&g_ce_snapshot_lock, 0);
+        return 0;
+    }
+
+    buffer_class_ref = *(const uint32_t *)(module_base + CE_RVA_BUFFER_CLASS_CELL);
+    if (!ce_region_has_access((const void *)(uintptr_t)buffer_class_ref, 4u, 0)) {
+        InterlockedExchange(&g_ce_snapshot_lock, 0);
+        return 0;
+    }
+    buffer = ce_call_delphi_constructor(
+        buffer_class_ref, module_base + CE_RVA_BUFFER_CONSTRUCTOR
+    );
+    if (buffer == 0 || !ce_region_has_access((const void *)(uintptr_t)buffer, 0x14u, 1)) {
+        InterlockedExchange(&g_ce_snapshot_lock, 0);
+        return 0;
+    }
+
+    ce_call_delphi_method_dword(
+        galaxy_ptr, buffer, module_base + CE_RVA_TGALAXY_SAVE_TO_STREAM
+    );
+    length = *(const uint32_t *)(uintptr_t)(buffer + 0x04u);
+    capacity = *(const uint32_t *)(uintptr_t)(buffer + 0x08u);
+    position = *(const uint32_t *)(uintptr_t)(buffer + 0x0cu);
+    data = *(const uint32_t *)(uintptr_t)(buffer + 0x10u);
+    if (length == 0 || length > capacity || position != length ||
+        length > 256u * 1024u * 1024u ||
+        !ce_region_has_access((const void *)(uintptr_t)data, length, 0)) {
+        ce_call_delphi_method(buffer, module_base + CE_RVA_TOBJECT_FREE);
+        InterlockedExchange(&g_ce_snapshot_lock, 0);
+        return 0;
+    }
+
+    hash = ce_fnv1a32((const unsigned char *)(uintptr_t)data, length);
+    ce_write_binary_file("C:\\ce_debug", "galaxy-snapshot.bin",
+        (const void *)(uintptr_t)data, length);
+    wrote_temp = 0;
+    if (GetTempPathA(MAX_PATH, temp_path) != 0 &&
+        snprintf(marker_dir, sizeof(marker_dir), "%sChildrenOfEltan", temp_path) >= 0) {
+        wrote_temp = ce_write_binary_file(marker_dir, "galaxy-snapshot.bin",
+            (const void *)(uintptr_t)data, length);
+    }
+    report_size = snprintf(report, sizeof(report),
+        "{\"abi\":%u,\"length\":%u,\"position\":%u,\"capacity\":%u,"
+        "\"fnv1a32\":%u,\"temp_written\":%s}\r\n",
+        CEAdapterAbiVersion(), length, position, capacity, hash,
+        wrote_temp ? "true" : "false");
+    if (report_size > 0) {
+        ce_write_text_marker("galaxy-snapshot.jsonl", report, (size_t)report_size);
+    }
+    ce_call_delphi_method(buffer, module_base + CE_RVA_TOBJECT_FREE);
+    if (wrote_temp) InterlockedExchange(&g_ce_snapshot_done, 1);
+    InterlockedExchange(&g_ce_snapshot_lock, 0);
+    return wrote_temp ? 1u : 0u;
 }
