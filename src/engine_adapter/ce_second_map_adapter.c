@@ -915,6 +915,16 @@ uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
         return 0;
     }
     con_class_ref = *(const uint32_t *)(module_base + CE_RVA_TCON_CLASS_CELL);
+    /* The class-ref cell crashed the constructor on day 1 of a brand new
+       game (write access violation inside the engine's own NewInstance),
+       most likely because this global isn't populated that early in the
+       engine's own bootstrap yet. Require it to at least look like a
+       plausible readable pointer before ever calling into the constructor
+       with it -- this alone would have turned that crash into a safe 0
+       return instead of a corrupted write. */
+    if (!ce_region_has_access((const void *)(uintptr_t)con_class_ref, 4u, 0)) {
+        return 0;
+    }
 
     new_con = ce_call_delphi_constructor(con_class_ref, module_base + CE_RVA_TCON_CONSTRUCTOR);
     if (new_con == 0 || !ce_region_has_access((const void *)(uintptr_t)new_con, 0x20u, 1)) {
