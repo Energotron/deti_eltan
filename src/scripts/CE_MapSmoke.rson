@@ -46,7 +46,7 @@
         },
         {
           "Type": "Top", "Name": "Adapter smoke", "Pos.x": 240, "Pos.y": 80,
-          "Parent": -1, "#": 6, "Total.Lines": 10, "Code.Type": "Turn",
+          "Parent": -1, "#": 6, "Total.Lines": 14, "Code.Type": "Turn",
           "Code": [
             "unknown ceProbeRawPtr = ImportedFunction('CESecondMapAdapter','CEAdapterProbeRawGalaxyPointer');",
             "ceProbeRawPtr(GalaxyPtr(),CurTurn());",
@@ -57,7 +57,11 @@
             "unknown ceLayout = ImportedFunction('CESecondMapAdapter','CEAdapterObserveGalaxyLayout');",
             "ceLayout(GalaxyPtr(),1128616787,CurTurn());",
             "unknown ceProbeVersion = ImportedFunction('CESecondMapAdapter','CEAdapterProbeSaveFormatVersion');",
-            "ceProbeVersion(GalaxyPtr(),CurTurn());"
+            "ceProbeVersion(GalaxyPtr(),CurTurn());",
+            "unknown ceArmSave = ImportedFunction('CESecondMapAdapter','CEAdapterArmGalaxySaveSnapshot');",
+            "ceArmSave(GalaxyPtr());",
+            "unknown cePollSecondHome = ImportedFunction('CESecondMapAdapter','CEAdapterPollSecondHomeTransform');",
+            "cePollSecondHome(GalaxyPtr(),1128616787);"
           ]
         }
       ],

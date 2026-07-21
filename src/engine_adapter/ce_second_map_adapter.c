@@ -167,6 +167,14 @@ static volatile LONG g_ce_native_switch_lock = 0;
 static volatile LONG g_ce_second_generation_status = 0;
 static volatile LONG g_ce_snapshot_lock = 0;
 static volatile LONG g_ce_snapshot_done = 0;
+static volatile LONG g_ce_save_hook_installed = 0;
+static volatile LONG g_ce_save_hook_armed = 0;
+static volatile LONG g_ce_save_hook_expected_galaxy = 0;
+static void *g_ce_save_trampoline = NULL;
+static volatile LONG g_ce_load_hook_installed = 0;
+static volatile LONG g_ce_load_transform_armed = 0;
+static volatile LONG g_ce_load_transform_seed = 0;
+static void *g_ce_load_trampoline = NULL;
 
 /* Steam build 20648864 / Rangers.exe 2.1.2500.0 only. */
 enum {
@@ -234,7 +242,9 @@ uint32_t CE_CALL CEAdapterCapabilities(void) {
         CE_CAP_READONLY_GALAXY_LAYOUT_LATEST |
         CE_CAP_POINTER_NORMALIZED_LAYOUT_HASH |
         CE_CAP_EXPERIMENTAL_ENGINE_GALAXY |
-        CE_CAP_NATIVE_GALAXY_SNAPSHOT;
+        CE_CAP_NATIVE_GALAXY_SNAPSHOT |
+        CE_CAP_SAVE_LIFECYCLE_SNAPSHOT |
+        CE_CAP_LOAD_LIFECYCLE_TRANSFORM;
 }
 
 uint32_t CE_CALL CEAdapterBindGalaxy(uint32_t galaxy_ptr) {
@@ -1774,6 +1784,332 @@ uint32_t CE_CALL CEAdapterProbeRawGalaxyPointer(uint32_t galaxy_ptr, uint32_t tu
         ce_write_text_marker("raw-galaxy-pointer.jsonl", payload, (size_t)size);
     }
     return 1;
+}
+
+static uint32_t ce_mix32(uint32_t value) {
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return value;
+}
+
+__attribute__((used)) static void CE_CALL ce_transform_loaded_second_home(
+    uint32_t galaxy_ptr, uint32_t reader
+) {
+    uint32_t list;
+    uint32_t array;
+    uint32_t count;
+    uint32_t index;
+    uint32_t transformed = 0;
+    uint32_t seed;
+    float min_x = 10000000.0f;
+    float max_x = -10000000.0f;
+    float min_y = 10000000.0f;
+    float max_y = -10000000.0f;
+    char report[256];
+    int report_size;
+
+    (void)reader;
+    if (InterlockedExchange(&g_ce_load_transform_armed, 0) == 0) return;
+    seed = (uint32_t)InterlockedCompareExchange(&g_ce_load_transform_seed, 0, 0);
+    if (!ce_region_has_access((const void *)(uintptr_t)(galaxy_ptr + 0x2cu), 4u, 0)) {
+        ce_write_text_marker("second-home-transform.jsonl",
+            "{\"status\":\"galaxy-unreadable\"}\r\n", 32u);
+        return;
+    }
+    list = *(const uint32_t *)(uintptr_t)(galaxy_ptr + 0x2cu);
+    if (!ce_region_has_access((const void *)(uintptr_t)list, 12u, 0)) return;
+    array = *(const uint32_t *)(uintptr_t)(list + 4u);
+    count = *(const uint32_t *)(uintptr_t)(list + 8u);
+    if (count < 2u || count > 10000u ||
+        !ce_region_has_access((const void *)(uintptr_t)array, count * 4u, 0)) return;
+
+    for (index = 0; index < count; ++index) {
+        uint32_t con = *(const uint32_t *)(uintptr_t)(array + index * 4u);
+        float x;
+        float y;
+        if (!ce_region_has_access((const void *)(uintptr_t)con, 0x1cu, 0)) continue;
+        memcpy(&x, (const void *)(uintptr_t)(con + 0x14u), sizeof(x));
+        memcpy(&y, (const void *)(uintptr_t)(con + 0x18u), sizeof(y));
+        if (x < -10000000.0f || x > 10000000.0f ||
+            y < -10000000.0f || y > 10000000.0f) continue;
+        if (x < min_x) min_x = x;
+        if (x > max_x) max_x = x;
+        if (y < min_y) min_y = y;
+        if (y > max_y) max_y = y;
+    }
+    if (min_x >= max_x || min_y >= max_y) return;
+
+    for (index = 0; index < count; ++index) {
+        uint32_t con = *(const uint32_t *)(uintptr_t)(array + index * 4u);
+        uint32_t id;
+        uint32_t hx;
+        uint32_t hy;
+        float x;
+        float y;
+        if (!ce_region_has_access((const void *)(uintptr_t)con, 0x1cu, 1)) continue;
+        id = *(const uint32_t *)(uintptr_t)(con + 0x04u);
+        hx = ce_mix32(seed ^ id ^ (index * 0x9e3779b9u));
+        hy = ce_mix32((seed + 0x85ebca6bu) ^ id ^ (index * 0xc2b2ae35u));
+        x = min_x + ((float)(hx & 0xffffu) / 65535.0f) * (max_x - min_x);
+        y = min_y + ((float)(hy & 0xffffu) / 65535.0f) * (max_y - min_y);
+        memcpy((void *)(uintptr_t)(con + 0x14u), &x, sizeof(x));
+        memcpy((void *)(uintptr_t)(con + 0x18u), &y, sizeof(y));
+        ++transformed;
+    }
+    InterlockedExchange(&g_ce_active_arm, 1);
+    report_size = snprintf(report, sizeof(report),
+        "{\"status\":\"transformed\",\"abi\":%u,\"seed\":%u,"
+        "\"count\":%u,\"bounds\":[%.2f,%.2f,%.2f,%.2f]}\r\n",
+        CEAdapterAbiVersion(), seed, transformed, min_x, max_x, min_y, max_y);
+    if (report_size > 0) ce_write_text_marker(
+        "second-home-transform.jsonl", report, (size_t)report_size
+    );
+}
+
+#if defined(__i386__)
+__attribute__((naked)) static void ce_tgalaxy_load_hook(void) {
+    __asm__ volatile(
+        "pushl %edx\n\t"
+        "pushl %eax\n\t"
+        "call *_g_ce_load_trampoline\n\t"
+        "popl %ecx\n\t"
+        "popl %edx\n\t"
+        "pushl %edx\n\t"
+        "pushl %ecx\n\t"
+        "call _ce_transform_loaded_second_home\n\t"
+        "addl $8, %esp\n\t"
+        "ret\n\t"
+    );
+}
+#endif
+
+uint32_t CE_CALL CEAdapterPollSecondHomeTransform(
+    uint32_t galaxy_ptr, uint32_t seed
+) {
+#if defined(__i386__)
+    static const unsigned char load_signature[] = {
+        0x55, 0x8b, 0xec, 0xb9, 0x44, 0x00, 0x00, 0x00,
+        0x6a, 0x00, 0x6a, 0x00, 0x49, 0x75, 0xf9, 0x51
+    };
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    unsigned char *target;
+    unsigned char patch[8];
+    unsigned char *trampoline;
+    DWORD old_protect;
+    DWORD ignored_protect;
+    LONG hook_state;
+    int32_t relative;
+
+    if (GetFileAttributesA("C:\\ce_debug\\arm-second-home.flag") == INVALID_FILE_ATTRIBUTES) {
+        return 0;
+    }
+    if (!ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) return 0;
+    target = (unsigned char *)(module_base + CE_RVA_TGALAXY_LOAD_FROM_STREAM);
+    hook_state = InterlockedCompareExchange(&g_ce_load_hook_installed, -1, 0);
+    if (hook_state == 0) {
+        if (memcmp(target, load_signature, sizeof(load_signature)) != 0) {
+            InterlockedExchange(&g_ce_load_hook_installed, 0);
+            return 0;
+        }
+        trampoline = (unsigned char *)VirtualAlloc(
+            NULL, 13u, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE
+        );
+        if (trampoline == NULL) {
+            InterlockedExchange(&g_ce_load_hook_installed, 0);
+            return 0;
+        }
+        memcpy(trampoline, target, 8u);
+        trampoline[8] = 0xe9;
+        relative = (int32_t)((target + 8u) - (trampoline + 13u));
+        memcpy(trampoline + 9u, &relative, sizeof(relative));
+        g_ce_load_trampoline = trampoline;
+        FlushInstructionCache(GetCurrentProcess(), trampoline, 13u);
+        memset(patch, 0x90, sizeof(patch));
+        patch[0] = 0xe9;
+        relative = (int32_t)((unsigned char *)(uintptr_t)ce_tgalaxy_load_hook -
+            (target + 5u));
+        memcpy(patch + 1u, &relative, sizeof(relative));
+        if (!VirtualProtect(target, 8u, PAGE_EXECUTE_READWRITE, &old_protect)) {
+            VirtualFree(trampoline, 0, MEM_RELEASE);
+            g_ce_load_trampoline = NULL;
+            InterlockedExchange(&g_ce_load_hook_installed, 0);
+            return 0;
+        }
+        memcpy(target, patch, sizeof(patch));
+        FlushInstructionCache(GetCurrentProcess(), target, sizeof(patch));
+        VirtualProtect(target, 8u, old_protect, &ignored_protect);
+        InterlockedExchange(&g_ce_load_hook_installed, 1);
+    } else if (hook_state != 1) {
+        return 0;
+    }
+    InterlockedExchange(&g_ce_load_transform_seed, (LONG)seed);
+    InterlockedExchange(&g_ce_load_transform_armed, 1);
+    DeleteFileA("C:\\ce_debug\\arm-second-home.flag");
+    ce_write_text_marker("second-home-transform.jsonl",
+        "{\"status\":\"armed\"}\r\n", 20u);
+    return 1;
+#else
+    (void)galaxy_ptr;
+    (void)seed;
+    return 0;
+#endif
+}
+
+/* SaveToStream cannot safely be called from a Turn callback: the real game
+   test deadlocked before producing a byte.  The safe place is the engine's
+   own save operation.  This detour lets the original serializer run first,
+   then copies its completed buffer without re-entering any Delphi code.
+
+   Six bytes are displaced because the first three x86 instructions are
+   1+2+3 bytes.  The trampoline executes those complete instructions and
+   jumps back to SaveToStream+6. */
+__attribute__((used)) static void CE_CALL ce_capture_completed_galaxy_save(
+    uint32_t galaxy_ptr, uint32_t buffer
+) {
+    uint32_t expected;
+    uint32_t length;
+    uint32_t capacity;
+    uint32_t position;
+    uint32_t data;
+    uint32_t hash;
+    char report[224];
+    int report_size;
+    int wrote;
+
+    if (InterlockedCompareExchange(&g_ce_save_hook_armed, 0, 0) == 0) return;
+    expected = (uint32_t)InterlockedCompareExchange(
+        &g_ce_save_hook_expected_galaxy, 0, 0
+    );
+    if (expected == 0 || galaxy_ptr != expected) return;
+    if (InterlockedExchange(&g_ce_save_hook_armed, 0) == 0) return;
+    if (!ce_region_has_access((const void *)(uintptr_t)buffer, 0x14u, 0)) {
+        ce_write_text_marker("galaxy-save-snapshot.jsonl",
+            "{\"status\":\"invalid-buffer\"}\r\n", 29u);
+        return;
+    }
+
+    length = *(const uint32_t *)(uintptr_t)(buffer + 0x04u);
+    capacity = *(const uint32_t *)(uintptr_t)(buffer + 0x08u);
+    position = *(const uint32_t *)(uintptr_t)(buffer + 0x0cu);
+    data = *(const uint32_t *)(uintptr_t)(buffer + 0x10u);
+    if (length == 0 || length > capacity || position != length ||
+        length > 256u * 1024u * 1024u ||
+        !ce_region_has_access((const void *)(uintptr_t)data, length, 0)) {
+        report_size = snprintf(report, sizeof(report),
+            "{\"status\":\"invalid-layout\",\"length\":%u,"
+            "\"position\":%u,\"capacity\":%u}\r\n",
+            length, position, capacity);
+        if (report_size > 0) ce_write_text_marker(
+            "galaxy-save-snapshot.jsonl", report, (size_t)report_size
+        );
+        return;
+    }
+
+    hash = ce_fnv1a32((const unsigned char *)(uintptr_t)data, length);
+    wrote = ce_write_binary_file("C:\\ce_debug", "galaxy-save-snapshot.bin",
+        (const void *)(uintptr_t)data, length);
+    report_size = snprintf(report, sizeof(report),
+        "{\"status\":\"%s\",\"abi\":%u,\"galaxy_ptr\":%u,"
+        "\"length\":%u,\"fnv1a32\":%u}\r\n",
+        wrote ? "captured" : "write-failed", CEAdapterAbiVersion(),
+        galaxy_ptr, length, hash);
+    if (report_size > 0) ce_write_text_marker(
+        "galaxy-save-snapshot.jsonl", report, (size_t)report_size
+    );
+    if (wrote) InterlockedExchange(&g_ce_snapshot_done, 1);
+}
+
+#if defined(__i386__)
+__attribute__((naked)) static void ce_tgalaxy_save_hook(void) {
+    __asm__ volatile(
+        "pushl %edx\n\t"
+        "pushl %eax\n\t"
+        "call *_g_ce_save_trampoline\n\t"
+        "popl %ecx\n\t"
+        "popl %edx\n\t"
+        "pushl %edx\n\t"
+        "pushl %ecx\n\t"
+        "call _ce_capture_completed_galaxy_save\n\t"
+        "addl $8, %esp\n\t"
+        "ret\n\t"
+    );
+}
+#endif
+
+uint32_t CE_CALL CEAdapterArmGalaxySaveSnapshot(uint32_t galaxy_ptr) {
+#if defined(__i386__)
+    static const unsigned char save_signature[] = {
+        0x55, 0x8b, 0xec, 0x83, 0xc4, 0xa0, 0x33, 0xc9,
+        0x89, 0x4d, 0xa0, 0x89, 0x55, 0xf8, 0x89, 0x45
+    };
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    unsigned char *target;
+    unsigned char patch[6];
+    unsigned char *trampoline;
+    DWORD old_protect;
+    DWORD ignored_protect;
+    LONG hook_state;
+    int32_t relative;
+
+    if (!ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) return 0;
+    target = (unsigned char *)(module_base + CE_RVA_TGALAXY_SAVE_TO_STREAM);
+    hook_state = InterlockedCompareExchange(&g_ce_save_hook_installed, -1, 0);
+    if (hook_state == 0) {
+        if (memcmp(target, save_signature, sizeof(save_signature)) != 0) {
+            InterlockedExchange(&g_ce_save_hook_installed, 0);
+            return 0;
+        }
+        trampoline = (unsigned char *)VirtualAlloc(
+            NULL, 11u, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE
+        );
+        if (trampoline == NULL) {
+            InterlockedExchange(&g_ce_save_hook_installed, 0);
+            return 0;
+        }
+        memcpy(trampoline, target, 6u);
+        trampoline[6] = 0xe9;
+        relative = (int32_t)((target + 6u) - (trampoline + 11u));
+        memcpy(trampoline + 7u, &relative, sizeof(relative));
+        g_ce_save_trampoline = trampoline;
+        FlushInstructionCache(GetCurrentProcess(), trampoline, 11u);
+
+        patch[0] = 0xe9;
+        relative = (int32_t)((unsigned char *)(uintptr_t)ce_tgalaxy_save_hook -
+            (target + 5u));
+        memcpy(patch + 1u, &relative, sizeof(relative));
+        patch[5] = 0x90;
+        if (!VirtualProtect(target, 6u, PAGE_EXECUTE_READWRITE, &old_protect)) {
+            VirtualFree(trampoline, 0, MEM_RELEASE);
+            g_ce_save_trampoline = NULL;
+            InterlockedExchange(&g_ce_save_hook_installed, 0);
+            return 0;
+        }
+        memcpy(target, patch, sizeof(patch));
+        FlushInstructionCache(GetCurrentProcess(), target, sizeof(patch));
+        VirtualProtect(target, 6u, old_protect, &ignored_protect);
+        InterlockedExchange(&g_ce_save_hook_installed, 1);
+    } else if (hook_state != 1) {
+        return 0;
+    }
+
+    InterlockedExchange(&g_ce_save_hook_expected_galaxy, (LONG)galaxy_ptr);
+    InterlockedExchange(&g_ce_save_hook_armed, 1);
+    ce_write_text_marker("galaxy-save-snapshot.jsonl",
+        "{\"status\":\"armed\"}\r\n", 20u);
+    return 1;
+#else
+    (void)galaxy_ptr;
+    return 0;
+#endif
 }
 
 uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr) {

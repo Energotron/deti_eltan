@@ -52,6 +52,8 @@ Data ^{
             CEAdapterDumpProcessWindows=dword,CEAdapterDumpProcessWindows
             CEAdapterProbeRawGalaxyPointer=dword,CEAdapterProbeRawGalaxyPointer,dword,dword
             CEAdapterSnapshotGalaxy=dword,CEAdapterSnapshotGalaxy,dword
+            CEAdapterArmGalaxySaveSnapshot=dword,CEAdapterArmGalaxySaveSnapshot,dword
+            CEAdapterPollSecondHomeTransform=dword,CEAdapterPollSecondHomeTransform,dword,dword
             CEAdapterProbeSaveFormatVersion=dword,CEAdapterProbeSaveFormatVersion,dword,dword
             CEAdapterProbeConClass=dword,CEAdapterProbeConClass,dword,dword
         }

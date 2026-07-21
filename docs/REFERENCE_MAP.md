@@ -32,6 +32,23 @@
 | число систем стороны | `ControlledSystems(side)` | `OriginalScripts/PC_final.rson:2905` | 0 Коалиция, 1 доминаторы, 2 пираты |
 | получить указатель текущей Galaxy | `GalaxyPtr()` | `script-functions/aScriptFun.pas:14408-14411` | только непрозрачный 32-битный адрес до проверки layout |
 | подключить функцию DLL | `ScriptLibs`, `ImportedFunction`, `ImportAll` | `aScriptFun.pas:14387-14405`; список функций, строки 3878–3902 | ABI DLL должен быть PE32/cdecl и совпадать с Main |
+| снять полный нативный снимок Galaxy | хук после `TGalaxy.SaveToStream`, RVA `0x43a1a4` | `src/engine_adapter/ce_second_map_adapter.c`; живой тест ABI 10 | только Steam build 2.1.2500; прямой вызов из `Turn` запрещён |
+| преобразовать карту после штатной загрузки | хук после `TGalaxy.LoadFromStream`, RVA `0x43b6cc` | `src/engine_adapter/ce_second_map_adapter.c`; живой тест ABI 11, 73 `TCon` | исследовательский one-shot; это ещё не одновременные две Galaxy |
+
+## Внешние инструменты, перепроверенные 22 июля 2026
+
+- [Инструментарий](https://rangers.fandom.com/ru/wiki/Инструментарий) — сводная
+  страница редакторов и утилит сообщества.
+- [RScript](https://rangers.fandom.com/ru/wiki/RScript) — основной редактор,
+  компилятор/декомпилятор и CLI для игровых скриптов; публичного API замены
+  `Galaxy` или загрузки второй карты на странице не описано.
+- [Space Rangers Universe](https://rangers.fandom.com/ru/wiki/Space_Rangers_Universe)
+  — исследовательский открытый проект по КР; упомянутый исходный репозиторий
+  сейчас не дал доступного кода, пригодного как подтверждение ABI HD-движка.
+- [Cassandra](https://github.com/indiemagpie/Cassandra) — актуальный редактор
+  сохранений, полезный для независимой проверки `.sav`; опубликованный
+  репозиторий содержит готовые бинарные релизы, но не дал исходного описания
+  формата, которое можно было бы безопасно встроить вместо engine lifecycle.
 
 ## Неподтверждённые операции
 
