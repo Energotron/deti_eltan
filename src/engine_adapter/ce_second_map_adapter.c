@@ -1029,6 +1029,39 @@ uint32_t CE_CALL CEAdapterProbeConClass(uint32_t old_galaxy_ptr, uint32_t turn) 
     return (con_class_ok && sublist_ok && subobj_ok) ? 1u : 0u;
 }
 
+/* [0x882580] is a pointer-to-int used throughout TGalaxy.LoadFromStream /
+   TCon's nested loader as a save-format version gate (compared against
+   thresholds like 0x65, 0x7a, 0x85, 0x9e as the format grew over time).
+   Need the exact runtime value once: guessing wrong about which side of a
+   version gate we're on shifts every subsequent stream read by however
+   many bytes that branch reads, corrupting the entire rest of a
+   hand-built buffer. Pure read-only, writes nothing, safe every turn. */
+uint32_t CE_CALL CEAdapterProbeSaveFormatVersion(uint32_t old_galaxy_ptr, uint32_t turn) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    uint32_t version_cell_ok, version_ptr, version_ptr_ok, version_value;
+    char payload[128];
+    int payload_size;
+
+    if (old_galaxy_ptr == 0 ||
+        !ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        return 0;
+    }
+    version_cell_ok = ce_probe_cell(module_base + 0x00482580u, &version_ptr);
+    version_ptr_ok = version_cell_ok &&
+        ce_region_has_access((const void *)(uintptr_t)version_ptr, 4u, 0);
+    version_value = version_ptr_ok ? *(const uint32_t *)(uintptr_t)version_ptr : 0;
+
+    payload_size = snprintf(payload, sizeof(payload),
+        "{\"turn\":%u,\"version_ptr_ok\":%s,\"version_value\":%u}\r\n",
+        turn, version_ptr_ok ? "true" : "false", version_value);
+    if (payload_size > 0) {
+        ce_write_text_marker("save-format-version.jsonl", payload, (size_t)payload_size);
+    }
+    return version_ptr_ok ? 1u : 0u;
+}
+
 uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;
