@@ -43,6 +43,7 @@ Data ^{
             CEAdapterGetGeneratedStarCount=dword,CEAdapterGetGeneratedStarCount,dword
             CEAdapterGetGeneratedStarByIndex=dword,CEAdapterGetGeneratedStarByIndex,dword,dword
             CEAdapterMarkSecondGalaxyEntryDisabled=dword,CEAdapterMarkSecondGalaxyEntryDisabled
+            CEAdapterCreateSecondDestination=dword,CEAdapterCreateSecondDestination,dword
         }
         CE_MapSmoke=CESecondMapAdapter
     }

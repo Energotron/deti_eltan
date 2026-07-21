@@ -36,7 +36,15 @@ enum {
     CE_RVA_TGALAXY_CLASS_CELL = 0x00438d90u,
     CE_RVA_TGALAXY_CONSTRUCTOR = 0x00439198u,
     CE_RVA_TGALAXY_INITIALIZE = 0x0043a034u,
-    CE_RVA_TGALAXY_GENERATE_STARS = 0x0044ff74u
+    CE_RVA_TGALAXY_GENERATE_STARS = 0x0044ff74u,
+    /* TCon: the class TransferShip's "system" destination check accepts
+       (found by disassembling the validator at VA 0x6403d9, which raises
+       "TransferShip - invalid destination" unless the target IsA one of
+       three classes; this is the first of the three, and the one
+       TGalaxy.LoadFromStream constructs into [self+0x2c]). */
+    CE_RVA_TCON_CLASS_CELL = 0x00043f6cu,
+    CE_RVA_TCON_CONSTRUCTOR = 0x004482f8u,
+    CE_RVA_LIST_ADD = 0x000161c0u
 };
 
 uint32_t CE_CALL CEAdapterAbiVersion(void) {
@@ -564,6 +572,22 @@ static void ce_call_delphi_method_byte(
     );
 }
 
+static uint32_t ce_call_delphi_method_dword(
+    uint32_t self, uint32_t dword_argument, uintptr_t function_address
+) {
+    uint32_t result;
+    __asm__ volatile(
+        "movl %1, %%edx\n\t"
+        "movl %2, %%eax\n\t"
+        "call *%3\n\t"
+        "movl %%eax, %0"
+        : "=r"(result)
+        : "r"(dword_argument), "r"(self), "r"(function_address)
+        : "eax", "ecx", "edx", "memory"
+    );
+    return result;
+}
+
 static void ce_write_native_stage(uint32_t stage, uint32_t star_count) {
     char temp_path[MAX_PATH];
     char marker_dir[MAX_PATH];
@@ -849,6 +873,82 @@ uint32_t CE_CALL CEAdapterGetGeneratedStarByIndex(uint32_t galaxy_ptr, uint32_t 
         return 0;
     }
     return *(const uint32_t *)(uintptr_t)(array_ptr + index * 4u);
+}
+
+/* TransferShip only accepts a "system"/"planet"/"station" instance as its
+   destination (three IsA checks against fixed class references; see the
+   validator at VA 0x6403d9). None of the classes GenerateStars builds pass
+   that check, which is exactly the "invalid destination" error the real
+   game raised in-game. Rather than reproduce the full LoadFromStream
+   deserializer that would normally populate real, fully-formed instances
+   of the first class (TCon, at [galaxy+0x2c]), construct one bare instance
+   directly via the engine's own constructor -- it passes the IsA check
+   regardless of whether its other fields are populated -- and copy a
+   position from the real galaxy's own first Con so it does not render at
+   (0,0). Untested whether downstream code (map rendering, sector lookup)
+   tolerates the otherwise-blank instance; that is the next unknown. */
+uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    uint32_t con_class_ref;
+    uint32_t second_galaxy;
+    uint32_t con_list;
+    uint32_t new_con;
+    uint32_t ref_list;
+    uint32_t ref_count;
+    uint32_t ref_array;
+    uint32_t ref_con;
+    float ref_x;
+    float ref_y;
+
+    if (old_galaxy_ptr == 0 ||
+        !ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        return 0;
+    }
+    second_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
+    if (second_galaxy == 0 ||
+        !ce_region_has_access((const void *)(uintptr_t)second_galaxy, 0x30u, 0)) {
+        return 0;
+    }
+    if (!ce_region_has_access((const void *)(module_base + CE_RVA_TCON_CLASS_CELL), 4u, 0)) {
+        return 0;
+    }
+    con_class_ref = *(const uint32_t *)(module_base + CE_RVA_TCON_CLASS_CELL);
+
+    new_con = ce_call_delphi_constructor(con_class_ref, module_base + CE_RVA_TCON_CONSTRUCTOR);
+    if (new_con == 0 || !ce_region_has_access((const void *)(uintptr_t)new_con, 0x20u, 1)) {
+        return 0;
+    }
+
+    ref_x = 0.0f;
+    ref_y = 0.0f;
+    if (ce_region_has_access((const void *)(uintptr_t)(old_galaxy_ptr + 0x2cu), 4u, 0)) {
+        ref_list = *(const uint32_t *)(uintptr_t)(old_galaxy_ptr + 0x2cu);
+        if (ce_region_has_access((const void *)(uintptr_t)ref_list, 12u, 0)) {
+            ref_count = *(const uint32_t *)(uintptr_t)(ref_list + 8u);
+            if (ref_count > 0u) {
+                ref_array = *(const uint32_t *)(uintptr_t)(ref_list + 4u);
+                if (ce_region_has_access((const void *)(uintptr_t)ref_array, 4u, 0)) {
+                    ref_con = *(const uint32_t *)(uintptr_t)ref_array;
+                    if (ce_region_has_access((const void *)(uintptr_t)ref_con, 0x1cu, 0)) {
+                        memcpy(&ref_x, (const void *)(uintptr_t)(ref_con + 0x14u), sizeof(ref_x));
+                        memcpy(&ref_y, (const void *)(uintptr_t)(ref_con + 0x18u), sizeof(ref_y));
+                    }
+                }
+            }
+        }
+    }
+    ref_x += 500.0f;
+    memcpy((void *)(uintptr_t)(new_con + 0x14u), &ref_x, sizeof(ref_x));
+    memcpy((void *)(uintptr_t)(new_con + 0x18u), &ref_y, sizeof(ref_y));
+
+    con_list = *(const uint32_t *)(uintptr_t)(second_galaxy + 0x2cu);
+    if (!ce_region_has_access((const void *)(uintptr_t)con_list, 12u, 0)) {
+        return 0;
+    }
+    ce_call_delphi_method_dword(con_list, new_con, module_base + CE_RVA_LIST_ADD);
+    return new_con;
 }
 
 /* GenerateStars alone leaves a TGalaxy missing everything the engine's own
