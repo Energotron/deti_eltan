@@ -1106,21 +1106,53 @@ uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
         return 0;
     }
 
-    /* Everything from here on calls directly into Delphi-compiled engine
-       code from this foreign-compiled frame; see the VEH/setjmp comment
-       near the top of the file. Recover to a safe 0 return instead of
-       crashing if anything inside faults, and log which step was last
-       reached (con-build-progress.log) either way. */
-    ce_ensure_veh_installed();
-    if (setjmp(g_ce_recovery_point) != 0) {
-        ce_write_progress("recovered-from-fault");
-        return 0;
-    }
-    InterlockedExchange(&g_ce_guard_active, 1);
+    /* Root cause of the earlier real corruption (confirmed by disassembling
+       TCon's constructor, VA 0x8482f8): when [0x88c288] (a "current
+       context" global, non-null during normal play per
+       CEAdapterProbeConClass's own field) is non-null, the constructor
+       unconditionally increments a counter on it before the point where it
+       later faulted. Recovering via longjmp never undid that increment,
+       and something unrelated (TPlanet.RelationToRanger) went out of sync
+       with it later. Temporarily null the context for the exact duration
+       of the constructor call so it takes the guarded (no-op) branch
+       instead, then restore it immediately -- including on the recovered-
+       fault path, so a caught fault doesn't leave the context zeroed for
+       the rest of the session. */
+    {
+        volatile uint32_t context_saved = 0;
+        volatile uint32_t original_context = 0;
+        uintptr_t context_cell = module_base + CE_RVA_CON_CONTEXT_CELL;
 
-    ce_write_progress("before-construct");
-    new_con = ce_call_delphi_constructor(con_class_ref, module_base + CE_RVA_TCON_CONSTRUCTOR);
-    ce_write_progress("after-construct");
+        if (ce_region_has_access((const void *)context_cell, 4u, 0)) {
+            original_context = *(const uint32_t *)context_cell;
+            context_saved = 1;
+        }
+
+        /* Everything from here on calls directly into Delphi-compiled
+           engine code from this foreign-compiled frame; see the VEH/setjmp
+           comment near the top of the file. Recover to a safe 0 return
+           instead of crashing if anything inside faults, and log which
+           step was last reached (con-build-progress.log) either way. */
+        ce_ensure_veh_installed();
+        if (setjmp(g_ce_recovery_point) != 0) {
+            if (context_saved && ce_region_has_access((const void *)context_cell, 4u, 1)) {
+                *(uint32_t *)context_cell = original_context;
+            }
+            ce_write_progress("recovered-from-fault");
+            return 0;
+        }
+        InterlockedExchange(&g_ce_guard_active, 1);
+
+        if (context_saved && ce_region_has_access((const void *)context_cell, 4u, 1)) {
+            *(uint32_t *)context_cell = 0;
+        }
+        ce_write_progress("before-construct");
+        new_con = ce_call_delphi_constructor(con_class_ref, module_base + CE_RVA_TCON_CONSTRUCTOR);
+        ce_write_progress("after-construct");
+        if (context_saved && ce_region_has_access((const void *)context_cell, 4u, 1)) {
+            *(uint32_t *)context_cell = original_context;
+        }
+    }
     if (new_con == 0 || !ce_region_has_access((const void *)(uintptr_t)new_con, 0x20u, 1)) {
         InterlockedExchange(&g_ce_guard_active, 0);
         return 0;
