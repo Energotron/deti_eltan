@@ -44,17 +44,13 @@ static void ce_ensure_veh_installed(void) {
     }
 }
 
-static void ce_write_text_marker(const char *file_name, const char *payload, size_t length) {
-    char temp_path[MAX_PATH];
-    char marker_dir[MAX_PATH];
+static void ce_write_one_marker(const char *dir, const char *file_name, const char *payload, size_t length) {
     char marker_path[MAX_PATH];
     HANDLE file;
     DWORD written = 0;
 
-    if (GetTempPathA(MAX_PATH, temp_path) == 0) return;
-    if (snprintf(marker_dir, sizeof(marker_dir), "%sChildrenOfEltan", temp_path) < 0) return;
-    if (!CreateDirectoryA(marker_dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return;
-    if (snprintf(marker_path, sizeof(marker_path), "%s\\%s", marker_dir, file_name) < 0) return;
+    if (!CreateDirectoryA(dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return;
+    if (snprintf(marker_path, sizeof(marker_path), "%s\\%s", dir, file_name) < 0) return;
     file = CreateFileA(marker_path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
         OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) return;
@@ -63,12 +59,37 @@ static void ce_write_text_marker(const char *file_name, const char *payload, siz
     CloseHandle(file);
 }
 
+static void ce_write_text_marker(const char *file_name, const char *payload, size_t length) {
+    char temp_path[MAX_PATH];
+    char marker_dir[MAX_PATH];
+
+    /* Redundant fixed-path copy: rules out any %TEMP% resolution mismatch
+       between the game process and the tooling reading these markers back. */
+    ce_write_one_marker("C:\\ce_debug", file_name, payload, length);
+
+    if (GetTempPathA(MAX_PATH, temp_path) == 0) return;
+    if (snprintf(marker_dir, sizeof(marker_dir), "%sChildrenOfEltan", temp_path) < 0) return;
+    ce_write_one_marker(marker_dir, file_name, payload, length);
+}
+
 static void ce_write_progress(const char *label) {
     char payload[128];
     int size = snprintf(payload, sizeof(payload), "%s\r\n", label);
     if (size > 0) {
         ce_write_text_marker("con-build-progress.log", payload, (size_t)size);
     }
+}
+
+/* Unconditional load marker: proves the engine actually mapped this DLL
+   into its process, independent of whether any exported function is ever
+   invoked from a Turn script. */
+BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
+    (void)instance;
+    (void)reserved;
+    if (reason == DLL_PROCESS_ATTACH) {
+        ce_write_progress("dllmain-process-attach");
+    }
+    return TRUE;
 }
 
 static volatile LONG g_ce_galaxy_ptr = 0;
@@ -108,7 +129,7 @@ enum {
        "TransferShip - invalid destination" unless the target IsA one of
        three classes; this is the first of the three, and the one
        TGalaxy.LoadFromStream constructs into [self+0x2c]). */
-    CE_RVA_TCON_CLASS_CELL = 0x00043f6cu,
+    CE_RVA_TCON_CLASS_CELL = 0x00438f6cu,
     CE_RVA_TCON_CONSTRUCTOR = 0x004482f8u,
     CE_RVA_LIST_ADD = 0x000161c0u,
     /* Globals TCon's own constructor (0x8482f8) touches: an optional
