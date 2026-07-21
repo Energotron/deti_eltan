@@ -1162,6 +1162,48 @@ uint32_t CE_CALL CEAdapterProbeSubobjectConstruction(uint32_t old_galaxy_ptr) {
     return (sublist_result != 0 ? 1u : 0u) | (subobj_result != 0 ? 2u : 0u);
 }
 
+/* Both of TCon's nested classes now confirmed safe to construct alone
+   (CEAdapterProbeSubobjectConstruction). CEAdapterCreateSecondDestination
+   has never once logged "after-construct" -- every attempt faults inside
+   TCon's own constructor (VA 0x8482f8) before returning. This isolates
+   the very first thing that constructor does: allocate a bare TCon-sized
+   instance via the *generic* trampoline (same one used for the nested
+   classes) instead of TCon's own full constructor body, skipping all 10
+   nested constructions and every field initializer. If this succeeds,
+   the fault is somewhere in TCon's constructor logic itself, not in the
+   base allocation. */
+uint32_t CE_CALL CEAdapterProbeBareConAllocation(uint32_t old_galaxy_ptr) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    uint32_t con_class_ref;
+    uint32_t result = 0;
+
+    if (old_galaxy_ptr == 0 ||
+        !ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        ce_write_progress("bare-con-abort:resolve-failed");
+        return 0;
+    }
+    if (!ce_region_has_access((const void *)(module_base + CE_RVA_TCON_CLASS_CELL), 4u, 0)) {
+        ce_write_progress("bare-con-abort:class-cell-unreadable");
+        return 0;
+    }
+    con_class_ref = *(const uint32_t *)(module_base + CE_RVA_TCON_CLASS_CELL);
+
+    ce_ensure_veh_installed();
+    if (setjmp(g_ce_recovery_point) != 0) {
+        ce_write_progress("bare-con-probe:FAULTED");
+        return 0;
+    }
+    InterlockedExchange(&g_ce_guard_active, 1);
+    ce_write_progress("bare-con-probe:before");
+    result = ce_call_delphi_constructor(
+        con_class_ref, module_base + CE_RVA_GENERIC_CTOR_TRAMPOLINE);
+    InterlockedExchange(&g_ce_guard_active, 0);
+    ce_write_progress(result != 0 ? "bare-con-probe:ok" : "bare-con-probe:returned-null");
+    return result;
+}
+
 uint32_t CE_CALL CEAdapterCloneRaceRecords(uint32_t old_galaxy_ptr) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;

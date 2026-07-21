@@ -37,6 +37,7 @@ Data {
             CEAdapterMarkSecondGalaxyEntryDisabled=dword,CEAdapterMarkSecondGalaxyEntryDisabled
             CEAdapterCloneRaceRecords=dword,CEAdapterCloneRaceRecords,dword
             CEAdapterProbeSubobjectConstruction=dword,CEAdapterProbeSubobjectConstruction,dword
+            CEAdapterProbeBareConAllocation=dword,CEAdapterProbeBareConAllocation,dword
             CEAdapterCreateSecondDestination=dword,CEAdapterCreateSecondDestination,dword
             CEAdapterProbeSaveFormatVersion=dword,CEAdapterProbeSaveFormatVersion,dword,dword
             CEAdapterProbeConClass=dword,CEAdapterProbeConClass,dword,dword
