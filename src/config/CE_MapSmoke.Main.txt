@@ -57,7 +57,7 @@ Data ^{
     }
 }
 ML ^{
-    StarMap ^{
+    Galaxy ^{
         Panel ^{
             GraphButton ^{
                 ImageDown=GI,Bm.FormGalaxy2.CreateD
