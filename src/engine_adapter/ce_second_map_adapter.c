@@ -118,7 +118,18 @@ enum {
        from without any null check. */
     CE_RVA_CON_CONTEXT_CELL = 0x0048c288u,
     CE_RVA_CON_SUBLIST_CLASS_CELL = 0x00471184u,
-    CE_RVA_CON_SUBOBJ_CLASS_CELL = 0x00013f74u
+    CE_RVA_CON_SUBOBJ_CLASS_CELL = 0x00013f74u,
+    /* Raw record allocator (GetMem + zero-fill, not a Delphi constructor --
+       no VMT set up) used by TGalaxy.LoadFromStream's header section to
+       build [galaxy+0xc4], a list of 0x78-byte per-race records whose
+       count comes from [galaxy+0x5c]. Untested hypothesis: TCon's
+       constructor faults because our synthetic galaxy never has this list
+       populated, and something in its ~6 nested sub-constructors expects
+       to find it there. */
+    CE_RVA_RAW_RECORD_ALLOC = 0x000067a0u,
+    CE_GALAXY_RACE_LIST_COUNT_OFFSET = 0x5cu,
+    CE_GALAXY_RACE_LIST_OFFSET = 0xc4u,
+    CE_RACE_RECORD_BYTES = 0x78u
 };
 
 uint32_t CE_CALL CEAdapterAbiVersion(void) {
@@ -662,6 +673,19 @@ static uint32_t ce_call_delphi_method_dword(
     return result;
 }
 
+static uint32_t ce_call_raw_alloc(uint32_t size, uintptr_t function_address) {
+    uint32_t result;
+    __asm__ volatile(
+        "movl %1, %%eax\n\t"
+        "call *%2\n\t"
+        "movl %%eax, %0"
+        : "=r"(result)
+        : "r"(size), "r"(function_address)
+        : "eax", "ecx", "edx", "memory"
+    );
+    return result;
+}
+
 static void ce_write_native_stage(uint32_t stage, uint32_t star_count) {
     char temp_path[MAX_PATH];
     char marker_dir[MAX_PATH];
@@ -1060,6 +1084,93 @@ uint32_t CE_CALL CEAdapterProbeSaveFormatVersion(uint32_t old_galaxy_ptr, uint32
         ce_write_text_marker("save-format-version.jsonl", payload, (size_t)payload_size);
     }
     return version_ptr_ok ? 1u : 0u;
+}
+
+/* Untested hypothesis for why TCon's constructor keeps corrupting shared
+   state regardless of which individual side effect gets patched around:
+   our synthetic galaxy never has [galaxy+0xc4] (a list of 0x78-byte
+   per-race records, count at [galaxy+0x5c]) populated the way
+   TGalaxy.LoadFromStream's header section builds it on a real load, and
+   something in TCon's ~6 nested sub-constructors may expect to find it
+   there. [galaxy+0xc4]'s records are built via a raw GetMem-style
+   allocator (VA 0x4067a0), not a Delphi constructor -- no VMT to set up --
+   so cloning them from the real galaxy is a plain, low-risk memcpy per
+   record, guarded the same way as the rest of this file. Called once
+   before ever attempting Con construction. */
+uint32_t CE_CALL CEAdapterCloneRaceRecords(uint32_t old_galaxy_ptr) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    uint32_t second_galaxy;
+    uint32_t old_count;
+    uint32_t old_list, old_array;
+    uint32_t new_list;
+    uint32_t index;
+    uint32_t cloned = 0;
+
+    if (old_galaxy_ptr == 0 ||
+        !ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        return 0;
+    }
+    second_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
+    if (second_galaxy == 0 ||
+        !ce_region_has_access((const void *)(uintptr_t)second_galaxy, CE_GALAXY_RACE_LIST_OFFSET + 4u, 1) ||
+        !ce_region_has_access((const void *)(uintptr_t)old_galaxy_ptr, CE_GALAXY_RACE_LIST_OFFSET + 4u, 0)) {
+        return 0;
+    }
+
+    old_count = *(const uint32_t *)(uintptr_t)(old_galaxy_ptr + CE_GALAXY_RACE_LIST_COUNT_OFFSET);
+    old_list = *(const uint32_t *)(uintptr_t)(old_galaxy_ptr + CE_GALAXY_RACE_LIST_OFFSET);
+    new_list = *(const uint32_t *)(uintptr_t)(second_galaxy + CE_GALAXY_RACE_LIST_OFFSET);
+    if (old_count == 0u || !ce_region_has_access((const void *)(uintptr_t)old_list, 12u, 0) ||
+        !ce_region_has_access((const void *)(uintptr_t)new_list, 8u, 0)) {
+        return 0;
+    }
+    if (*(const uint32_t *)(uintptr_t)(old_list + 8u) < old_count) {
+        return 0;
+    }
+    old_array = *(const uint32_t *)(uintptr_t)(old_list + 4u);
+    if (!ce_region_has_access((const void *)(uintptr_t)old_array, old_count * 4u, 0)) {
+        return 0;
+    }
+
+    ce_ensure_veh_installed();
+    if (setjmp(g_ce_recovery_point) != 0) {
+        ce_write_progress("race-clone-recovered-from-fault");
+        return 0;
+    }
+    InterlockedExchange(&g_ce_guard_active, 1);
+
+    for (index = 0; index < old_count; ++index) {
+        uint32_t old_record = *(const uint32_t *)(uintptr_t)(old_array + index * 4u);
+        uint32_t new_record;
+        if (!ce_region_has_access((const void *)(uintptr_t)old_record, CE_RACE_RECORD_BYTES, 0)) {
+            continue;
+        }
+        new_record = ce_call_raw_alloc(CE_RACE_RECORD_BYTES, module_base + CE_RVA_RAW_RECORD_ALLOC);
+        if (new_record == 0 ||
+            !ce_region_has_access((const void *)(uintptr_t)new_record, CE_RACE_RECORD_BYTES, 1)) {
+            continue;
+        }
+        memcpy((void *)(uintptr_t)new_record, (const void *)(uintptr_t)old_record, CE_RACE_RECORD_BYTES);
+        ce_call_delphi_method_dword(new_list, new_record, module_base + CE_RVA_LIST_ADD);
+        ++cloned;
+    }
+    InterlockedExchange(&g_ce_guard_active, 0);
+    {
+        char summary[64];
+        int summary_size = snprintf(summary, sizeof(summary),
+            "race-clone-done cloned=%u of %u", cloned, old_count);
+        if (summary_size > 0) ce_write_progress(summary);
+    }
+
+    if (cloned == old_count &&
+        ce_region_has_access((const void *)(uintptr_t)second_galaxy, CE_GALAXY_RACE_LIST_COUNT_OFFSET + 4u, 1)) {
+        *(uint32_t *)(uintptr_t)(second_galaxy + 0x58u) =
+            *(const uint32_t *)(uintptr_t)(old_galaxy_ptr + 0x58u);
+        *(uint32_t *)(uintptr_t)(second_galaxy + CE_GALAXY_RACE_LIST_COUNT_OFFSET) = old_count;
+    }
+    return cloned;
 }
 
 uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
