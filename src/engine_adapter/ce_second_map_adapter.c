@@ -1729,3 +1729,20 @@ uint32_t CE_CALL CEAdapterDumpProcessWindows(void) {
     EnumWindows(ce_enum_top_proc, 0);
     return 1;
 }
+
+/* Unambiguous, non-visual proof of whether the swap actually changes what
+   the rest of the engine considers "the current galaxy": logs the raw
+   pointer value the script's own GalaxyPtr() resolves to, every turn, so a
+   before/after comparison across a single click doesn't depend on reading
+   star names off a screenshot. */
+uint32_t CE_CALL CEAdapterProbeRawGalaxyPointer(uint32_t galaxy_ptr, uint32_t turn) {
+    char payload[96];
+    int size = snprintf(payload, sizeof(payload),
+        "{\"turn\":%lu,\"galaxy_ptr\":%lu,\"active_arm\":%ld}\r\n",
+        (unsigned long)turn, (unsigned long)galaxy_ptr,
+        (long)InterlockedCompareExchange(&g_ce_active_arm, 0, 0));
+    if (size > 0) {
+        ce_write_text_marker("raw-galaxy-pointer.jsonl", payload, (size_t)size);
+    }
+    return 1;
+}
