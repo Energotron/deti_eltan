@@ -16,14 +16,16 @@ $rscript = Join-Path $projectRoot "references\tools\RScript_4.10f\RScript.exe"
 $blockPar = Join-Path $projectRoot "references\tools\BlockParEditor_1.9\BlockParEditor.exe"
 $sourceRson = Join-Path $projectRoot "src\scripts\CE_MapSmoke.rson"
 $sourceMain = Join-Path $projectRoot "src\config\CE_MapSmoke.Main.txt"
+$sourceLang = Join-Path $projectRoot "src\config\CE_MapSmoke.Lang.txt"
 $sourceCache = Join-Path $projectRoot "smoke_module\CFG\CacheData.txt"
 $outputScr = Join-Path $scriptRoot "CE_MapSmoke.scr"
 $outputText = Join-Path $langRoot "CE_MapSmoke.txt"
 $outputMain = Join-Path $cfgRoot "Main.dat"
+$outputLang = Join-Path $langRoot "Lang.dat"
 $outputCache = Join-Path $cfgRoot "CacheData.dat"
 $outputPackage = Join-Path $OutputRoot "ChildrenOfEltanSmoke.pkg"
 
-foreach ($required in @($rscript, $blockPar, $sourceRson, $sourceMain, $sourceCache)) {
+foreach ($required in @($rscript, $blockPar, $sourceRson, $sourceMain, $sourceLang, $sourceCache)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing required file: $required" }
 }
 New-Item -ItemType Directory -Path $scriptRoot, $langRoot -Force | Out-Null
@@ -47,6 +49,12 @@ if (-not (Test-Path -LiteralPath $outputScr) -or
 Start-Sleep -Milliseconds 500
 if (-not (Test-Path -LiteralPath $outputMain) -or (Get-Item -LiteralPath $outputMain).Length -lt 64) {
     throw "BlockParEditor did not produce CFG\Main.dat"
+}
+
+& $blockPar --cli --convert $sourceLang $outputLang
+Start-Sleep -Milliseconds 500
+if (-not (Test-Path -LiteralPath $outputLang) -or (Get-Item -LiteralPath $outputLang).Length -lt 32) {
+    throw "BlockParEditor did not produce CFG\Rus\Lang.dat"
 }
 
 & $blockPar --cli --convert $sourceCache $outputCache

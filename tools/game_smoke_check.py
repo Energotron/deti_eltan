@@ -100,6 +100,7 @@ def preflight(module: Path) -> int:
     required = [
         module / "ModuleInfo.txt", module / "CFG" / "Main.dat",
         module / "CFG" / "CacheData.dat",
+        module / "CFG" / "Rus" / "Lang.dat",
         module / "DATA" / "CESecondMapAdapter.dll",
         module / "DATA" / "Script" / "CE_MapSmoke.scr",
         module / "ChildrenOfEltanSmoke.pkg",
@@ -108,12 +109,12 @@ def preflight(module: Path) -> int:
     if missing:
         print("FAIL: missing module files:\n" + "\n".join(missing))
         return 2
-    dll = required[3]
+    dll = required[4]
     if pe_machine(dll) != 0x14C:
         print("FAIL: adapter is not PE32/i386")
         return 2
     print(f"OK: PE32 adapter SHA256={sha256(dll)}")
-    print(f"OK: script={required[4].stat().st_size} bytes main={required[1].stat().st_size} bytes")
+    print(f"OK: script={required[5].stat().st_size} bytes main={required[1].stat().st_size} bytes")
     return 0
 
 
