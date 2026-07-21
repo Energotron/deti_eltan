@@ -60,9 +60,10 @@ ML ^{
     Galaxy ^{
         Panel ^{
             GraphButton ^{
-                ImageDown=GI,Bm.FormGalaxy2.CreateD
-                ImageNormal=GI,Bm.FormGalaxy2.CreateN
-                ImageNormalA=GI,Bm.FormGalaxy2.CreateA
+                ImageDisable=GI,Bm.FormGalaxy2.2OkH
+                ImageDown=GI,Bm.FormGalaxy2.2OkD
+                ImageNormal=GI,Bm.FormGalaxy2.2OkN
+                ImageNormalA=GI,Bm.FormGalaxy2.2OkA
                 Kind=Normal
                 KindHit=Rect
                 MouseBlocking=True
@@ -71,8 +72,8 @@ ML ^{
                 OnPressCode ~{
                     0=ExecuteCodeFromString(GenerateCodeStringFromBlock('Script.CE_MapSmoke.Functions.SwapButton'));
                 }
-                Pos=414,567,-2
-                Size=37,37
+                Pos=890,640,50
+                Size=119,42
                 Style=Style.GB.SoundNormal
             }
         }
