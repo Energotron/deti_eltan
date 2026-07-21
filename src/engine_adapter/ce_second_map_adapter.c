@@ -2,8 +2,74 @@
 
 #include <windows.h>
 
+#include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
+
+/* This adapter is compiled with clang/MinGW and calls directly into the
+   game's Delphi/Borland-compiled code via raw inline-asm CALLs. Confirmed
+   in practice (CEAdapterCreateSecondDestination raised a real
+   EAccessViolation on turn 1 of a brand new game) that a fault deep inside
+   such a call can corrupt memory outright rather than raising a script-
+   level exception the RScript engine catches gracefully -- most likely
+   because an internal Delphi exception tries to unwind through our foreign,
+   non-Delphi stack frame. clang for this target does not support __try/
+   __except (MSVC-only extension), so recover manually: a vectored
+   exception handler plus setjmp/longjmp turns any crash during a guarded
+   call into a safe "operation failed" return instead of an application
+   crash. Verified against a real EXCEPTION_ACCESS_VIOLATION before wiring
+   this into the risky galaxy/Con construction paths. */
+static jmp_buf g_ce_recovery_point;
+static volatile LONG g_ce_guard_active = 0;
+static volatile LONG g_ce_veh_installed = 0;
+
+static LONG WINAPI ce_veh_handler(EXCEPTION_POINTERS *info) {
+    DWORD code;
+    if (InterlockedCompareExchange(&g_ce_guard_active, 0, 0) == 0) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    code = info->ExceptionRecord->ExceptionCode;
+    if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION ||
+        code == EXCEPTION_PRIV_INSTRUCTION || code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
+        code == EXCEPTION_STACK_OVERFLOW) {
+        InterlockedExchange(&g_ce_guard_active, 0);
+        longjmp(g_ce_recovery_point, 1);
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static void ce_ensure_veh_installed(void) {
+    if (InterlockedCompareExchange(&g_ce_veh_installed, 1, 0) == 0) {
+        AddVectoredExceptionHandler(1, ce_veh_handler);
+    }
+}
+
+static void ce_write_text_marker(const char *file_name, const char *payload, size_t length) {
+    char temp_path[MAX_PATH];
+    char marker_dir[MAX_PATH];
+    char marker_path[MAX_PATH];
+    HANDLE file;
+    DWORD written = 0;
+
+    if (GetTempPathA(MAX_PATH, temp_path) == 0) return;
+    if (snprintf(marker_dir, sizeof(marker_dir), "%sChildrenOfEltan", temp_path) < 0) return;
+    if (!CreateDirectoryA(marker_dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return;
+    if (snprintf(marker_path, sizeof(marker_path), "%s\\%s", marker_dir, file_name) < 0) return;
+    file = CreateFileA(marker_path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
+        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return;
+    WriteFile(file, payload, (DWORD)length, &written, NULL);
+    FlushFileBuffers(file);
+    CloseHandle(file);
+}
+
+static void ce_write_progress(const char *label) {
+    char payload[128];
+    int size = snprintf(payload, sizeof(payload), "%s\r\n", label);
+    if (size > 0) {
+        ce_write_text_marker("con-build-progress.log", payload, (size_t)size);
+    }
+}
 
 static volatile LONG g_ce_galaxy_ptr = 0;
 static volatile LONG g_ce_fingerprint_hash = 0;
@@ -1002,8 +1068,28 @@ uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
         return 0;
     }
 
+    con_list = *(const uint32_t *)(uintptr_t)(second_galaxy + 0x2cu);
+    if (!ce_region_has_access((const void *)(uintptr_t)con_list, 12u, 0)) {
+        return 0;
+    }
+
+    /* Everything from here on calls directly into Delphi-compiled engine
+       code from this foreign-compiled frame; see the VEH/setjmp comment
+       near the top of the file. Recover to a safe 0 return instead of
+       crashing if anything inside faults, and log which step was last
+       reached (con-build-progress.log) either way. */
+    ce_ensure_veh_installed();
+    if (setjmp(g_ce_recovery_point) != 0) {
+        ce_write_progress("recovered-from-fault");
+        return 0;
+    }
+    InterlockedExchange(&g_ce_guard_active, 1);
+
+    ce_write_progress("before-construct");
     new_con = ce_call_delphi_constructor(con_class_ref, module_base + CE_RVA_TCON_CONSTRUCTOR);
+    ce_write_progress("after-construct");
     if (new_con == 0 || !ce_region_has_access((const void *)(uintptr_t)new_con, 0x20u, 1)) {
+        InterlockedExchange(&g_ce_guard_active, 0);
         return 0;
     }
 
@@ -1028,12 +1114,11 @@ uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
     ref_x += 500.0f;
     memcpy((void *)(uintptr_t)(new_con + 0x14u), &ref_x, sizeof(ref_x));
     memcpy((void *)(uintptr_t)(new_con + 0x18u), &ref_y, sizeof(ref_y));
+    ce_write_progress("after-position-copy");
 
-    con_list = *(const uint32_t *)(uintptr_t)(second_galaxy + 0x2cu);
-    if (!ce_region_has_access((const void *)(uintptr_t)con_list, 12u, 0)) {
-        return 0;
-    }
     ce_call_delphi_method_dword(con_list, new_con, module_base + CE_RVA_LIST_ADD);
+    ce_write_progress("after-add");
+    InterlockedExchange(&g_ce_guard_active, 0);
     return new_con;
 }
 
