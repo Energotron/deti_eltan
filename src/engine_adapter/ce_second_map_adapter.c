@@ -1108,29 +1108,54 @@ uint32_t CE_CALL CEAdapterCloneRaceRecords(uint32_t old_galaxy_ptr) {
     uint32_t index;
     uint32_t cloned = 0;
 
-    if (old_galaxy_ptr == 0 ||
-        !ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+    if (old_galaxy_ptr == 0) {
+        ce_write_progress("race-clone-abort:no-old-galaxy");
+        return 0;
+    }
+    if (!ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        ce_write_progress("race-clone-abort:resolve-failed");
         return 0;
     }
     second_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
-    if (second_galaxy == 0 ||
-        !ce_region_has_access((const void *)(uintptr_t)second_galaxy, CE_GALAXY_RACE_LIST_OFFSET + 4u, 1) ||
+    if (second_galaxy == 0) {
+        ce_write_progress("race-clone-abort:no-second-galaxy");
+        return 0;
+    }
+    if (!ce_region_has_access((const void *)(uintptr_t)second_galaxy, CE_GALAXY_RACE_LIST_OFFSET + 4u, 1) ||
         !ce_region_has_access((const void *)(uintptr_t)old_galaxy_ptr, CE_GALAXY_RACE_LIST_OFFSET + 4u, 0)) {
+        ce_write_progress("race-clone-abort:base-fields-unreadable");
         return 0;
     }
 
     old_count = *(const uint32_t *)(uintptr_t)(old_galaxy_ptr + CE_GALAXY_RACE_LIST_COUNT_OFFSET);
     old_list = *(const uint32_t *)(uintptr_t)(old_galaxy_ptr + CE_GALAXY_RACE_LIST_OFFSET);
     new_list = *(const uint32_t *)(uintptr_t)(second_galaxy + CE_GALAXY_RACE_LIST_OFFSET);
-    if (old_count == 0u || !ce_region_has_access((const void *)(uintptr_t)old_list, 12u, 0) ||
-        !ce_region_has_access((const void *)(uintptr_t)new_list, 8u, 0)) {
+    {
+        char diag[160];
+        int diag_size = snprintf(diag, sizeof(diag),
+            "race-clone-fields old_count=%u old_list=%u new_list=%u",
+            old_count, old_list, new_list);
+        if (diag_size > 0) ce_write_progress(diag);
+    }
+    if (old_count == 0u) {
+        ce_write_progress("race-clone-abort:old_count-is-zero");
+        return 0;
+    }
+    if (!ce_region_has_access((const void *)(uintptr_t)old_list, 12u, 0)) {
+        ce_write_progress("race-clone-abort:old_list-unreadable");
+        return 0;
+    }
+    if (!ce_region_has_access((const void *)(uintptr_t)new_list, 8u, 0)) {
+        ce_write_progress("race-clone-abort:new_list-unreadable");
         return 0;
     }
     if (*(const uint32_t *)(uintptr_t)(old_list + 8u) < old_count) {
+        ce_write_progress("race-clone-abort:old_list-count-mismatch");
         return 0;
     }
     old_array = *(const uint32_t *)(uintptr_t)(old_list + 4u);
     if (!ce_region_has_access((const void *)(uintptr_t)old_array, old_count * 4u, 0)) {
+        ce_write_progress("race-clone-abort:old_array-unreadable");
         return 0;
     }
 
