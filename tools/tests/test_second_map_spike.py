@@ -19,6 +19,16 @@ from tools.second_map_spike import (
     current_story_target,
     current_mission,
     debug_open_second_home,
+    defeat_capital,
+    defeat_dominator_boss,
+    destroy_pirate_clan,
+    devastate_system,
+    donate_gate_material,
+    configure_coalition_research,
+    can_transfer_orphan_to_intells,
+    occupy_devastated_system,
+    record_scout_outcome,
+    resolve_orphan,
     purchase_sector_map,
     recover_transit,
     run_demo,
@@ -87,7 +97,11 @@ class SecondMapSpikeTests(unittest.TestCase):
                 recovered_again = recover_transit(store)
                 self.assertEqual(recovered_again["current_arm"], "SECOND_HOME")
                 self.assertEqual(recovered_again["cargo"]["CE_Item_ResonanceCell"], 2)
-                self.assertEqual(len(recovered_again["history"]), 1)
+                self.assertEqual(len(recovered_again["history"]), 2)
+                self.assertEqual(
+                    len([event for event in recovered_again["history"]
+                         if event["type"] == "CE_UNION_INVASION_STARTED"]), 1,
+                )
                 self.assertEqual(recovered, recovered_again)
 
     def test_inactive_arm_simulates_in_aggregate_ticks(self):
@@ -194,18 +208,18 @@ class SecondMapSpikeTests(unittest.TestCase):
 
     def test_war_apart_pirates_arrive_only_after_player_opens_the_route(self):
         state = create_state(80, 5, 2441, old_sector_count=19)
-        self.assertEqual(state["pirate_migration"]["status"], "LOCKED")
+        self.assertEqual(state["pirate_migration"]["status"], "INELIGIBLE")
         self.assertFalse(any(
             system["controller"] == "CE_FACTION_PIRATES"
             for system in state["maps"]["SECOND_HOME"]["systems"]
         ))
         self.store.save(state)
         state = begin_transit(self.store)
-        self.assertEqual(state["pirate_migration"]["status"], "SCOUTING")
+        self.assertEqual(state["pirate_migration"]["status"], "STEALING_TECH")
         arrival_day = state["pirate_migration"]["arrival_day"]
         self.assertTrue(25 <= arrival_day <= 40)
         simulate_days(state, arrival_day - 1)
-        self.assertEqual(state["pirate_migration"]["status"], "SCOUTING")
+        self.assertEqual(state["pirate_migration"]["status"], "STEALING_TECH")
         self.assertFalse(any(
             system["controller"] == "CE_FACTION_PIRATES"
             for system in state["maps"]["SECOND_HOME"]["systems"]
@@ -250,8 +264,8 @@ class SecondMapSpikeTests(unittest.TestCase):
 
     def test_destroyed_or_unknown_war_apart_clan_never_migrates(self):
         for outcome, expected_status in (
-            ("COALITION_VICTORY", "EXTINCT"),
-            ("UNKNOWN", "UNRESOLVED"),
+            ("COALITION_VICTORY", "INELIGIBLE"),
+            ("UNKNOWN", "INELIGIBLE"),
         ):
             with self.subTest(outcome=outcome):
                 path = Path(self.temp.name) / f"{outcome}.json"
@@ -279,6 +293,23 @@ class SecondMapSpikeTests(unittest.TestCase):
         self.assertEqual(state["pirate_migration"]["first_passage_day"], 0)
         self.assertEqual(state["pirate_migration"]["arrival_day"], 0)
         self.assertTrue(any(
+            system["controller"] == "CE_FACTION_PIRATES"
+            for system in state["maps"]["SECOND_HOME"]["systems"]
+        ))
+
+    def test_player_pirate_status_does_not_resurrect_destroyed_clan(self):
+        state = create_state(
+            80, 5, 2441, old_sector_count=19,
+            war_apart_state="COALITION_VICTORY",
+            pirate_clan_exists_at_corridor="NO",
+            player_pirate=True,
+        )
+        self.store.save(state)
+        state = begin_transit(self.store)
+        simulate_days(state, 100)
+        self.assertFalse(state["pirate_migration"]["eligible"])
+        self.assertEqual(state["pirate_migration"]["status"], "INELIGIBLE")
+        self.assertFalse(any(
             system["controller"] == "CE_FACTION_PIRATES"
             for system in state["maps"]["SECOND_HOME"]["systems"]
         ))
@@ -398,7 +429,7 @@ class SecondMapSpikeTests(unittest.TestCase):
                 }
                 for series, controller in controllers_by_series.items():
                     expected_status = (
-                        "EXTINCT" if series == eliminated_series else "ESTABLISHED"
+                        "INELIGIBLE" if series == eliminated_series else "ESTABLISHED"
                     )
                     self.assertEqual(
                         state["dominator_invasions"][series]["status"],
@@ -628,6 +659,202 @@ class SecondMapSpikeTests(unittest.TestCase):
         self.assertIn(brief["sector_name"], brief["instruction"])
         self.assertNotIn("Для продолжения", brief["instruction"])
         self.assertNotIn("Откройте сектор", brief["instruction"])
+
+    def test_scout_memory_profiles_survive_save_load(self):
+        cases = {
+            "MERCIFUL": ["SPARED", "SPARED"],
+            "HUNTER": ["DESTROYED", "DESTROYED"],
+            "INTRUSIVE": ["FOLLOWED", "COERCED"],
+            "UNKNOWN": ["SPARED", "DESTROYED"],
+        }
+        for expected, outcomes in cases.items():
+            with self.subTest(expected=expected):
+                state = create_state(80, 5, 2441, old_sector_count=19)
+                for outcome in outcomes:
+                    record_scout_outcome(state, outcome)
+                self.assertEqual(state["scouts"]["arrival_profile"], expected)
+                self.store.save(state)
+                self.assertEqual(
+                    self.store.load()["scouts"]["arrival_profile"], expected
+                )
+
+    def test_capital_defeat_stops_race_and_cleanup_eliminates_it(self):
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        faction = "CE_FACTION_STRONG"
+        defeat_capital(
+            state, "STRONG", defenders_cleared=False, producers_disabled=True
+        )
+        self.assertEqual(state["capital_boss_states"]["STRONG"], "ENGAGED")
+        self.assertEqual(state["race_states"]["STRONG"], "ACTIVE")
+        defeat_capital(
+            state, "STRONG", defenders_cleared=True, producers_disabled=True
+        )
+        self.assertEqual(state["race_states"]["STRONG"], "DECAPITATED")
+        strong_systems = [
+            item for item in state["maps"]["SECOND_HOME"]["systems"]
+            if item["owner"] == faction
+        ]
+        self.assertTrue(strong_systems)
+        self.assertTrue(all(
+            not item["military_production_enabled"] and
+            not item["strategic_expansion_enabled"]
+            for item in strong_systems
+        ))
+        for system in list(strong_systems):
+            devastate_system(state, system["id"])
+        self.assertEqual(state["race_states"]["STRONG"], "ELIMINATED")
+        self.store.save(state)
+        validate_state(self.store.load())
+
+    def test_boss_killed_while_tracking_never_arrives(self):
+        self.store.save(create_state(80, 5, 2441, old_sector_count=19))
+        state = begin_transit(self.store)
+        defeat_dominator_boss(state, "KELLER")
+        simulate_days(state, 100)
+        branch = state["dominator_invasions"]["KELLER"]
+        self.assertEqual(branch["status"], "INELIGIBLE")
+        self.assertFalse(any(
+            item["controller"] == "CE_DOMINATOR_KELLEROIDS"
+            for item in state["maps"]["SECOND_HOME"]["systems"]
+        ))
+
+    def test_boss_killed_after_arrival_stalls_until_cleanup(self):
+        self.store.save(create_state(80, 5, 2441, old_sector_count=19))
+        state = begin_transit(self.store)
+        arrival = state["dominator_invasions"]["KELLER"]["arrival_day"]
+        simulate_days(state, arrival)
+        defeat_dominator_boss(state, "KELLER")
+        branch = state["dominator_invasions"]["KELLER"]
+        self.assertEqual(branch["status"], "STALLED")
+        for system_id in list(branch["converted_system_ids"]):
+            devastate_system(state, system_id)
+        self.assertEqual(branch["status"], "ELIMINATED")
+        self.store.save(state)
+        validate_state(self.store.load())
+
+    def test_pirate_clan_destroyed_after_arrival_splinters_then_dies(self):
+        state = create_state(
+            80, 5, 2441, old_sector_count=19,
+            war_apart_state="PLAYER_PIRATE",
+        )
+        self.store.save(state)
+        state = begin_transit(self.store)
+        destroy_pirate_clan(state)
+        migration = state["pirate_migration"]
+        self.assertEqual(migration["status"], "SPLINTERED")
+        for system_id in list(migration["converted_system_ids"]):
+            devastate_system(state, system_id)
+        self.assertEqual(migration["status"], "ELIMINATED")
+
+    def test_orphan_recipient_disappears_after_intell_decapitation(self):
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        self.assertTrue(can_transfer_orphan_to_intells(state))
+        resolve_orphan(state, "TRANSFER_TO_INTELLS")
+        defeat_capital(
+            state, "INTELL", defenders_cleared=True, producers_disabled=True
+        )
+        self.assertFalse(can_transfer_orphan_to_intells(state))
+        with self.assertRaises(StateError):
+            resolve_orphan(state, "TRANSFER_TO_INTELLS")
+
+    def test_destroyed_orphan_stops_klissan_spread(self):
+        active = create_state(80, 5, 2441, old_sector_count=19)
+        stopped = json.loads(json.dumps(active))
+        for state in (active, stopped):
+            candidate = next(
+                item for item in state["maps"]["SECOND_HOME"]["systems"]
+                if item["condition"] == "INHABITED" and not item["government_map_office"]
+            )
+            devastate_system(state, candidate["id"])
+        active["orphan_state"] = "ACTIVE"
+        resolve_orphan(stopped, "DESTROY")
+        simulate_days(active, 30)
+        simulate_days(stopped, 30)
+        self.assertTrue(any(
+            item["system_state"] == "KLISSAN_INFESTED"
+            for item in active["maps"]["SECOND_HOME"]["systems"]
+        ))
+        self.assertFalse(any(
+            item["system_state"] == "KLISSAN_INFESTED" and
+            item["last_capture_day"] > 0
+            for item in stopped["maps"]["SECOND_HOME"]["systems"]
+        ))
+
+    def test_coalition_cannot_capture_before_gate_but_can_after(self):
+        state = create_state(80, 5, 2441, old_sector_count=19)
+        candidate = next(
+            item for item in state["maps"]["SECOND_HOME"]["systems"]
+            if item["condition"] == "INHABITED" and not item["government_map_office"]
+        )
+        devastate_system(state, candidate["id"])
+        with self.assertRaises(StateError):
+            occupy_devastated_system(state, candidate["id"], "CE_FACTION_COALITION")
+        self.store.save(state)
+        state = debug_open_second_home(self.store)
+        donate_gate_material(state, 1000)
+        simulate_days(state, 100)
+        self.assertEqual(state["transit_access_mode"], "COALITION_MASS")
+        after_gate = next(
+            item for item in state["maps"]["SECOND_HOME"]["systems"]
+            if item["condition"] == "INHABITED" and not item["government_map_office"]
+        )
+        devastate_system(state, after_gate["id"])
+        occupy_devastated_system(state, after_gate["id"], "CE_FACTION_COALITION")
+        self.assertEqual(after_gate["owner"], "CE_FACTION_COALITION")
+
+    def test_gate_pause_parallel_penalty_peace_and_failure(self):
+        self.store.save(create_state(80, 5, 2441, old_sector_count=19))
+        state = debug_open_second_home(self.store)
+        simulate_days(state, 10)
+        normal = state["coalition_gate"]["progress"]
+
+        parallel = create_state(80, 5, 2441, old_sector_count=19)
+        self.store.save(parallel)
+        parallel = debug_open_second_home(self.store)
+        configure_coalition_research(parallel, anti_dominator_active=True)
+        simulate_days(parallel, 10)
+        self.assertEqual(parallel["coalition_gate"]["progress"], int(normal * 0.6))
+
+        configure_coalition_research(parallel, science_bases=0)
+        paused = parallel["coalition_gate"]["progress"]
+        simulate_days(parallel, 20)
+        self.assertEqual(parallel["coalition_gate"]["progress"], paused)
+        configure_coalition_research(parallel, science_bases=1)
+        simulate_days(parallel, 1)
+        self.assertGreater(parallel["coalition_gate"]["progress"], paused)
+
+        peaceful = create_state(80, 5, 2441, old_sector_count=19)
+        self.store.save(peaceful)
+        peaceful = debug_open_second_home(self.store)
+        configure_coalition_research(peaceful, peace_reached=True)
+        donate_gate_material(peaceful, 1000)
+        simulate_days(peaceful, 100)
+        self.assertEqual(peaceful["transit_access_mode"], "PEACEFUL_MASS")
+
+        configure_coalition_research(peaceful, coalition_alive=False)
+        self.assertEqual(peaceful["coalition_gate"]["status"], "FAILED")
+        self.assertFalse(peaceful["coalition_gate"]["mass_transit"])
+        self.assertEqual(peaceful["transit_access_mode"], "PLAYER_ONLY")
+
+    def test_gate_completion_day_does_not_depend_on_tick_size(self):
+        base = create_state(80, 5, 2441, old_sector_count=19)
+        self.store.save(base)
+        base = debug_open_second_home(self.store)
+        donate_gate_material(base, 1000)
+        jump = json.loads(json.dumps(base))
+        daily = json.loads(json.dumps(base))
+        simulate_days(jump, 120)
+        for _ in range(120):
+            simulate_days(daily, 1)
+        jump_event = next(
+            event for event in jump["history"]
+            if event["type"] == "CE_COALITION_GATE_ACTIVATED"
+        )
+        daily_event = next(
+            event for event in daily["history"]
+            if event["type"] == "CE_COALITION_GATE_ACTIVATED"
+        )
+        self.assertEqual(jump_event, daily_event)
 
 
 if __name__ == "__main__":

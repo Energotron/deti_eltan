@@ -4,173 +4,453 @@
     "act": "PROLOGUE",
     "name_ru": "Пепел в помехах",
     "prerequisites": [],
+    "outcomes": ["SPARE", "DESTROY", "COERCE", "FOLLOW"],
+    "effects": ["RECORD_SCOUT_ENCOUNTER", "RECOMPUTE_SCOUT_ARRIVAL_PROFILE"],
     "status": "vertical_slice"
+  },
+  {
+    "id": "CE-SCOUT-RANDOM",
+    "act": "PRE_WAR",
+    "name_ru": "Неизвестная сигнатура",
+    "prerequisites": ["CE-P00"],
+    "repeat_range": [1, 3],
+    "outcomes": ["SPARE", "DESTROY", "COERCE", "FOLLOW"],
+    "effects": ["RECORD_SCOUT_ENCOUNTER", "RECOMPUTE_SCOUT_ARRIVAL_PROFILE"],
+    "status": "designed"
   },
   {
     "id": "CE-A1-01",
     "act": "ACT_1",
     "name_ru": "Исчезнувший караван",
-    "prerequisites": [
-      "CE-P00"
-    ],
+    "prerequisites": ["CE-P00"],
     "status": "designed"
   },
   {
     "id": "CE-A1-02",
     "act": "ACT_1",
     "name_ru": "Чёрный ящик, которого не было",
-    "prerequisites": [
-      "CE-P00"
-    ],
+    "prerequisites": ["CE-P00"],
     "status": "designed"
   },
   {
     "id": "CE-A1-03",
     "act": "ACT_1",
     "name_ru": "Семь цен Мгагучи",
-    "prerequisites": [
-      "CE-A1-02"
-    ],
+    "prerequisites": ["CE-A1-02"],
     "status": "designed"
   },
   {
     "id": "CE-A1-04",
     "act": "ACT_1",
     "name_ru": "Четыре сигнатуры",
-    "prerequisites": [
-      "CE-A1-01"
-    ],
+    "prerequisites": ["CE-A1-01"],
     "status": "designed"
   },
   {
     "id": "CE-A1-05",
     "act": "ACT_1",
     "name_ru": "Граница горит",
-    "prerequisites": [
-      "CE-A1-04"
-    ],
-    "status": "designed"
-  },
-  {
-    "id": "CE-A2-01",
-    "act": "ACT_2",
-    "name_ru": "Совет девяти голосов",
-    "prerequisites": [
-      "CE-A1-05"
-    ],
-    "status": "designed"
-  },
-  {
-    "id": "CE-A3-01",
-    "act": "ACT_3",
-    "name_ru": "Врата Пепла",
-    "prerequisites": [
-      "CE-A2-01",
-      "CE-A1-03"
-    ],
-    "status": "designed"
-  },
-  {
-    "id": "CE-A4-01",
-    "act": "ACT_4",
-    "name_ru": "Кому принадлежит прошлое",
-    "prerequisites": [
-      "CE-A3-01"
-    ],
-    "status": "designed"
-  },
-  {
-    "id": "CE-PIR-01",
-    "act": "PIRATE_ARC",
-    "name_ru": "Покупатели с четырьмя руками",
-    "prerequisites": [
-      "CE-P00"
-    ],
-    "status": "designed"
-  },
-  {
-    "id": "CE-PIR-02",
-    "act": "PIRATE_ARC",
-    "name_ru": "Наследство клана",
-    "prerequisites": [
-      "CE-PIR-01"
-    ],
-    "status": "designed"
-  },
-  {
-    "id": "CE-PIR-03",
-    "act": "PIRATE_ARC",
-    "name_ru": "Пепельный капер",
-    "prerequisites": [
-      "CE-PIR-01"
-    ],
-    "status": "designed"
-  },
-  {
-    "id": "CE-PIR-04",
-    "act": "PIRATE_ARC",
-    "name_ru": "Контрабанда памяти",
-    "prerequisites": [
-      "CE-A1-01"
-    ],
-    "status": "designed"
-  },
-  {
-    "id": "CE-PIR-05",
-    "act": "PIRATE_ARC",
-    "name_ru": "Ячейка без заряда",
-    "prerequisites": [
-      "CE-A3-00"
-    ],
-    "status": "designed"
-  },
-  {
-    "id": "CE-PIR-06",
-    "act": "PIRATE_ARC",
-    "name_ru": "Чёрная Паутина",
-    "prerequisites": [
-      "CE-PIR-03"
-    ],
-    "status": "designed"
-  },
-  {
-    "id": "CE-PIR-07",
-    "act": "PIRATE_ARC",
-    "name_ru": "Вольница",
-    "prerequisites": [
-      "CE-PIR-02",
-      "CE-PIR-06"
-    ],
-    "status": "designed"
-  },
-  {
-    "id": "CE-PIR-08",
-    "act": "FINALE",
-    "name_ru": "Третий флаг",
-    "prerequisites": [
-      "CE-PIR-07",
-      "CE-A4-01"
-    ],
+    "prerequisites": ["CE-A1-04"],
+    "war_scope": "covert_sabotage_no_system_capture",
     "status": "designed"
   },
   {
     "id": "CE-A3-00",
-    "act": "ACT_3",
+    "act": "ANCHOR",
     "name_ru": "Якорь Двух Домов",
-    "prerequisites": [
-      "CE-A2-01",
-      "CE-A1-03"
+    "prerequisites": ["CE-A1-02", "CE-A1-03", "CE-A1-04"],
+    "required_physical_modules": [
+      "CE_MGAGUCH_STABILIZER",
+      "CE_AGILL_NAVIGATION_KEY",
+      "CE_INTELL_RESONATOR"
     ],
+    "optional_upgrade": "CE_ELTAN4_CORE",
+    "status": "designed"
+  },
+  {
+    "id": "CE-A3-01",
+    "act": "ANCHOR",
+    "name_ru": "Врата Пепла",
+    "prerequisites": ["CE-A3-00"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-WAR-00",
+    "act": "WAR",
+    "name_ru": "Первый строй",
+    "prerequisites": ["CE-A3-01"],
+    "effects": ["START_FOURTH_WAR", "SNAPSHOT_OLD_ARM_THREATS", "UNION_INVASION"],
     "status": "designed"
   },
   {
     "id": "CE-A3-01B",
     "act": "ACT_3",
     "name_ru": "Нулевой коридор",
-    "prerequisites": [
-      "CE-A3-00",
-      "CE-A3-01"
-    ],
+    "prerequisites": ["CE-WAR-00"],
+    "transit_access": "PLAYER_ONLY",
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-01",
+    "act": "ACT_2",
+    "name_ru": "Совет девяти голосов",
+    "prerequisites": ["CE-WAR-00"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-WAR-01",
+    "act": "WAR",
+    "name_ru": "Ответ науки",
+    "prerequisites": ["CE-WAR-00", "CE-A2-01"],
+    "effects": ["START_COALITION_GATE_RESEARCH"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-S1",
+    "act": "ACT_2",
+    "name_ru": "Право Молота",
+    "prerequisites": ["CE-A2-01"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-S2",
+    "act": "ACT_2",
+    "name_ru": "Корабль, который не бросают",
+    "prerequisites": ["CE-A2-S1"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-S3",
+    "act": "ACT_2",
+    "name_ru": "Кузня Клятвы",
+    "prerequisites": ["CE-A2-S2"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-A1",
+    "act": "ACT_2",
+    "name_ru": "Агент, которого было трое",
+    "prerequisites": ["CE-A2-01"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-A2",
+    "act": "ACT_2",
+    "name_ru": "Паутина в рейтинге",
+    "prerequisites": ["CE-A2-A1"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-A3",
+    "act": "ACT_2",
+    "name_ru": "Последняя маска Ирши",
+    "prerequisites": ["CE-A2-A2"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-M1",
+    "act": "ACT_2",
+    "name_ru": "Хлеб оккупированных",
+    "prerequisites": ["CE-A2-01"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-M2",
+    "act": "ACT_2",
+    "name_ru": "Люминесцентная кровь",
+    "prerequisites": ["CE-A2-M1"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-M3",
+    "act": "ACT_2",
+    "name_ru": "Архонт без наследника",
+    "prerequisites": ["CE-A2-M2"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-I1",
+    "act": "ACT_2",
+    "name_ru": "Стеклянный хор",
+    "prerequisites": ["CE-A2-01"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-I2",
+    "act": "ACT_2",
+    "name_ru": "Ошибка из пяти глаз",
+    "prerequisites": ["CE-A2-I1"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-I3",
+    "act": "ACT_2",
+    "name_ru": "Формула милосердия",
+    "prerequisites": ["CE-A2-I2"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-05",
+    "act": "ACT_2",
+    "name_ru": "Чужой флаг",
+    "prerequisites": ["CE-A2-01"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A2-06",
+    "act": "ACT_2",
+    "name_ru": "Линия держится",
+    "prerequisites": ["CE-A2-S3", "CE-A2-A3", "CE-A2-M3", "CE-A2-I3"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A3-02",
+    "act": "ACT_3",
+    "name_ru": "Два лайнера",
+    "prerequisites": ["CE-A3-01B"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A3-03",
+    "act": "ACT_3",
+    "name_ru": "Архив голода",
+    "prerequisites": ["CE-A3-01B"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A3-04",
+    "act": "ACT_3",
+    "name_ru": "Сирота",
+    "prerequisites": ["CE-A3-01B"],
+    "dynamic_recipient_rules": {
+      "INTELL": "vCE_IntellState == ACTIVE"
+    },
+    "status": "designed"
+  },
+  {
+    "id": "CE-A3-05",
+    "act": "ACT_3",
+    "name_ru": "Город Незажжённых",
+    "prerequisites": ["CE-A3-01B"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-TECH",
+    "act": "WAR_SYSTEMIC",
+    "name_ru": "Украденная калибровка",
+    "prerequisites": ["CE-WAR-00"],
+    "condition": "PIRATE_CLAN_EXISTS",
+    "effect": "START_PIRATE_SECOND_HOME_MIGRATION",
+    "status": "designed"
+  },
+  {
+    "id": "CE-DOM-BLAZER-STOP",
+    "act": "WAR_SYSTEMIC",
+    "name_ru": "Погасший импульс Блазера",
+    "prerequisites": ["CE-WAR-00"],
+    "condition": "BLAZER_DESTROYED_AFTER_SECOND_HOME_TRACKING",
+    "status": "designed"
+  },
+  {
+    "id": "CE-DOM-KELLER-STOP",
+    "act": "WAR_SYSTEMIC",
+    "name_ru": "Оборванная сеть Келлера",
+    "prerequisites": ["CE-WAR-00"],
+    "condition": "KELLER_DESTROYED_AFTER_SECOND_HOME_TRACKING",
+    "status": "designed"
+  },
+  {
+    "id": "CE-DOM-TERRON-STOP",
+    "act": "WAR_SYSTEMIC",
+    "name_ru": "Замершая экспансия Террона",
+    "prerequisites": ["CE-WAR-00"],
+    "condition": "TERRON_DESTROYED_AFTER_SECOND_HOME_TRACKING",
+    "status": "designed"
+  },
+  {
+    "id": "CE-CAP-STRONG",
+    "act": "ACT_4",
+    "name_ru": "Столица Стронгов",
+    "prerequisites": ["CE-A3-01B"],
+    "effect": "STRONG_ACTIVE_TO_DECAPITATED",
+    "status": "designed"
+  },
+  {
+    "id": "CE-CAP-AGILL",
+    "act": "ACT_4",
+    "name_ru": "Столица Агиллов",
+    "prerequisites": ["CE-A3-01B"],
+    "effect": "AGILL_ACTIVE_TO_DECAPITATED",
+    "status": "designed"
+  },
+  {
+    "id": "CE-CAP-MEDIUM",
+    "act": "ACT_4",
+    "name_ru": "Столица Медиумов",
+    "prerequisites": ["CE-A3-01B"],
+    "effect": "MEDIUM_ACTIVE_TO_DECAPITATED",
+    "status": "designed"
+  },
+  {
+    "id": "CE-CAP-INTELL",
+    "act": "ACT_4",
+    "name_ru": "Столица Интеллов",
+    "prerequisites": ["CE-A3-01B"],
+    "effect": "INTELL_ACTIVE_TO_DECAPITATED",
+    "status": "designed"
+  },
+  {
+    "id": "CE-ORPHAN-RECOVERY",
+    "act": "ACT_4",
+    "name_ru": "Осиротевший хор",
+    "prerequisites": ["CE-A3-04", "CE-CAP-INTELL"],
+    "condition": "ORPHAN_WAS_INTELL_CONTROLLED",
+    "status": "designed"
+  },
+  {
+    "id": "CE-A4-01",
+    "act": "ACT_4",
+    "name_ru": "Кому принадлежит прошлое",
+    "prerequisites": ["CE-A3-02", "CE-A3-03", "CE-A3-04", "CE-A3-05"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A4-02",
+    "act": "ACT_4",
+    "name_ru": "Раскол Совета",
+    "prerequisites": ["CE-A4-01"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-A4-03",
+    "act": "ACT_4",
+    "name_ru": "Чума памяти",
+    "prerequisites": ["CE-A4-01"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-GATE-COALITION",
+    "act": "GATE_PROJECT",
+    "name_ru": "Ответный ход",
+    "prerequisites": ["CE-WAR-01"],
+    "condition": "vCE_CoalitionGateProgress == 10000 AND vCE_CoalitionGateProject == COMPLETE AND vCE_CoalitionState == ACTIVE",
+    "effects": ["ENABLE_COALITION_MASS"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-GATE-PEACEFUL",
+    "act": "GATE_PROJECT",
+    "name_ru": "Тихий коридор",
+    "prerequisites": ["CE-WAR-01"],
+    "condition": "vCE_CoalitionState == PEACE AND vCE_CoalitionGateProject != FAILED",
+    "effects": ["ENABLE_PEACEFUL_MASS", "DISABLE_UNION_INVASION"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-01",
+    "act": "PIRATE_ARC",
+    "name_ru": "Покупатели с четырьмя руками",
+    "prerequisites": ["CE-P00"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-02",
+    "act": "PIRATE_ARC",
+    "name_ru": "Наследство клана",
+    "prerequisites": ["CE-PIR-01"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-03",
+    "act": "PIRATE_ARC",
+    "name_ru": "Пепельный капер",
+    "prerequisites": ["CE-WAR-00", "CE-PIR-01"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-04",
+    "act": "PIRATE_ARC",
+    "name_ru": "Контрабанда памяти",
+    "prerequisites": ["CE-A1-01"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-05",
+    "act": "PIRATE_ARC",
+    "name_ru": "Ячейка без заряда",
+    "prerequisites": ["CE-A3-00"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-06",
+    "act": "PIRATE_ARC",
+    "name_ru": "Чёрная Паутина",
+    "prerequisites": ["CE-PIR-03"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-07",
+    "act": "PIRATE_ARC",
+    "name_ru": "Вольница",
+    "prerequisites": ["CE-PIR-02", "CE-PIR-06"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-PIR-08",
+    "act": "FINALE",
+    "name_ru": "Третий флаг",
+    "prerequisites": ["CE-PIR-07", "CE-A4-01"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-FIN-SOLO",
+    "act": "FINALE",
+    "name_ru": "Один против Второго Дома",
+    "prerequisites": ["CE-CAP-STRONG", "CE-CAP-AGILL", "CE-CAP-MEDIUM", "CE-CAP-INTELL"],
+    "condition": "ALL_UNION_SYSTEMS_CLEARED_BEFORE_COALITION_MASS",
+    "status": "designed"
+  },
+  {
+    "id": "CE-FIN-COALITION",
+    "act": "FINALE",
+    "name_ru": "Пять против четырёх",
+    "prerequisites": ["CE-GATE-COALITION", "CE-CAP-STRONG", "CE-CAP-AGILL", "CE-CAP-MEDIUM", "CE-CAP-INTELL"],
+    "condition": "COALITION_MASS_AND_STABLE_BEACHHEAD",
+    "status": "designed"
+  },
+  {
+    "id": "CE-FIN-ELTAN",
+    "act": "FINALE",
+    "name_ru": "Возвращение собственности",
+    "prerequisites": ["CE-A4-02", "CE-A4-03"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-FIN-PEACE",
+    "act": "FINALE",
+    "name_ru": "Девять голосов",
+    "prerequisites": ["CE-A4-02", "CE-A4-03"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-FIN-FEDERATION",
+    "act": "FINALE",
+    "name_ru": "Десятый голос",
+    "prerequisites": ["CE-A4-02", "CE-A4-03"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-FIN-ASH",
+    "act": "FINALE",
+    "name_ru": "Эльтан снова",
+    "prerequisites": ["CE-A4-03"],
+    "status": "designed"
+  },
+  {
+    "id": "CE-FIN-ORPHAN",
+    "act": "FINALE",
+    "name_ru": "Корабли тоже помнят",
+    "prerequisites": ["CE-A3-04", "CE-A4-03"],
     "status": "designed"
   }
 ]

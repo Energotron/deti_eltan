@@ -3,7 +3,7 @@
     {
       "id": "vCE_SchemaVersion",
       "type": "int",
-      "default": 1,
+      "default": 3,
       "min": 1,
       "max": 999,
       "save": true
@@ -164,12 +164,19 @@
       "default": "UNKNOWN",
       "values": [
         "UNKNOWN",
-        "CONTACTED",
-        "SAMPLED",
+        "ACTIVE",
+        "HIDDEN",
+        "PACIFIED",
         "DESTROYED",
         "INTELL_CONTROLLED",
         "FREE"
       ],
+      "save": true
+    },
+    {
+      "id": "vCE_OrphanSampleTaken",
+      "type": "bool",
+      "default": false,
       "save": true
     },
     {
@@ -184,6 +191,223 @@
         "ARMED",
         "MEDIATOR"
       ],
+      "save": true
+    },
+    {
+      "id": "vCE_ScoutsSpared",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 999,
+      "save": true
+    },
+    {
+      "id": "vCE_ScoutsDestroyed",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 999,
+      "save": true
+    },
+    {
+      "id": "vCE_ScoutsCoerced",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 999,
+      "save": true
+    },
+    {
+      "id": "vCE_ScoutsFollowed",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 999,
+      "save": true
+    },
+    {
+      "id": "vCE_ScoutArrivalProfile",
+      "type": "enum",
+      "default": "UNKNOWN",
+      "values": ["UNKNOWN", "MERCIFUL", "INTRUSIVE", "HUNTER"],
+      "save": true
+    },
+    {
+      "id": "vCE_OldArmBlazerBoss",
+      "type": "enum",
+      "default": "UNKNOWN",
+      "values": ["UNKNOWN", "ALIVE", "DESTROYED"],
+      "save": true
+    },
+    {
+      "id": "vCE_OldArmKellerBoss",
+      "type": "enum",
+      "default": "UNKNOWN",
+      "values": ["UNKNOWN", "ALIVE", "DESTROYED"],
+      "save": true
+    },
+    {
+      "id": "vCE_OldArmTerronBoss",
+      "type": "enum",
+      "default": "UNKNOWN",
+      "values": ["UNKNOWN", "ALIVE", "DESTROYED"],
+      "save": true
+    },
+    {
+      "id": "vCE_OldArmBlazerKiller",
+      "type": "enum",
+      "default": "UNKNOWN",
+      "values": ["UNKNOWN", "PLAYER", "COALITION", "PIRATES", "DOMINATORS", "OTHER"],
+      "save": true
+    },
+    {
+      "id": "vCE_OldArmKellerKiller",
+      "type": "enum",
+      "default": "UNKNOWN",
+      "values": ["UNKNOWN", "PLAYER", "COALITION", "PIRATES", "DOMINATORS", "OTHER"],
+      "save": true
+    },
+    {
+      "id": "vCE_OldArmTerronKiller",
+      "type": "enum",
+      "default": "UNKNOWN",
+      "values": ["UNKNOWN", "PLAYER", "COALITION", "PIRATES", "DOMINATORS", "OTHER"],
+      "save": true
+    },
+    {
+      "id": "vCE_StrongState",
+      "type": "enum",
+      "default": "ACTIVE",
+      "values": ["ACTIVE", "DECAPITATED", "ELIMINATED"],
+      "save": true
+    },
+    {
+      "id": "vCE_AgillState",
+      "type": "enum",
+      "default": "ACTIVE",
+      "values": ["ACTIVE", "DECAPITATED", "ELIMINATED"],
+      "save": true
+    },
+    {
+      "id": "vCE_MediumState",
+      "type": "enum",
+      "default": "ACTIVE",
+      "values": ["ACTIVE", "DECAPITATED", "ELIMINATED"],
+      "save": true
+    },
+    {
+      "id": "vCE_IntellState",
+      "type": "enum",
+      "default": "ACTIVE",
+      "values": ["ACTIVE", "DECAPITATED", "ELIMINATED"],
+      "save": true
+    },
+    {
+      "id": "vCE_StrongCapitalBoss",
+      "type": "enum",
+      "default": "ALIVE",
+      "values": ["ALIVE", "ENGAGED", "DESTROYED"],
+      "save": true
+    },
+    {
+      "id": "vCE_AgillCapitalBoss",
+      "type": "enum",
+      "default": "ALIVE",
+      "values": ["ALIVE", "ENGAGED", "DESTROYED"],
+      "save": true
+    },
+    {
+      "id": "vCE_MediumCapitalBoss",
+      "type": "enum",
+      "default": "ALIVE",
+      "values": ["ALIVE", "ENGAGED", "DESTROYED"],
+      "save": true
+    },
+    {
+      "id": "vCE_IntellCapitalBoss",
+      "type": "enum",
+      "default": "ALIVE",
+      "values": ["ALIVE", "ENGAGED", "DESTROYED"],
+      "save": true
+    },
+    {
+      "id": "vCE_BlazerSecondHome",
+      "type": "enum",
+      "default": "INELIGIBLE",
+      "values": ["INELIGIBLE", "TRACKING", "ESTABLISHED", "STALLED", "ELIMINATED"],
+      "save": true
+    },
+    {
+      "id": "vCE_KellerSecondHome",
+      "type": "enum",
+      "default": "INELIGIBLE",
+      "values": ["INELIGIBLE", "TRACKING", "ESTABLISHED", "STALLED", "ELIMINATED"],
+      "save": true
+    },
+    {
+      "id": "vCE_TerronSecondHome",
+      "type": "enum",
+      "default": "INELIGIBLE",
+      "values": ["INELIGIBLE", "TRACKING", "ESTABLISHED", "STALLED", "ELIMINATED"],
+      "save": true
+    },
+    {
+      "id": "vCE_PirateSecondHome",
+      "type": "enum",
+      "default": "INELIGIBLE",
+      "values": ["INELIGIBLE", "STEALING_TECH", "ESTABLISHED", "SPLINTERED", "ELIMINATED"],
+      "save": true
+    },
+    {
+      "id": "vCE_CoalitionGateProject",
+      "type": "enum",
+      "default": "LOCKED",
+      "values": ["LOCKED", "RESEARCHING", "PAUSED", "COMPLETE", "ACTIVE", "PEACEFUL", "FAILED"],
+      "save": true
+    },
+    {
+      "id": "vCE_CoalitionState",
+      "type": "enum",
+      "default": "ACTIVE",
+      "values": ["ACTIVE", "PEACE", "DESTROYED"],
+      "save": true
+    },
+    {
+      "id": "vCE_CoalitionGateProgress",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 10000,
+      "save": true
+    },
+    {
+      "id": "vCE_CoalitionGateMaterialTons",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 1000000,
+      "save": true
+    },
+    {
+      "id": "vCE_CoalitionMassTransit",
+      "type": "bool",
+      "default": false,
+      "save": true
+    },
+    {
+      "id": "vCE_ResearchParallelMultiplier",
+      "type": "int",
+      "default": 6000,
+      "min": 0,
+      "max": 10000,
+      "unit": "basis_points",
+      "save": true
+    },
+    {
+      "id": "vCE_TransitAccessMode",
+      "type": "enum",
+      "default": "PLAYER_ONLY",
+      "values": ["PLAYER_ONLY", "COALITION_MASS", "PEACEFUL_MASS"],
       "save": true
     },
     {
@@ -210,6 +434,13 @@
       "id": "vCE_PlayerPirateStatus",
       "type": "bool",
       "default": false,
+      "save": true
+    },
+    {
+      "id": "vCE_PirateClanExistsAtCorridor",
+      "type": "enum",
+      "default": "UNKNOWN",
+      "values": ["UNKNOWN", "YES", "NO"],
       "save": true
     },
     {
@@ -399,6 +630,33 @@
       "min": 0,
       "max": 999999,
       "save": true
+    }
+  ],
+  "migrations": [
+    {
+      "from_version": 1,
+      "to_version": 2,
+      "operations": [
+        {"when": {"vCE_OrphanState": "CONTACTED"}, "set": {"vCE_OrphanState": "ACTIVE"}},
+        {"when": {"vCE_OrphanState": "SAMPLED"}, "set": {"vCE_OrphanState": "ACTIVE", "vCE_OrphanSampleTaken": true}},
+        {"when": {"vCE_BlazerSecondHome": "DORMANT"}, "set": {"vCE_BlazerSecondHome": "TRACKING"}},
+        {"when": {"vCE_BlazerSecondHome": "EXTINCT"}, "set": {"vCE_BlazerSecondHome": "INELIGIBLE"}},
+        {"when": {"vCE_KellerSecondHome": "DORMANT"}, "set": {"vCE_KellerSecondHome": "TRACKING"}},
+        {"when": {"vCE_KellerSecondHome": "EXTINCT"}, "set": {"vCE_KellerSecondHome": "INELIGIBLE"}},
+        {"when": {"vCE_TerronSecondHome": "DORMANT"}, "set": {"vCE_TerronSecondHome": "TRACKING"}},
+        {"when": {"vCE_TerronSecondHome": "EXTINCT"}, "set": {"vCE_TerronSecondHome": "INELIGIBLE"}},
+        {"when_in": {"vCE_PirateSecondHome": ["LOCKED", "EXTINCT", "UNRESOLVED"]}, "set": {"vCE_PirateSecondHome": "INELIGIBLE"}},
+        {"when": {"vCE_PirateSecondHome": "SCOUTING"}, "set": {"vCE_PirateSecondHome": "STEALING_TECH"}}
+      ]
+    },
+    {
+      "from_version": 2,
+      "to_version": 3,
+      "operations": [
+        {"when": {"vCE_WarApartState": "COALITION_VICTORY"}, "set": {"vCE_PirateClanExistsAtCorridor": "NO"}},
+        {"when_in": {"vCE_WarApartState": ["NOT_STARTED", "CLAN_ACTIVE", "PIRATE_VICTORY"]}, "set": {"vCE_PirateClanExistsAtCorridor": "YES"}},
+        {"when": {"vCE_WarApartState": "PLAYER_PIRATE"}, "set": {"vCE_PlayerPirateStatus": true}}
+      ]
     }
   ]
 }

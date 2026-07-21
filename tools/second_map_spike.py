@@ -18,7 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 ARMS = ("OLD_ARM", "SECOND_HOME")
 DATA_ROOT = Path(__file__).resolve().parents[1] / "data"
 MAP_SCHEMA = json.loads(
@@ -36,6 +36,7 @@ SYSTEM_NAME_POOL = tuple(MAP_SCHEMA["system_name_pool"])
 REQUIRED_NODES = tuple(MAP_SCHEMA["required_nodes"])
 STORY_NODE_TITLES = MAP_SCHEMA["display_names"]["story_nodes"]
 STORY_NODE_ARCHETYPES = MAP_SCHEMA["story_node_preferred_archetypes"]
+CAPITAL_STORY_NODES = MAP_SCHEMA["capital_story_nodes"]
 LOCKED_SECTOR_BRIEFINGS = MAP_SCHEMA["locked_sector_briefings"]
 EARLY_STORY_NODES = tuple(MAP_SCHEMA["story_progression"]["early_story_nodes"])
 STARTING_SECTOR_COUNT = MAP_SCHEMA["story_progression"]["starting_open_sector_count"]
@@ -48,7 +49,11 @@ DISCOVERY_RULE = MAP_SCHEMA["sector_discovery_rule"]
 POPULATION_RULE = MAP_SCHEMA["system_population_rule"]
 PIRATE_MIGRATION_RULE = MAP_SCHEMA["interarm_pirate_migration"]
 DOMINATOR_INVASION_RULE = MAP_SCHEMA["interarm_dominator_invasions"]
+DOMINATOR_BOSS_STATES = ("ACTIVE", "ELIMINATED")
+WAR_STATE_RULE = MAP_SCHEMA["war_state_model"]
+STRATEGIC_SYSTEM_RULE = MAP_SCHEMA["strategic_system_rule"]
 DOMINATOR_SERIES = tuple(DOMINATOR_INVASION_RULE["series"])
+RACES = ("STRONG", "AGILL", "MEDIUM", "INTELL")
 WAR_APART_STATES = (
     "UNKNOWN",
     "NOT_STARTED",
@@ -70,6 +75,14 @@ MIN_SECTOR_COUNT = max(STARTING_SECTOR_COUNT + len(SECTOR_ARCHETYPES) + 1, sum(
     for archetype in SECTOR_ARCHETYPES
 ))
 TRANSIT_PHASES = ("PREPARED", "DEBITED", "SWITCHED")
+
+
+def _pirate_snapshot_from_outcome(outcome: str) -> tuple[str, bool]:
+    if outcome == "UNKNOWN":
+        return "UNKNOWN", False
+    if outcome == "COALITION_VICTORY":
+        return "NO", False
+    return "YES", outcome == "PLAYER_PIRATE"
 
 
 class StateError(ValueError):
@@ -96,7 +109,7 @@ class StateStore:
     path: Path
 
     def load(self) -> dict[str, Any]:
-        return json.loads(self.path.read_text(encoding="utf-8"))
+        return migrate_state(json.loads(self.path.read_text(encoding="utf-8")))
 
     def save(self, state: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +121,77 @@ class StateStore:
         os.replace(temp, self.path)
 
 
+def migrate_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade the previous spike save without reviving defeated factions."""
+    version = state.get("schema_version")
+    if version == SCHEMA_VERSION:
+        return state
+    if version != 10:
+        raise StateError("unsupported schema version")
+    second = state.get("maps", {}).get("SECOND_HOME", {})
+    for system in second.get("systems", []):
+        controller = system.get("controller", "CE_UNCLAIMED")
+        system["owner"] = controller
+        system["system_state"] = (
+            "KLISSAN_INFESTED" if system.get("condition") == "INFESTED"
+            else "CONTROLLED"
+        )
+        military_owner = controller in set(CORE_FACTION_BY_ARCHETYPE.values()) | {
+            "CE_FACTION_PIRATES", "CE_DOMINATOR_BLAZEROIDS",
+            "CE_DOMINATOR_KELLEROIDS", "CE_DOMINATOR_TERRONOIDS",
+        }
+        system["military_production_enabled"] = military_owner
+        system["strategic_expansion_enabled"] = military_owner
+        system["last_capture_day"] = 0
+    migration = state.get("pirate_migration", {})
+    clan_state, player_pirate = _pirate_snapshot_from_outcome(state.get("war_apart_state"))
+    state.setdefault("pirate_clan_exists_at_corridor", clan_state)
+    state.setdefault("player_pirate", player_pirate)
+    migration["eligible"] = state["pirate_clan_exists_at_corridor"] == "YES"
+    migration["status"] = {
+        "LOCKED": "INELIGIBLE",
+        "SCOUTING": "STEALING_TECH",
+        "EXTINCT": "INELIGIBLE",
+        "UNRESOLVED": "INELIGIBLE",
+    }.get(migration.get("status"), migration.get("status"))
+    for series, invasion in state.get("dominator_invasions", {}).items():
+        invasion["eligible"] = state.get("dominator_boss_states", {}).get(series) == "ACTIVE"
+        invasion["status"] = {
+            "DORMANT": "INELIGIBLE",
+            "EXTINCT": "INELIGIBLE",
+        }.get(invasion.get("status"), invasion.get("status"))
+    state.setdefault("corridor_opened", any(
+        event.get("type") == "CE_TRANSIT_COMPLETE" and
+        event.get("from_arm") == "OLD_ARM" and event.get("to_arm") == "SECOND_HOME"
+        for event in state.get("history", [])
+    ))
+    state.setdefault("union_invasion_started", state["corridor_opened"])
+    state.setdefault("transit_access_mode", "PLAYER_ONLY")
+    state.setdefault("scouts", {
+        "spared": 0, "destroyed": 0, "coerced": 0, "followed": 0,
+        "arrival_profile": "UNKNOWN",
+    })
+    state.setdefault("race_states", {race: "ACTIVE" for race in RACES})
+    state.setdefault("capital_boss_states", {race: "ALIVE" for race in RACES})
+    legacy_orphan = state.pop("orphan_state", "UNKNOWN")
+    state["orphan_sample_taken"] = legacy_orphan == "SAMPLED"
+    state["orphan_state"] = {
+        "CONTACTED": "ACTIVE", "SAMPLED": "HIDDEN"
+    }.get(legacy_orphan, legacy_orphan)
+    state.setdefault("coalition_gate", {
+        "status": "RESEARCHING" if state["union_invasion_started"] else "LOCKED",
+        "progress": 0,
+        "material_tons": 0,
+        "mass_transit": False,
+        "science_bases": 1,
+        "anti_dominator_program_active": False,
+        "coalition_alive": True,
+        "peace_reached": False,
+    })
+    state["schema_version"] = SCHEMA_VERSION
+    return state
+
+
 def create_state(
     old_star_count: int,
     cells: int,
@@ -116,6 +200,8 @@ def create_state(
     initial_credits: int = 100_000,
     war_apart_state: str = "CLAN_ACTIVE",
     dominator_boss_states: dict[str, str] | None = None,
+    pirate_clan_exists_at_corridor: str | None = None,
+    player_pirate: bool | None = None,
 ) -> dict[str, Any]:
     if old_star_count < max(len(REQUIRED_NODES), old_sector_count * 2):
         raise StateError("old arm is too sparse for the required Second Home layout")
@@ -128,7 +214,7 @@ def create_state(
     if dominator_boss_states is None:
         dominator_boss_states = {series: "ACTIVE" for series in DOMINATOR_SERIES}
     if set(dominator_boss_states) != set(DOMINATOR_SERIES) or any(
-        value not in DOMINATOR_INVASION_RULE["boss_state_values"]
+        value not in DOMINATOR_BOSS_STATES
         for value in dominator_boss_states.values()
     ):
         raise StateError("invalid dominator boss state snapshot")
@@ -141,9 +227,17 @@ def create_state(
     second_systems = _generate_system_layout(
         second_seed, old_star_count, second_sectors
     )
-    if war_apart_state in PIRATE_MIGRATION_RULE["eligible_war_apart_states"]:
+    derived_clan_state, derived_player_pirate = _pirate_snapshot_from_outcome(war_apart_state)
+    pirate_clan_state = pirate_clan_exists_at_corridor or derived_clan_state
+    if pirate_clan_state not in {"UNKNOWN", "YES", "NO"}:
+        raise StateError("invalid pirate clan survival snapshot")
+    if player_pirate is None:
+        player_pirate = derived_player_pirate
+    if not isinstance(player_pirate, bool):
+        raise StateError("invalid player pirate membership snapshot")
+    if pirate_clan_state == "YES":
         migration_status = PIRATE_MIGRATION_RULE["eligible_initial_status"]
-    elif war_apart_state in PIRATE_MIGRATION_RULE["destroyed_war_apart_states"]:
+    elif pirate_clan_state == "NO":
         migration_status = PIRATE_MIGRATION_RULE["destroyed_initial_status"]
     else:
         migration_status = PIRATE_MIGRATION_RULE["unknown_initial_status"]
@@ -158,13 +252,37 @@ def create_state(
         },
         "credits": initial_credits,
         "war_apart_state": war_apart_state,
+        "pirate_clan_exists_at_corridor": pirate_clan_state,
+        "player_pirate": player_pirate,
+        "corridor_opened": False,
+        "union_invasion_started": False,
+        "transit_access_mode": "PLAYER_ONLY",
+        "scouts": {
+            "spared": 0,
+            "destroyed": 0,
+            "coerced": 0,
+            "followed": 0,
+            "arrival_profile": "UNKNOWN",
+        },
+        "race_states": {race: "ACTIVE" for race in RACES},
+        "capital_boss_states": {race: "ALIVE" for race in RACES},
+        "orphan_state": "UNKNOWN",
+        "orphan_sample_taken": False,
+        "coalition_gate": {
+            "status": "LOCKED",
+            "progress": 0,
+            "material_tons": 0,
+            "mass_transit": False,
+            "science_bases": 1,
+            "anti_dominator_program_active": False,
+            "coalition_alive": True,
+            "peace_reached": False,
+        },
         "dominator_boss_states": dict(dominator_boss_states),
         "dominator_invasions": {
             series: {
-                "status": (
-                    "DORMANT" if dominator_boss_states[series] == "ACTIVE"
-                    else "EXTINCT"
-                ),
+                "status": "INELIGIBLE",
+                "eligible": dominator_boss_states[series] == "ACTIVE",
                 "discovery_day": None,
                 "arrival_day": None,
                 "converted_system_ids": [],
@@ -173,6 +291,7 @@ def create_state(
         },
         "pirate_migration": {
             "status": migration_status,
+            "eligible": pirate_clan_state == "YES",
             "first_passage_day": None,
             "arrival_day": None,
             "arrivals": 0,
@@ -397,6 +516,7 @@ def _generate_system_layout(
             "archetype": item["archetype"],
             "story_node": None,
             "story_node_title": None,
+            "capital_for": None,
         }
         for item in selected_names
     ]
@@ -417,6 +537,11 @@ def _generate_system_layout(
         host = candidates[0]
         host["story_node"] = node_id
         host["story_node_title"] = STORY_NODE_TITLES[node_id]
+        host["capital_for"] = next(
+            (race for race, capital_node in CAPITAL_STORY_NODES.items()
+             if capital_node == node_id),
+            None,
+        )
         assigned_system_ids.add(host["id"])
 
     sectors_by_archetype = {
@@ -574,6 +699,9 @@ def _apply_system_profiles(seed: int, systems: list[dict[str, Any]]) -> None:
                 else "OUTPOST"
             )
 
+        if condition == "INFESTED":
+            controller = "CE_HOSTILE_KLISSAN"
+
         if condition == "INHABITED":
             population = 50_000 + _stable_int(seed, "population", system["id"]) % 4_950_001
         elif condition == "OUTPOST":
@@ -590,11 +718,22 @@ def _apply_system_profiles(seed: int, systems: list[dict[str, Any]]) -> None:
             economy = min(economy, 250)
             security = min(security, 250)
         system["controller"] = controller
+        system["owner"] = controller
         system["condition"] = condition
         system["specialization"] = specialization
         system["population_thousands"] = population
         system["economy_index"] = max(100, min(2000, economy))
         system["security_index"] = max(0, min(1000, security))
+        system["system_state"] = (
+            "KLISSAN_INFESTED" if condition == "INFESTED" else "CONTROLLED"
+        )
+        military_owner = controller in set(core_factions) | {
+            "CE_FACTION_PIRATES", "CE_DOMINATOR_BLAZEROIDS",
+            "CE_DOMINATOR_KELLEROIDS", "CE_DOMINATOR_TERRONOIDS",
+        }
+        system["military_production_enabled"] = military_owner
+        system["strategic_expansion_enabled"] = military_owner
+        system["last_capture_day"] = 0
 
 
 def _new_map(
@@ -626,6 +765,36 @@ def _new_map(
     }
 
 
+def _scout_arrival_profile(scouts: dict[str, Any]) -> str:
+    spared = scouts.get("spared", 0)
+    destroyed = scouts.get("destroyed", 0)
+    coerced = scouts.get("coerced", 0)
+    followed = scouts.get("followed", 0)
+    if spared + destroyed + coerced + followed < 2:
+        return "UNKNOWN"
+    if destroyed > spared:
+        return "HUNTER"
+    if spared > destroyed:
+        return "MERCIFUL"
+    if coerced + followed >= 2 and destroyed == 0:
+        return "INTRUSIVE"
+    return "UNKNOWN"
+
+
+def record_scout_outcome(state: dict[str, Any], outcome: str) -> None:
+    key_by_outcome = {
+        "SPARED": "spared", "DESTROYED": "destroyed",
+        "COERCED": "coerced", "FOLLOWED": "followed",
+    }
+    if outcome not in key_by_outcome:
+        raise StateError("unknown scout outcome")
+    scouts = state["scouts"]
+    scouts[key_by_outcome[outcome]] += 1
+    scouts["arrival_profile"] = _scout_arrival_profile(scouts)
+    state["revision"] += 1
+    validate_state(state)
+
+
 def validate_state(state: dict[str, Any]) -> None:
     if state.get("schema_version") != SCHEMA_VERSION:
         raise StateError("unsupported schema version")
@@ -635,6 +804,53 @@ def validate_state(state: dict[str, Any]) -> None:
         raise StateError("state must contain exactly OLD_ARM and SECOND_HOME")
     if state.get("current_day", -1) < 0:
         raise StateError("current_day cannot be negative")
+    if state.get("transit_access_mode") not in WAR_STATE_RULE["transit_access_modes"]:
+        raise StateError("invalid transit access mode")
+    if not isinstance(state.get("corridor_opened"), bool) or \
+            not isinstance(state.get("union_invasion_started"), bool):
+        raise StateError("invalid corridor chronology flags")
+    if state["union_invasion_started"] and not state["corridor_opened"]:
+        raise StateError("Union invasion cannot precede stable corridor opening")
+    scouts = state.get("scouts", {})
+    if set(scouts) != {"spared", "destroyed", "coerced", "followed", "arrival_profile"} or \
+            any(type(scouts[key]) is not int or scouts[key] < 0
+                for key in ("spared", "destroyed", "coerced", "followed")) or \
+            scouts.get("arrival_profile") not in WAR_STATE_RULE["scout_arrival_profiles"]:
+        raise StateError("invalid scout memory")
+    if scouts["arrival_profile"] != _scout_arrival_profile(scouts):
+        raise StateError("scout arrival profile does not match its counters")
+    race_states = state.get("race_states", {})
+    capital_states = state.get("capital_boss_states", {})
+    if set(race_states) != set(RACES) or set(capital_states) != set(RACES) or \
+            any(value not in WAR_STATE_RULE["race_states"] for value in race_states.values()) or \
+            any(value not in WAR_STATE_RULE["capital_boss_states"] for value in capital_states.values()):
+        raise StateError("invalid racial or capital state")
+    if any(
+        (capital_states[race] == "DESTROYED") != (race_states[race] != "ACTIVE")
+        for race in RACES
+    ):
+        raise StateError("capital boss and racial state disagree")
+    if state.get("orphan_state") not in WAR_STATE_RULE["orphan_states"] or \
+            not isinstance(state.get("orphan_sample_taken"), bool):
+        raise StateError("invalid Orphan state")
+    gate = state.get("coalition_gate", {})
+    if gate.get("status") not in WAR_STATE_RULE["coalition_gate_states"] or \
+            not 0 <= gate.get("progress", -1) <= 10000 or \
+            gate.get("material_tons", -1) < 0 or gate.get("science_bases", -1) < 0 or \
+            not isinstance(gate.get("mass_transit"), bool) or \
+            not isinstance(gate.get("anti_dominator_program_active"), bool) or \
+            not isinstance(gate.get("coalition_alive"), bool) or \
+            not isinstance(gate.get("peace_reached"), bool):
+        raise StateError("invalid Coalition gate project")
+    expected_mass = gate["status"] in {"ACTIVE", "PEACEFUL"}
+    if gate["mass_transit"] != expected_mass:
+        raise StateError("Coalition mass transit and gate state disagree")
+    expected_mode = (
+        "COALITION_MASS" if gate["status"] == "ACTIVE" else
+        "PEACEFUL_MASS" if gate["status"] == "PEACEFUL" else "PLAYER_ONLY"
+    )
+    if state["transit_access_mode"] != expected_mode:
+        raise StateError("transit access mode and Coalition gate disagree")
 
     old_count = state["maps"]["OLD_ARM"].get("star_count", 0)
     second_count = state["maps"]["SECOND_HOME"].get("star_count", 0)
@@ -754,6 +970,12 @@ def validate_state(state: dict[str, Any]) -> None:
         system["story_node"]: system for system in systems
         if system.get("story_node")
     }
+    capital_hosts = {
+        system.get("capital_for"): system.get("story_node")
+        for system in systems if system.get("capital_for") is not None
+    }
+    if capital_hosts != CAPITAL_STORY_NODES:
+        raise StateError("Second Home capital systems do not match their races")
     if any(
         story_systems[node_id]["sector_id"] not in starting_sector_ids
         for node_id in EARLY_STORY_NODES
@@ -816,9 +1038,31 @@ def validate_state(state: dict[str, Any]) -> None:
     for system in systems:
         if system.get("controller") not in allowed_controllers:
             raise StateError("Second Home system has an invalid controller")
+        if system.get("owner") != system.get("controller"):
+            raise StateError("Second Home owner and controller disagree")
+        if system.get("system_state") not in STRATEGIC_SYSTEM_RULE["system_states"] or \
+                not isinstance(system.get("military_production_enabled"), bool) or \
+                not isinstance(system.get("strategic_expansion_enabled"), bool) or \
+                not isinstance(system.get("last_capture_day"), int) or \
+                system["last_capture_day"] < 0:
+            raise StateError("Second Home strategic system fields are invalid")
+        owner_race = next((race for race,faction in CORE_FACTION_BY_ARCHETYPE.items()
+                           if faction == system["owner"]), None)
+        if owner_race and race_states[owner_race] != "ACTIVE" and \
+                (system["military_production_enabled"] or system["strategic_expansion_enabled"]):
+            raise StateError("decapitated race cannot produce or expand")
+        if system["system_state"] == "DEVASTATED" and (
+            system["owner"] != STRATEGIC_SYSTEM_RULE["devastated_owner"] or
+            system["military_production_enabled"] or system["strategic_expansion_enabled"]
+        ):
+            raise StateError("devastated system still has organized military control")
+        if system["system_state"] == "KLISSAN_INFESTED" and \
+                system["owner"] != STRATEGIC_SYSTEM_RULE["klissan_owner"]:
+            raise StateError("Klissan-infested system has an invalid owner")
         if system.get("condition") not in allowed_conditions:
             raise StateError("Second Home system has an invalid condition")
-        if system.get("specialization") not in POPULATION_RULE["specializations"][system["archetype"]]:
+        if system.get("condition") == "INHABITED" and \
+                system.get("specialization") not in POPULATION_RULE["specializations"][system["archetype"]]:
             raise StateError("Second Home system has an invalid specialization")
         if not economy_min <= system.get("economy_index", -1) <= economy_max:
             raise StateError("Second Home system economy is outside its range")
@@ -850,9 +1094,12 @@ def validate_state(state: dict[str, Any]) -> None:
     war_apart_state = state.get("war_apart_state")
     if war_apart_state not in WAR_APART_STATES:
         raise StateError("invalid War Apart outcome snapshot")
-    if migration_status not in {
-        "LOCKED", "SCOUTING", "ESTABLISHED", "EXTINCT", "UNRESOLVED"
-    }:
+    clan_state = state.get("pirate_clan_exists_at_corridor")
+    if clan_state not in {"UNKNOWN", "YES", "NO"} or \
+            not isinstance(state.get("player_pirate"), bool):
+        raise StateError("invalid independent pirate survival snapshot")
+    if migration_status not in WAR_STATE_RULE["pirate_states"] or \
+            not isinstance(migration.get("eligible"), bool):
         raise StateError("invalid interarm pirate migration status")
     pirate_system_ids = {
         system["id"] for system in systems
@@ -861,20 +1108,15 @@ def validate_state(state: dict[str, Any]) -> None:
     converted_ids = migration.get("converted_system_ids", [])
     if len(converted_ids) != len(set(converted_ids)):
         raise StateError("interarm pirate migration duplicated a system")
-    eligible_outcome = war_apart_state in PIRATE_MIGRATION_RULE["eligible_war_apart_states"]
-    destroyed_outcome = war_apart_state in PIRATE_MIGRATION_RULE["destroyed_war_apart_states"]
-    if eligible_outcome != (migration_status in {"LOCKED", "SCOUTING", "ESTABLISHED"}):
-        raise StateError("War Apart outcome and pirate migration status disagree")
-    if destroyed_outcome != (migration_status == "EXTINCT"):
-        raise StateError("destroyed War Apart clan has an invalid migration status")
-    if war_apart_state == "UNKNOWN" and migration_status != "UNRESOLVED":
-        raise StateError("unknown War Apart outcome must block pirate migration")
-    if migration_status in {"LOCKED", "EXTINCT", "UNRESOLVED"}:
+    eligible_outcome = clan_state == "YES"
+    if migration["eligible"] != eligible_outcome:
+        raise StateError("pirate clan survival snapshot and eligibility disagree")
+    if migration_status == "INELIGIBLE":
         if pirate_system_ids or migration.get("first_passage_day") is not None or \
                 migration.get("arrival_day") is not None or \
                 migration.get("arrivals") != 0 or converted_ids:
             raise StateError("War Apart pirates exist before the interarm route opens")
-    elif migration_status == "SCOUTING":
+    elif migration_status == "STEALING_TECH":
         first_day = migration.get("first_passage_day")
         arrival_day = migration.get("arrival_day")
         if not isinstance(first_day, int) or \
@@ -882,13 +1124,15 @@ def validate_state(state: dict[str, Any]) -> None:
                 state["current_day"] >= arrival_day or pirate_system_ids or \
                 migration.get("arrivals") != 0 or converted_ids:
             raise StateError("invalid War Apart pirate scouting state")
-    else:
+    elif migration_status in {"ESTABLISHED", "SPLINTERED"}:
         if state["current_day"] < migration.get("arrival_day", state["current_day"] + 1) or \
                 migration.get("arrivals") != len(converted_ids) or \
-                not PIRATE_MIGRATION_RULE["first_wave_min_outposts"] <= len(converted_ids) <= \
-                PIRATE_MIGRATION_RULE["first_wave_max_outposts"] or \
+                len(converted_ids) < PIRATE_MIGRATION_RULE["first_wave_min_outposts"] or \
                 pirate_system_ids != set(converted_ids):
             raise StateError("invalid established War Apart pirate foothold")
+    elif migration_status == "ELIMINATED":
+        if pirate_system_ids or converted_ids or migration.get("arrivals") != 0:
+            raise StateError("eliminated War Apart pirate expedition still has a foothold")
 
     boss_states = state.get("dominator_boss_states", {})
     invasions = state.get("dominator_invasions", {})
@@ -900,8 +1144,9 @@ def validate_state(state: dict[str, Any]) -> None:
         invasion = invasions[series]
         rule = DOMINATOR_INVASION_RULE["series"][series]
         status = invasion.get("status")
-        if boss_state not in DOMINATOR_INVASION_RULE["boss_state_values"] or \
-                status not in {"DORMANT", "TRACKING", "ESTABLISHED", "EXTINCT"}:
+        if boss_state not in DOMINATOR_BOSS_STATES or \
+                status not in WAR_STATE_RULE["dominator_states"] or \
+                not isinstance(invasion.get("eligible"), bool):
             raise StateError("invalid dominator invasion branch")
         controlled_ids = {
             system["id"] for system in systems
@@ -910,18 +1155,12 @@ def validate_state(state: dict[str, Any]) -> None:
         converted_ids = invasion.get("converted_system_ids", [])
         if len(converted_ids) != len(set(converted_ids)):
             raise StateError("dominator invasion duplicated a system")
-        if boss_state == "ELIMINATED":
-            if status != "EXTINCT" or controlled_ids or converted_ids or \
-                    invasion.get("discovery_day") is not None or \
-                    invasion.get("arrival_day") is not None:
-                raise StateError("eliminated dominator series entered Second Home")
-            continue
-        if status == "EXTINCT":
-            raise StateError("active dominator boss has an extinct invasion branch")
-        if status == "DORMANT":
+        if invasion["eligible"] != (boss_state == "ACTIVE"):
+            raise StateError("dominator boss and invasion eligibility disagree")
+        if status == "INELIGIBLE":
             if controlled_ids or converted_ids or invasion.get("discovery_day") is not None or \
                     invasion.get("arrival_day") is not None:
-                raise StateError("dormant dominator series entered Second Home early")
+                raise StateError("ineligible dominator series entered Second Home")
         elif status == "TRACKING":
             discovery_day = invasion.get("discovery_day")
             arrival_day = invasion.get("arrival_day")
@@ -930,11 +1169,19 @@ def validate_state(state: dict[str, Any]) -> None:
                     state["current_day"] >= arrival_day or controlled_ids or converted_ids:
                 raise StateError("invalid dominator tracking state")
         elif status == "ESTABLISHED":
+            if boss_state != "ACTIVE":
+                raise StateError("established dominator series has no living boss")
             if state["current_day"] < invasion.get("arrival_day", state["current_day"] + 1) or \
                     controlled_ids != set(converted_ids) or \
-                    not DOMINATOR_INVASION_RULE["first_wave_min_systems"] <= \
-                    len(converted_ids) <= DOMINATOR_INVASION_RULE["first_wave_max_systems"]:
+                    len(converted_ids) < DOMINATOR_INVASION_RULE["first_wave_min_systems"]:
                 raise StateError("invalid dominator foothold")
+        elif status == "STALLED":
+            if boss_state != "ELIMINATED" or controlled_ids != set(converted_ids) or \
+                    not converted_ids:
+                raise StateError("invalid stalled dominator foothold")
+        elif status == "ELIMINATED":
+            if boss_state != "ELIMINATED" or controlled_ids or converted_ids:
+                raise StateError("eliminated dominator series still controls systems")
 
     transit = state.get("transit")
     if transit is not None:
@@ -1134,6 +1381,8 @@ def simulate_days(state: dict[str, Any], days: int) -> None:
     state["maps"][active]["last_sim_day"] = target_day
     _simulate_inactive(state["maps"][inactive], target_day)
     _update_interarm_arrivals(state, target_day)
+    _advance_coalition_gate(state, days)
+    _advance_strategic_occupation(state, state["current_day"], target_day)
     state["current_day"] = target_day
     state["revision"] += 1
     validate_state(state)
@@ -1187,9 +1436,9 @@ def _simulate_inactive(map_state: dict[str, Any], target_day: int) -> None:
 
 def _schedule_pirate_migration(state: dict[str, Any], passage_day: int) -> None:
     migration = state["pirate_migration"]
-    if migration["status"] != "LOCKED":
+    if migration["status"] != "INELIGIBLE" or not migration["eligible"]:
         return
-    migration["status"] = "SCOUTING"
+    migration["status"] = "STEALING_TECH"
     migration["first_passage_day"] = passage_day
     migration["arrival_day"] = (
         passage_day + _pirate_arrival_delay(state)
@@ -1197,7 +1446,7 @@ def _schedule_pirate_migration(state: dict[str, Any], passage_day: int) -> None:
 
 
 def _pirate_arrival_delay(state: dict[str, Any]) -> int:
-    if state["war_apart_state"] == "PLAYER_PIRATE":
+    if state["player_pirate"]:
         return PIRATE_MIGRATION_RULE["player_pirate_arrival_delay_days"]
     minimum, maximum = PIRATE_MIGRATION_RULE["arrival_delay_days_range"]
     return minimum + (
@@ -1209,7 +1458,7 @@ def _pirate_arrival_delay(state: dict[str, Any]) -> int:
 
 def _update_pirate_migration(state: dict[str, Any], target_day: int) -> None:
     migration = state["pirate_migration"]
-    if migration["status"] != "SCOUTING" or target_day < migration["arrival_day"]:
+    if migration["status"] != "STEALING_TECH" or target_day < migration["arrival_day"]:
         return
     systems = state["maps"]["SECOND_HOME"]["systems"]
     preferred = PIRATE_MIGRATION_RULE["preferred_archetype"]
@@ -1240,6 +1489,11 @@ def _update_pirate_migration(state: dict[str, Any], target_day: int) -> None:
     converted_ids = []
     for system in selected:
         system["controller"] = "CE_FACTION_PIRATES"
+        system["owner"] = "CE_FACTION_PIRATES"
+        system["system_state"] = "CONTROLLED"
+        system["military_production_enabled"] = True
+        system["strategic_expansion_enabled"] = True
+        system["last_capture_day"] = migration["arrival_day"]
         converted_ids.append(system["id"])
     migration["status"] = "ESTABLISHED"
     migration["arrivals"] = len(converted_ids)
@@ -1257,7 +1511,7 @@ def _update_pirate_migration(state: dict[str, Any], target_day: int) -> None:
 def _schedule_dominator_invasions(state: dict[str, Any], passage_day: int) -> None:
     for series in DOMINATOR_SERIES:
         invasion = state["dominator_invasions"][series]
-        if invasion["status"] != "DORMANT":
+        if invasion["status"] != "INELIGIBLE" or not invasion["eligible"]:
             continue
         invasion["status"] = "TRACKING"
         invasion["discovery_day"] = passage_day
@@ -1313,6 +1567,11 @@ def _update_dominator_invasions(state: dict[str, Any], target_day: int) -> None:
         converted_ids = []
         for system in selected:
             system["controller"] = rule["controller"]
+            system["owner"] = rule["controller"]
+            system["system_state"] = "CONTROLLED"
+            system["military_production_enabled"] = True
+            system["strategic_expansion_enabled"] = True
+            system["last_capture_day"] = invasion["arrival_day"]
             converted_ids.append(system["id"])
         invasion["status"] = "ESTABLISHED"
         invasion["converted_system_ids"] = converted_ids
@@ -1336,7 +1595,7 @@ def _update_interarm_arrivals(state: dict[str, Any], target_day: int) -> None:
         invasion["arrival_day"] <= target_day
     }
     migration = state["pirate_migration"]
-    if migration["status"] == "SCOUTING" and migration["arrival_day"] <= target_day:
+    if migration["status"] == "STEALING_TECH" and migration["arrival_day"] <= target_day:
         due_days.add(migration["arrival_day"])
     for arrival_day in sorted(due_days):
         _update_pirate_migration(state, arrival_day)
@@ -1372,14 +1631,13 @@ def debug_open_second_home(store: StateStore) -> dict[str, Any]:
     if state["current_arm"] == "SECOND_HOME":
         return state
     state["current_arm"] = "SECOND_HOME"
+    _open_stable_corridor(state, state["current_day"])
     state["history"].append(
         {
             "type": "CE_DEBUG_SECOND_HOME_OPENED",
             "day": state["current_day"],
         }
     )
-    _schedule_pirate_migration(state, state["current_day"])
-    _schedule_dominator_invasions(state, state["current_day"])
     _update_interarm_arrivals(state, state["current_day"])
     _commit(store, state)
     return state
@@ -1422,12 +1680,316 @@ def recover_transit(store: StateStore, crash_after: str | None = None) -> dict[s
             }
         )
         if transit["from_arm"] == "OLD_ARM" and transit["to_arm"] == "SECOND_HOME":
-            _schedule_pirate_migration(state, transit["day"])
-            _schedule_dominator_invasions(state, transit["day"])
+            _open_stable_corridor(state, transit["day"])
             _update_interarm_arrivals(state, transit["day"])
         state["transit"] = None
         _commit(store, state)
     return state
+
+
+def _open_stable_corridor(state: dict[str, Any], day: int) -> None:
+    if state["corridor_opened"]:
+        return
+    state["corridor_opened"] = True
+    state["union_invasion_started"] = True
+    state["scouts"]["arrival_profile"] = _scout_arrival_profile(state["scouts"])
+    state["coalition_gate"]["status"] = (
+        "RESEARCHING" if state["coalition_gate"]["science_bases"] > 0 else "PAUSED"
+    )
+    _schedule_pirate_migration(state, day)
+    _schedule_dominator_invasions(state, day)
+    state["history"].append({"type": "CE_UNION_INVASION_STARTED", "day": day})
+
+
+def defeat_dominator_boss(state: dict[str, Any], series: str) -> None:
+    if series not in DOMINATOR_SERIES:
+        raise StateError("unknown dominator series")
+    invasion = state["dominator_invasions"][series]
+    state["dominator_boss_states"][series] = "ELIMINATED"
+    invasion["eligible"] = False
+    if invasion["status"] == "TRACKING":
+        invasion.update(status="INELIGIBLE", discovery_day=None, arrival_day=None)
+    elif invasion["status"] == "ESTABLISHED":
+        invasion["status"] = "STALLED"
+        controller = DOMINATOR_INVASION_RULE["series"][series]["controller"]
+        for system in state["maps"]["SECOND_HOME"]["systems"]:
+            if system["controller"] == controller:
+                system["military_production_enabled"] = False
+                system["strategic_expansion_enabled"] = False
+    state["revision"] += 1
+    validate_state(state)
+
+
+def destroy_pirate_clan(state: dict[str, Any]) -> None:
+    migration = state["pirate_migration"]
+    if migration["status"] == "STEALING_TECH":
+        migration.update(
+            status="INELIGIBLE", eligible=False, first_passage_day=None,
+            arrival_day=None,
+        )
+    elif migration["status"] == "ESTABLISHED":
+        migration["status"] = "SPLINTERED"
+        for system in state["maps"]["SECOND_HOME"]["systems"]:
+            if system["controller"] == "CE_FACTION_PIRATES":
+                system["military_production_enabled"] = False
+                system["strategic_expansion_enabled"] = False
+    else:
+        migration["eligible"] = False
+    state["revision"] += 1
+    validate_state(state)
+
+
+def defeat_capital(
+    state: dict[str, Any], race: str, *, defenders_cleared: bool,
+    producers_disabled: bool,
+) -> None:
+    if race not in RACES:
+        raise StateError("unknown Second Home race")
+    state["capital_boss_states"][race] = "DESTROYED"
+    if not defenders_cleared or not producers_disabled:
+        state["capital_boss_states"][race] = "ENGAGED"
+        state["revision"] += 1
+        validate_state(state)
+        return
+    state["race_states"][race] = "DECAPITATED"
+    faction = CORE_FACTION_BY_ARCHETYPE[race]
+    for map_state in state["maps"].values():
+        for system in map_state.get("systems", []):
+            if system.get("owner", system.get("controller")) == faction:
+                system["military_production_enabled"] = False
+                system["strategic_expansion_enabled"] = False
+    state["revision"] += 1
+    validate_state(state)
+
+
+def resolve_orphan(state: dict[str, Any], outcome: str) -> None:
+    """Resolve the Orphan without silently reviving an unavailable recipient."""
+    target_by_outcome = {
+        "DESTROY": "DESTROYED",
+        "PACIFY": "PACIFIED",
+        "FREE": "FREE",
+        "HIDE": "HIDDEN",
+        "SAMPLE": "HIDDEN",
+        "TRANSFER_TO_INTELLS": "INTELL_CONTROLLED",
+    }
+    if outcome not in target_by_outcome:
+        raise StateError("unknown Orphan outcome")
+    if outcome == "TRANSFER_TO_INTELLS" and not can_transfer_orphan_to_intells(state):
+        raise StateError("Intells cannot receive the Orphan")
+    state["orphan_state"] = target_by_outcome[outcome]
+    if outcome == "SAMPLE":
+        state["orphan_sample_taken"] = True
+    state["history"].append({
+        "type": "CE_ORPHAN_RESOLVED",
+        "day": state["current_day"],
+        "outcome": outcome,
+    })
+    state["revision"] += 1
+    validate_state(state)
+
+
+def occupy_devastated_system(
+    state: dict[str, Any], system_id: str, controller: str,
+) -> None:
+    """Give an empty system to an eligible strategic force."""
+    systems = state["maps"]["SECOND_HOME"]["systems"]
+    system = next((item for item in systems if item["id"] == system_id), None)
+    if system is None or system["system_state"] != "DEVASTATED":
+        raise StateError("only a devastated Second Home system can be occupied")
+    allowed = set(STRATEGIC_SYSTEM_RULE["pre_coalition_occupiers"])
+    if controller == "CE_FACTION_COALITION":
+        if state["transit_access_mode"] != \
+                STRATEGIC_SYSTEM_RULE["coalition_capture_requires_transit_mode"]:
+            raise StateError("Coalition cannot occupy Second Home before its mass portal")
+    elif controller not in allowed:
+        raise StateError("force cannot occupy a devastated Second Home system")
+
+    race = next((key for key, value in CORE_FACTION_BY_ARCHETYPE.items()
+                 if value == controller), None)
+    if race and state["race_states"][race] != "ACTIVE":
+        raise StateError("decapitated race cannot capture systems")
+    series = next((key for key, rule in DOMINATOR_INVASION_RULE["series"].items()
+                   if rule["controller"] == controller), None)
+    if series and state["dominator_invasions"][series]["status"] != "ESTABLISHED":
+        raise StateError("inactive dominator series cannot capture systems")
+    if controller == "CE_FACTION_PIRATES" and \
+            state["pirate_migration"]["status"] != "ESTABLISHED":
+        raise StateError("inactive War Apart pirates cannot capture systems")
+    if controller == "CE_HOSTILE_KLISSAN" and state["orphan_state"] != "ACTIVE":
+        raise StateError("Klissan nests cannot spread without an active Orphan")
+
+    _set_system_occupation(state, system, controller, state["current_day"])
+    state["revision"] += 1
+    validate_state(state)
+
+
+def _set_system_occupation(
+    state: dict[str, Any], system: dict[str, Any], controller: str, day: int,
+) -> None:
+    system.update(
+        owner=controller, controller=controller, system_state="CONTROLLED",
+        military_production_enabled=controller != "CE_HOSTILE_KLISSAN",
+        strategic_expansion_enabled=controller != "CE_HOSTILE_KLISSAN",
+        last_capture_day=day,
+    )
+    if controller == "CE_HOSTILE_KLISSAN":
+        system.update(
+            condition="INFESTED", specialization="INFESTED",
+            population_thousands=0, military_production_enabled=False,
+            strategic_expansion_enabled=False, system_state="KLISSAN_INFESTED",
+        )
+    if controller == "CE_FACTION_PIRATES":
+        migration = state["pirate_migration"]
+        migration["converted_system_ids"].append(system["id"])
+        migration["arrivals"] = len(migration["converted_system_ids"])
+    for series, rule in DOMINATOR_INVASION_RULE["series"].items():
+        if rule["controller"] == controller:
+            state["dominator_invasions"][series]["converted_system_ids"].append(system["id"])
+    state["history"].append({
+        "type": "CE_SYSTEM_OCCUPIED",
+        "day": day,
+        "system_id": system["id"],
+        "controller": controller,
+    })
+
+
+def _advance_strategic_occupation(
+    state: dict[str, Any], start_day: int, target_day: int,
+) -> None:
+    """Apply sparse deterministic Klissan/Coalition captures, independent of tick size."""
+    systems = state["maps"]["SECOND_HOME"]["systems"]
+    for day in range(start_day + 1, target_day + 1):
+        controller = None
+        cadence = None
+        if state["transit_access_mode"] == "COALITION_MASS":
+            controller, cadence = "CE_FACTION_COALITION", 20
+        elif state["orphan_state"] == "ACTIVE":
+            controller, cadence = "CE_HOSTILE_KLISSAN", 30
+        if cadence is None or day % cadence:
+            continue
+        candidates = sorted(
+            (item for item in systems if item["system_state"] == "DEVASTATED"),
+            key=lambda item: _stable_int(
+                state["maps"]["SECOND_HOME"]["seed"], controller, day, item["id"]
+            ),
+        )
+        if not candidates:
+            continue
+        _set_system_occupation(state, candidates[0], controller, day)
+
+
+def devastate_system(state: dict[str, Any], system_id: str) -> None:
+    systems = state["maps"]["SECOND_HOME"]["systems"]
+    system = next((item for item in systems if item["id"] == system_id), None)
+    if system is None:
+        raise StateError("unknown Second Home system")
+    old_controller = system["controller"]
+    system.update(
+        owner="CE_UNCLAIMED", controller="CE_UNCLAIMED",
+        system_state="DEVASTATED", military_production_enabled=False,
+        strategic_expansion_enabled=False, last_capture_day=state["current_day"],
+    )
+    for series, rule in DOMINATOR_INVASION_RULE["series"].items():
+        if old_controller != rule["controller"]:
+            continue
+        invasion = state["dominator_invasions"][series]
+        invasion["converted_system_ids"] = [
+            value for value in invasion["converted_system_ids"] if value != system_id
+        ]
+        if invasion["status"] == "STALLED" and not invasion["converted_system_ids"]:
+            invasion["status"] = "ELIMINATED"
+    if old_controller == "CE_FACTION_PIRATES":
+        migration = state["pirate_migration"]
+        migration["converted_system_ids"] = [
+            value for value in migration["converted_system_ids"] if value != system_id
+        ]
+        migration["arrivals"] = len(migration["converted_system_ids"])
+        if migration["status"] == "SPLINTERED" and not migration["converted_system_ids"]:
+            migration["status"] = "ELIMINATED"
+    for race, faction in CORE_FACTION_BY_ARCHETYPE.items():
+        if old_controller == faction and state["race_states"][race] == "DECAPITATED" and not any(
+            item["owner"] == faction for item in systems
+        ):
+            state["race_states"][race] = "ELIMINATED"
+    state["revision"] += 1
+    validate_state(state)
+
+
+def can_transfer_orphan_to_intells(state: dict[str, Any]) -> bool:
+    return state["race_states"]["INTELL"] == "ACTIVE"
+
+
+def donate_gate_material(state: dict[str, Any], tons: int) -> None:
+    if tons <= 0:
+        raise StateError("gate research donation must be positive")
+    state["coalition_gate"]["material_tons"] += tons
+    state["revision"] += 1
+    validate_state(state)
+
+
+def configure_coalition_research(
+    state: dict[str, Any], *, science_bases: int | None = None,
+    anti_dominator_active: bool | None = None, coalition_alive: bool | None = None,
+    peace_reached: bool | None = None,
+) -> None:
+    gate = state["coalition_gate"]
+    if science_bases is not None:
+        if science_bases < 0:
+            raise StateError("science base count cannot be negative")
+        gate["science_bases"] = science_bases
+    if anti_dominator_active is not None:
+        gate["anti_dominator_program_active"] = anti_dominator_active
+    if coalition_alive is not None:
+        gate["coalition_alive"] = coalition_alive
+    if peace_reached is not None:
+        gate["peace_reached"] = peace_reached
+    if not gate["coalition_alive"]:
+        gate["status"] = "FAILED"
+        gate["mass_transit"] = False
+        state["transit_access_mode"] = "PLAYER_ONLY"
+    elif state["union_invasion_started"] and gate["status"] not in {"ACTIVE", "PEACEFUL"}:
+        gate["status"] = "RESEARCHING" if gate["science_bases"] else "PAUSED"
+    state["revision"] += 1
+    validate_state(state)
+
+
+def _advance_coalition_gate(state: dict[str, Any], days: int) -> None:
+    gate = state["coalition_gate"]
+    if gate["status"] in {"LOCKED", "FAILED", "ACTIVE", "PEACEFUL"}:
+        return
+    if not gate["coalition_alive"]:
+        gate["status"] = "FAILED"
+        return
+    if gate["science_bases"] == 0:
+        gate["status"] = "PAUSED"
+        return
+    gate["status"] = "RESEARCHING"
+    rule = WAR_STATE_RULE["coalition_gate_research"]
+    for day_offset in range(1, days + 1):
+        raw_speed = min(
+            rule["raw_speed_percent_max"],
+            rule["raw_speed_percent_base"] +
+            rule["raw_speed_percent_per_material_ton"] * gate["material_tons"],
+        )
+        multiplier = (
+            rule["parallel_program_multiplier_basis_points"] / 10000
+            if gate["anti_dominator_program_active"] else 1.0
+        )
+        gate["progress"] = min(10000, gate["progress"] + int(raw_speed * multiplier))
+        if gate["material_tons"]:
+            gate["material_tons"] -= 1
+        if gate["progress"] == 10000:
+            gate["status"] = "PEACEFUL" if gate["peace_reached"] else "ACTIVE"
+            gate["mass_transit"] = True
+            state["transit_access_mode"] = (
+                "PEACEFUL_MASS" if gate["peace_reached"] else "COALITION_MASS"
+            )
+            state["history"].append({
+                "type": "CE_COALITION_GATE_ACTIVATED",
+                "day": state["current_day"] + day_offset,
+                "mode": state["transit_access_mode"],
+            })
+            break
 
 
 def _commit(store: StateStore, state: dict[str, Any]) -> None:
@@ -1481,7 +2043,7 @@ def _parser() -> argparse.ArgumentParser:
     for series in DOMINATOR_SERIES:
         init.add_argument(
             f"--{series.lower()}-state",
-            choices=DOMINATOR_INVASION_RULE["boss_state_values"],
+            choices=DOMINATOR_BOSS_STATES,
             default="ACTIVE",
         )
     transit = sub.add_parser("transit")
@@ -1513,7 +2075,7 @@ def _parser() -> argparse.ArgumentParser:
     for series in DOMINATOR_SERIES:
         demo.add_argument(
             f"--{series.lower()}-state",
-            choices=DOMINATOR_INVASION_RULE["boss_state_values"],
+            choices=DOMINATOR_BOSS_STATES,
             default="ACTIVE",
         )
     return parser

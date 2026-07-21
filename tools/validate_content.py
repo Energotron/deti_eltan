@@ -49,13 +49,44 @@ def main():
         resolved|=available
         for mission_id in available:
             del unresolved[mission_id]
+    mission_by_id={mission['id']: mission for mission in missions}
+    scout_outcomes={'SPARE','DESTROY','COERCE','FOLLOW'}
+    for scout_id in ('CE-P00','CE-SCOUT-RANDOM'):
+        scout=mission_by_id.get(scout_id,{})
+        if set(scout.get('outcomes',[]))!=scout_outcomes or \
+                set(scout.get('effects',[]))!={
+                    'RECORD_SCOUT_ENCOUNTER','RECOMPUTE_SCOUT_ARRIVAL_PROFILE'
+                }:
+            raise SystemExit(f'{scout_id} scout outcome contract is incomplete')
+    coalition_gate=mission_by_id.get('CE-GATE-COALITION',{})
+    peaceful_gate=mission_by_id.get('CE-GATE-PEACEFUL',{})
+    if 'vCE_CoalitionState == ACTIVE' not in coalition_gate.get('condition','') or \
+            coalition_gate.get('effects')!=['ENABLE_COALITION_MASS'] or \
+            'vCE_CoalitionState == PEACE' not in peaceful_gate.get('condition','') or \
+            'DISABLE_UNION_INVASION' not in peaceful_gate.get('effects',[]):
+        raise SystemExit('Coalition and peaceful gate outcomes are not separated')
     for v in variables:
         if v['type']=='int' and not v['min'] <= v['default'] <= v['max']:
             raise SystemExit(f"bad range {v['id']}")
         if v['type']=='enum' and v['default'] not in v['values']:
             raise SystemExit(f"bad enum {v['id']}")
 
-    required_vars={'vCE_WarApartState','vCE_CurrentArm','vCE_AnchorState','vCE_AnchorInCargo','vCE_ResonanceCells','vCE_SecondHomeSeed'}
+    required_vars={
+        'vCE_WarApartState','vCE_CurrentArm','vCE_AnchorState','vCE_AnchorInCargo',
+        'vCE_ResonanceCells','vCE_SecondHomeSeed','vCE_ScoutsSpared',
+        'vCE_ScoutsDestroyed','vCE_ScoutsCoerced','vCE_ScoutsFollowed',
+        'vCE_ScoutArrivalProfile','vCE_StrongState','vCE_AgillState',
+        'vCE_MediumState','vCE_IntellState','vCE_StrongCapitalBoss',
+        'vCE_AgillCapitalBoss','vCE_MediumCapitalBoss','vCE_IntellCapitalBoss',
+        'vCE_BlazerSecondHome','vCE_KellerSecondHome','vCE_TerronSecondHome',
+        'vCE_PirateSecondHome','vCE_CoalitionGateProject',
+        'vCE_CoalitionGateProgress','vCE_CoalitionGateMaterialTons',
+        'vCE_CoalitionMassTransit','vCE_ResearchParallelMultiplier',
+        'vCE_TransitAccessMode','vCE_OrphanSampleTaken','vCE_CoalitionState',
+        'vCE_PirateClanExistsAtCorridor','vCE_OldArmBlazerBoss',
+        'vCE_OldArmKellerBoss','vCE_OldArmTerronBoss','vCE_OldArmBlazerKiller',
+        'vCE_OldArmKellerKiller','vCE_OldArmTerronKiller',
+    }
     missing=required_vars-vids
     if missing: raise SystemExit(f'missing required variables: {sorted(missing)}')
 
@@ -86,6 +117,11 @@ def main():
         raise SystemExit('every required Second Home system must have an archetype')
     if any(value not in second['sector_archetypes'] for value in required_archetypes.values()):
         raise SystemExit('required Second Home system has an unknown archetype')
+    if second.get('capital_story_nodes')!={
+        'STRONG':'CE_SYS_KARH_FORTRESS','AGILL':'CE_SYS_FACELESS_NODE',
+        'MEDIUM':'CE_SYS_LUMEN','INTELL':'CE_SYS_UNITY_PRISM'
+    }:
+        raise SystemExit('Second Home capital story-node mapping is incomplete')
     progression=second.get('story_progression',{})
     early_nodes=progression.get('early_story_nodes',[])
     if progression.get('starting_open_sector_count')!=3 or len(early_nodes)!=3:
@@ -156,7 +192,7 @@ def main():
     controllers=set(population_rule.get('controllers',[]))
     expected_controllers={
         'CE_FACTION_STRONG','CE_FACTION_AGILL','CE_FACTION_MEDIUM','CE_FACTION_INTELL',
-        'CE_FACTION_PIRATES','CE_LOCAL_ASH_CORSAIRS','CE_HOSTILE_KLISSAN','CE_UNCLAIMED',
+        'CE_FACTION_PIRATES','CE_FACTION_COALITION','CE_LOCAL_ASH_CORSAIRS','CE_HOSTILE_KLISSAN','CE_UNCLAIMED',
         'CE_DOMINATOR_BLAZEROIDS','CE_DOMINATOR_KELLEROIDS','CE_DOMINATOR_TERRONOIDS'
     }
     if controllers!=expected_controllers:
@@ -177,23 +213,64 @@ def main():
         bounds=population_rule.get(range_name,[])
         if len(bounds)!=2 or bounds[0]<0 or bounds[0]>=bounds[1]:
             raise SystemExit(f'invalid Second Home {range_name}')
+    strategic=second.get('strategic_system_rule',{})
+    if set(strategic.get('required_fields',[]))!={
+        'owner','military_production_enabled','strategic_expansion_enabled',
+        'system_state','last_capture_day'
+    } or set(strategic.get('system_states',[]))!={
+        'CONTROLLED','CONTESTED','DEVASTATED','KLISSAN_INFESTED'
+    } or strategic.get('coalition_capture_requires_transit_mode')!='COALITION_MASS':
+        raise SystemExit('Second Home strategic system state model is incomplete')
+    if set(strategic.get('pre_coalition_occupiers',[])) != expected_controllers-{
+        'CE_UNCLAIMED','CE_FACTION_COALITION'
+    }:
+        raise SystemExit('Second Home pre-Coalition occupation matrix is incomplete')
     migration=second.get('interarm_pirate_migration',{})
     pirate_delay_range=migration.get('arrival_delay_days_range',[])
-    if set(migration.get('eligible_war_apart_states',[]))!={
-        'NOT_STARTED','CLAN_ACTIVE','PIRATE_VICTORY','PLAYER_PIRATE'
-    } or set(migration.get('destroyed_war_apart_states',[]))!={'COALITION_VICTORY'} or \
-            migration.get('unknown_war_apart_state_behavior')!='block_migration' or \
-            migration.get('eligible_initial_status')!='LOCKED' or \
-            migration.get('destroyed_initial_status')!='EXTINCT' or \
-            migration.get('unknown_initial_status')!='UNRESOLVED' or \
-            migration.get('trigger')!='first_completed_old_arm_to_second_home_transit' or \
+    if migration.get('eligibility_state_variable')!='vCE_PirateClanExistsAtCorridor' or \
+            set(migration.get('eligible_values',[]))!={'YES'} or \
+            set(migration.get('destroyed_values',[]))!={'NO'} or \
+            migration.get('unknown_value_behavior')!='block_migration' or \
+            migration.get('player_membership_variable')!='vCE_PlayerPirateStatus' or \
+            migration.get('player_membership_changes_eligibility') is not False or \
+            migration.get('eligible_initial_status')!='INELIGIBLE' or \
+            migration.get('destroyed_initial_status')!='INELIGIBLE' or \
+            migration.get('unknown_initial_status')!='INELIGIBLE' or \
+            migration.get('trigger')!='first_union_invasion_after_stable_corridor' or \
             len(pirate_delay_range)!=2 or pirate_delay_range[0]<1 or \
             pirate_delay_range[0]>=pirate_delay_range[1] or \
             migration.get('player_pirate_arrival_delay_days')!=0 or \
             migration.get('preferred_archetype')!='ASH_BORDER':
         raise SystemExit('War Apart pirate migration outcome matrix is invalid')
-    if migration.get('route_explanation')!='pirate_scouts_copy_twin_home_anchor_resonance_wake':
+    if migration.get('route_explanation')!='pirates_steal_agill_scout_calibration_technology':
         raise SystemExit('War Apart pirate arrival route is not justified')
+    war_model=second.get('war_state_model',{})
+    expected_enums={
+        'transit_access_modes': {'PLAYER_ONLY','COALITION_MASS','PEACEFUL_MASS'},
+        'race_states': {'ACTIVE','DECAPITATED','ELIMINATED'},
+        'capital_boss_states': {'ALIVE','ENGAGED','DESTROYED'},
+        'dominator_states': {'INELIGIBLE','TRACKING','ESTABLISHED','STALLED','ELIMINATED'},
+        'pirate_states': {'INELIGIBLE','STEALING_TECH','ESTABLISHED','SPLINTERED','ELIMINATED'},
+        'orphan_states': {'UNKNOWN','ACTIVE','HIDDEN','INTELL_CONTROLLED','PACIFIED','DESTROYED','FREE'},
+        'scout_arrival_profiles': {'UNKNOWN','MERCIFUL','INTRUSIVE','HUNTER'},
+        'coalition_gate_states': {'LOCKED','RESEARCHING','PAUSED','COMPLETE','ACTIVE','PEACEFUL','FAILED'},
+    }
+    if war_model.get('war_begins_on')!='first_stable_corridor_calibration' or \
+            war_model.get('pre_corridor_union_presence')!='covert_only' or any(
+                set(war_model.get(key,[]))!=values for key,values in expected_enums.items()
+            ):
+        raise SystemExit('Second Home war state enums or chronology are incomplete')
+    profile=war_model.get('scout_profile_resolution',{})
+    if profile.get('minimum_resolved_encounters')!=2 or \
+            [rule.get('profile') for rule in profile.get('precedence',[])] != [
+                'INTRUSIVE','MERCIFUL','HUNTER','UNKNOWN'
+            ]:
+        raise SystemExit('Scout arrival profile resolution is incomplete')
+    research=war_model.get('coalition_gate_research',{})
+    if research.get('progress_max')!=10000 or \
+            research.get('parallel_program_multiplier_basis_points')!=6000 or \
+            not research.get('progress_pauses_without_science_base'):
+        raise SystemExit('Coalition gate research model is incomplete')
     pirate_faction=next(faction for faction in factions if faction['id']=='CE_FACTION_PIRATES')
     if 'Пепельные корсары' in pirate_faction.get('subfactions',[]) or \
             'Пепельные каперы' not in pirate_faction.get('subfactions',[]):
@@ -204,8 +281,10 @@ def main():
         'KELLER': ('CE_DOMINATOR_KELLEROIDS',(5,10),'BLACK_HOLE_SCAR',{'KLISSAN_SCAR'}),
         'TERRON': ('CE_DOMINATOR_TERRONOIDS',(24,40),'INNER_FREIGHT_NETWORK',{'MEDIUM','INTELL'}),
     }
-    if dominators.get('trigger')!='first_completed_old_arm_to_second_home_transit' or \
-            set(dominators.get('boss_state_values',[]))!={'ACTIVE','ELIMINATED'} or \
+    if dominators.get('trigger')!='first_stable_corridor_calibration' or \
+            set(dominators.get('boss_snapshot_state_values',[]))!={'UNKNOWN','ALIVE','DESTROYED'} or \
+            dominators.get('eligible_snapshot_state')!='ALIVE' or \
+            dominators.get('unknown_snapshot_behavior')!='block_that_series' or \
             set(dominators.get('series',{}))!=set(expected_series):
         raise SystemExit('Second Home dominator invasion matrix is incomplete')
     invasion_fronts=[]
@@ -216,6 +295,10 @@ def main():
                 rule.get('entry_front')!=front or \
                 set(rule.get('preferred_archetypes',[]))!=archetypes or not rule.get('route'):
             raise SystemExit(f'invalid Second Home {series} invasion rule')
+        prefix=series.title()
+        if rule.get('boss_snapshot_variable')!=f'vCE_OldArm{prefix}Boss' or \
+                rule.get('killer_snapshot_variable')!=f'vCE_OldArm{prefix}Killer':
+            raise SystemExit(f'invalid Second Home {series} threat snapshot binding')
         invasion_fronts.append(archetypes)
     if any(left & right for index,left in enumerate(invasion_fronts)
            for right in invasion_fronts[index+1:]):

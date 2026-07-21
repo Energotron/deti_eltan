@@ -81,6 +81,12 @@
     "CE_SYS_UNLIT_CITY": "AGILL",
     "CE_SYS_SECOND_GATE": "INTELL"
   },
+  "capital_story_nodes": {
+    "STRONG": "CE_SYS_KARH_FORTRESS",
+    "AGILL": "CE_SYS_FACELESS_NODE",
+    "MEDIUM": "CE_SYS_LUMEN",
+    "INTELL": "CE_SYS_UNITY_PRISM"
+  },
   "locked_sector_briefings": {
     "CE_SYS_KARH_FORTRESS": "Карх не станет обсуждать Клятву Пепла по дальней связи. Его крепость отмечена в секторе «{sector}», но наших навигационных данных недостаточно. Пограничные правительства иногда продают свежие карты.",
     "CE_SYS_FACELESS_NODE": "Перехваченный пакет указывает на сектор «{sector}». Дальше координаты рассыпаются на ложные маршруты — сперва придётся раздобыть официальную карту у соседей.",
@@ -245,6 +251,7 @@
       "CE_FACTION_MEDIUM",
       "CE_FACTION_INTELL",
       "CE_FACTION_PIRATES",
+      "CE_FACTION_COALITION",
       "CE_LOCAL_ASH_CORSAIRS",
       "CE_HOSTILE_KLISSAN",
       "CE_UNCLAIMED",
@@ -266,20 +273,44 @@
     "security_range": [0, 1000],
     "population_thousands_range": [0, 9000000]
   },
-  "interarm_pirate_migration": {
-    "eligible_war_apart_states": [
-      "NOT_STARTED",
-      "CLAN_ACTIVE",
-      "PIRATE_VICTORY",
-      "PLAYER_PIRATE"
+  "strategic_system_rule": {
+    "required_fields": [
+      "owner",
+      "military_production_enabled",
+      "strategic_expansion_enabled",
+      "system_state",
+      "last_capture_day"
     ],
-    "destroyed_war_apart_states": ["COALITION_VICTORY"],
-    "unknown_war_apart_state_behavior": "block_migration",
-    "eligible_initial_status": "LOCKED",
-    "destroyed_initial_status": "EXTINCT",
-    "unknown_initial_status": "UNRESOLVED",
-    "trigger": "first_completed_old_arm_to_second_home_transit",
-    "route_explanation": "pirate_scouts_copy_twin_home_anchor_resonance_wake",
+    "system_states": ["CONTROLLED", "CONTESTED", "DEVASTATED", "KLISSAN_INFESTED"],
+    "pre_coalition_capture_excludes": ["CE_FACTION_COALITION"],
+    "coalition_capture_requires_transit_mode": "COALITION_MASS",
+    "pre_coalition_occupiers": [
+      "CE_FACTION_STRONG",
+      "CE_FACTION_AGILL",
+      "CE_FACTION_MEDIUM",
+      "CE_FACTION_INTELL",
+      "CE_FACTION_PIRATES",
+      "CE_LOCAL_ASH_CORSAIRS",
+      "CE_HOSTILE_KLISSAN",
+      "CE_DOMINATOR_BLAZEROIDS",
+      "CE_DOMINATOR_KELLEROIDS",
+      "CE_DOMINATOR_TERRONOIDS"
+    ],
+    "devastated_owner": "CE_UNCLAIMED",
+    "klissan_owner": "CE_HOSTILE_KLISSAN"
+  },
+  "interarm_pirate_migration": {
+    "eligibility_state_variable": "vCE_PirateClanExistsAtCorridor",
+    "eligible_values": ["YES"],
+    "destroyed_values": ["NO"],
+    "unknown_value_behavior": "block_migration",
+    "player_membership_variable": "vCE_PlayerPirateStatus",
+    "player_membership_changes_eligibility": false,
+    "eligible_initial_status": "INELIGIBLE",
+    "destroyed_initial_status": "INELIGIBLE",
+    "unknown_initial_status": "INELIGIBLE",
+    "trigger": "first_union_invasion_after_stable_corridor",
+    "route_explanation": "pirates_steal_agill_scout_calibration_technology",
     "arrival_delay_days_range": [25, 40],
     "player_pirate_arrival_delay_days": 0,
     "first_wave_min_outposts": 1,
@@ -287,10 +318,14 @@
     "preferred_archetype": "ASH_BORDER"
   },
   "interarm_dominator_invasions": {
-    "trigger": "first_completed_old_arm_to_second_home_transit",
-    "boss_state_values": ["ACTIVE", "ELIMINATED"],
+    "trigger": "first_stable_corridor_calibration",
+    "boss_snapshot_state_values": ["UNKNOWN", "ALIVE", "DESTROYED"],
+    "eligible_snapshot_state": "ALIVE",
+    "unknown_snapshot_behavior": "block_that_series",
     "series": {
       "BLAZER": {
+        "boss_snapshot_variable": "vCE_OldArmBlazerBoss",
+        "killer_snapshot_variable": "vCE_OldArmBlazerKiller",
         "controller": "CE_DOMINATOR_BLAZEROIDS",
         "route": "intercept_gate_calibration_and_defense_telemetry",
         "entry_front": "OUTER_ASH_APPROACH",
@@ -298,6 +333,8 @@
         "preferred_archetypes": ["ASH_BORDER"]
       },
       "KELLER": {
+        "boss_snapshot_variable": "vCE_OldArmKellerBoss",
+        "killer_snapshot_variable": "vCE_OldArmKellerKiller",
         "controller": "CE_DOMINATOR_KELLEROIDS",
         "route": "trace_new_hyperspace_topology_through_black_holes",
         "entry_front": "BLACK_HOLE_SCAR",
@@ -305,6 +342,8 @@
         "preferred_archetypes": ["KLISSAN_SCAR"]
       },
       "TERRON": {
+        "boss_snapshot_variable": "vCE_OldArmTerronBoss",
+        "killer_snapshot_variable": "vCE_OldArmTerronKiller",
         "controller": "CE_DOMINATOR_TERRONOIDS",
         "route": "hide_conversion_seed_in_automated_gate_logistics",
         "entry_front": "INNER_FREIGHT_NETWORK",
@@ -314,6 +353,36 @@
     },
     "first_wave_min_systems": 1,
     "first_wave_max_systems": 2
+  },
+  "war_state_model": {
+    "war_begins_on": "first_stable_corridor_calibration",
+    "pre_corridor_union_presence": "covert_only",
+    "transit_access_modes": ["PLAYER_ONLY", "COALITION_MASS", "PEACEFUL_MASS"],
+    "race_states": ["ACTIVE", "DECAPITATED", "ELIMINATED"],
+    "capital_boss_states": ["ALIVE", "ENGAGED", "DESTROYED"],
+    "dominator_states": ["INELIGIBLE", "TRACKING", "ESTABLISHED", "STALLED", "ELIMINATED"],
+    "pirate_states": ["INELIGIBLE", "STEALING_TECH", "ESTABLISHED", "SPLINTERED", "ELIMINATED"],
+    "orphan_states": ["UNKNOWN", "ACTIVE", "HIDDEN", "INTELL_CONTROLLED", "PACIFIED", "DESTROYED", "FREE"],
+    "scout_arrival_profiles": ["UNKNOWN", "MERCIFUL", "INTRUSIVE", "HUNTER"],
+    "scout_profile_resolution": {
+      "minimum_resolved_encounters": 2,
+      "precedence": [
+        {"profile": "INTRUSIVE", "condition": "coerced_plus_followed_gt_zero"},
+        {"profile": "MERCIFUL", "condition": "spared_gt_destroyed"},
+        {"profile": "HUNTER", "condition": "destroyed_gt_spared"},
+        {"profile": "UNKNOWN", "condition": "tie_or_too_few_encounters"}
+      ]
+    },
+    "coalition_gate_states": ["LOCKED", "RESEARCHING", "PAUSED", "COMPLETE", "ACTIVE", "PEACEFUL", "FAILED"],
+    "coalition_gate_research": {
+      "progress_max": 10000,
+      "raw_speed_percent_base": 20,
+      "raw_speed_percent_per_material_ton": 0.25,
+      "raw_speed_percent_max": 100,
+      "parallel_program_multiplier_basis_points": 6000,
+      "progress_pauses_without_science_base": true,
+      "progress_survives_pause": true
+    }
   },
   "inactive_map_simulation": {
     "light_tick_days": 1,
