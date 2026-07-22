@@ -4,6 +4,7 @@
 
 #include <setjmp.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 
@@ -27,6 +28,7 @@ static volatile LONG g_ce_fault_code = 0;
 static volatile LONG g_ce_fault_eip = 0;
 static volatile LONG g_ce_fault_access_type = -1;
 static volatile LONG g_ce_fault_access_address = 0;
+static HINSTANCE g_ce_adapter_instance = NULL;
 
 static LONG WINAPI ce_veh_handler(EXCEPTION_POINTERS *info) {
     DWORD code;
@@ -136,9 +138,10 @@ static void ce_write_fault_report(const char *label) {
    into its process, independent of whether any exported function is ever
    invoked from a Turn script. */
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
-    (void)instance;
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
+        g_ce_adapter_instance = instance;
+        DisableThreadLibraryCalls(instance);
         ce_write_progress("dllmain-process-attach");
     }
     return TRUE;
@@ -183,6 +186,10 @@ static volatile LONG g_ce_portal_status = 0;
 static volatile LONG g_ce_portal_hole_id = 0;
 static volatile LONG g_ce_portal_galaxy_ptr = 0;
 static HHOOK g_ce_keyboard_hook = NULL;
+static volatile LONG g_ce_f8_down = 0;
+static volatile LONG g_ce_ctrl_down = 0;
+static volatile LONG g_ce_shift_down = 0;
+static uint32_t g_ce_cheat_progress = 0u;
 static ATOM g_ce_loading_window_class = 0;
 
 /* Steam build 20648864 / Rangers.exe 2.1.2500.0 only. */
@@ -255,7 +262,8 @@ uint32_t CE_CALL CEAdapterCapabilities(void) {
         CE_CAP_SAVE_LIFECYCLE_SNAPSHOT |
         CE_CAP_LOAD_LIFECYCLE_TRANSFORM |
         CE_CAP_LIVE_ARM_SWITCH |
-        CE_CAP_MANUAL_PORTAL_TRANSIT;
+        CE_CAP_MANUAL_PORTAL_TRANSIT |
+        CE_CAP_MAP_VISUAL_FIXES;
 }
 
 uint32_t CE_CALL CEAdapterBindGalaxy(uint32_t galaxy_ptr) {
@@ -1818,18 +1826,23 @@ typedef struct ce_live_con_snapshot {
     uint32_t second_name;
     float old_x;
     float old_y;
+    uint32_t sector_object;
 } ce_live_con_snapshot;
 
 typedef struct ce_live_sector_snapshot {
     uint32_t object;
     uint32_t old_name;
     uint32_t second_name;
+    uint32_t second_name_index;
 } ce_live_sector_snapshot;
 
 static ce_live_con_snapshot *g_ce_live_cons = NULL;
 static ce_live_sector_snapshot *g_ce_live_sectors = NULL;
+static ce_live_sector_snapshot *g_ce_live_sector_rows = NULL;
 static uint32_t g_ce_live_con_count = 0;
+static uint32_t g_ce_live_mapped_system_count = 0;
 static uint32_t g_ce_live_sector_count = 0;
+static uint32_t g_ce_live_sector_row_count = 0;
 static uint32_t g_ce_live_snapshot_galaxy = 0;
 
 static const wchar_t *const g_ce_second_system_names[] = {
@@ -1981,7 +1994,7 @@ static int ce_find_live_sector_rows(uint32_t rows[24], uint32_t *count_out) {
             for (; cursor <= end; cursor += 4u) {
                 uint32_t tail;
                 if (*(const uint32_t *)cursor != row_vmt) continue;
-                for (tail = 4u; tail < 24u; ++tail) {
+                for (tail = 0u; tail < 24u; ++tail) {
                     uint32_t current = (uint32_t)cursor;
                     uint32_t remaining = tail + 1u;
                     while (remaining != 0u) {
@@ -2014,12 +2027,24 @@ static int ce_find_live_sector_rows(uint32_t rows[24], uint32_t *count_out) {
     return 1;
 }
 
+static int ce_compare_live_sector_objects(const void *left, const void *right) {
+    uint32_t a = *(const uint32_t *)left;
+    uint32_t b = *(const uint32_t *)right;
+    uint32_t a_id = *(const uint32_t *)(uintptr_t)(a + 4u);
+    uint32_t b_id = *(const uint32_t *)(uintptr_t)(b + 4u);
+    return a_id < b_id ? -1 : a_id > b_id ? 1 : 0;
+}
+
 static int ce_capture_live_arm(uint32_t galaxy_ptr) {
     uint32_t con_list, con_array, con_count;
     uint32_t sector_rows[24];
-    uint32_t sector_count = 0u;
+    uint32_t sector_row_count = 0u;
     uint32_t index;
+    ce_live_con_snapshot *new_cons;
+    ce_live_sector_snapshot *new_sectors;
+    ce_live_sector_snapshot *new_sector_rows = NULL;
     if (g_ce_live_snapshot_galaxy == galaxy_ptr && g_ce_live_cons != NULL) return 1;
+    if (g_ce_live_snapshot_galaxy != 0u) return 0;
     char diagnostic[256];
     int diagnostic_size;
     if (!ce_region_has_access((const void *)(uintptr_t)(galaxy_ptr + 0x38u), 4u, 0)) {
@@ -2033,68 +2058,133 @@ static int ce_capture_live_arm(uint32_t galaxy_ptr) {
             "{\"status\":\"capture-failed\",\"stage\":\"systems\"}\r\n", 48u);
         return 0;
     }
-    if (!ce_find_live_sector_rows(sector_rows, &sector_count)) {
-        diagnostic_size = snprintf(diagnostic, sizeof(diagnostic),
-            "{\"status\":\"capture-failed\",\"stage\":\"sector-rows\"}\r\n");
-        if (diagnostic_size > 0) ce_write_text_marker(
-            "live-arm-switch.jsonl", diagnostic, (size_t)diagnostic_size);
+    /* UI rows contain only already opened sectors and may not exist yet in
+       a new game.  They improve label refresh but are not authoritative;
+       StarToCon() supplies every real TConstellation below. */
+    (void)ce_find_live_sector_rows(sector_rows, &sector_row_count);
+    new_cons = (ce_live_con_snapshot *)HeapAlloc(
+        GetProcessHeap(), HEAP_ZERO_MEMORY, con_count * sizeof(*g_ce_live_cons));
+    new_sectors = (ce_live_sector_snapshot *)HeapAlloc(
+        GetProcessHeap(), HEAP_ZERO_MEMORY, 24u * sizeof(*g_ce_live_sectors));
+    if (sector_row_count != 0u) {
+        new_sector_rows = (ce_live_sector_snapshot *)HeapAlloc(
+            GetProcessHeap(), HEAP_ZERO_MEMORY,
+            sector_row_count * sizeof(*g_ce_live_sector_rows));
+    }
+    if (new_cons == NULL || new_sectors == NULL ||
+            (sector_row_count != 0u && new_sector_rows == NULL)) {
+        if (new_cons != NULL) HeapFree(GetProcessHeap(), 0, new_cons);
+        if (new_sectors != NULL) HeapFree(GetProcessHeap(), 0, new_sectors);
+        if (new_sector_rows != NULL) HeapFree(GetProcessHeap(), 0, new_sector_rows);
         return 0;
     }
-    g_ce_live_cons = (ce_live_con_snapshot *)HeapAlloc(
-        GetProcessHeap(), HEAP_ZERO_MEMORY, con_count * sizeof(*g_ce_live_cons));
-    g_ce_live_sectors = (ce_live_sector_snapshot *)HeapAlloc(
-        GetProcessHeap(), HEAP_ZERO_MEMORY, sector_count * sizeof(*g_ce_live_sectors));
-    if (g_ce_live_cons == NULL || g_ce_live_sectors == NULL) return 0;
     for (index = 0; index < con_count; ++index) {
         uint32_t object = *(const uint32_t *)(uintptr_t)(con_array + index * 4u);
-        if (!ce_region_has_access((const void *)(uintptr_t)object, 0x1cu, 1)) return 0;
-        g_ce_live_cons[index].object = object;
-        g_ce_live_cons[index].old_name = *(const uint32_t *)(uintptr_t)(object + 0x10u);
-        memcpy(&g_ce_live_cons[index].old_x,
+        if (!ce_region_has_access((const void *)(uintptr_t)object, 0x1cu, 1)) goto capture_fail;
+        new_cons[index].object = object;
+        new_cons[index].old_name = *(const uint32_t *)(uintptr_t)(object + 0x10u);
+        memcpy(&new_cons[index].old_x,
             (const void *)(uintptr_t)(object + 0x14u), sizeof(float));
-        memcpy(&g_ce_live_cons[index].old_y,
+        memcpy(&new_cons[index].old_y,
             (const void *)(uintptr_t)(object + 0x18u), sizeof(float));
-        g_ce_live_cons[index].second_name = ce_make_immortal_unicode(
+        new_cons[index].second_name = ce_make_immortal_unicode(
             g_ce_second_system_names[index % (sizeof(g_ce_second_system_names) /
                 sizeof(g_ce_second_system_names[0]))]);
-        if (g_ce_live_cons[index].second_name == 0u) return 0;
+        if (new_cons[index].second_name == 0u) goto capture_fail;
+        new_cons[index].sector_object = 0u;
     }
-    for (index = 0; index < sector_count; ++index) {
+    for (index = 0; index < sector_row_count; ++index) {
         uint32_t object = sector_rows[index];
-        if (!ce_region_has_access((const void *)(uintptr_t)object, 0x1cu, 1)) return 0;
-        g_ce_live_sectors[index].object = object;
-        g_ce_live_sectors[index].old_name = *(const uint32_t *)(uintptr_t)(object + 0x18u);
-        g_ce_live_sectors[index].second_name = ce_make_immortal_unicode(
-            g_ce_second_sector_names[index % (sizeof(g_ce_second_sector_names) /
-                sizeof(g_ce_second_sector_names[0]))]);
-        if (g_ce_live_sectors[index].second_name == 0u) return 0;
+        if (!ce_region_has_access((const void *)(uintptr_t)object, 0x1cu, 1)) goto capture_fail;
+        new_sector_rows[index].object = object;
+        new_sector_rows[index].old_name = *(const uint32_t *)(uintptr_t)(object + 0x18u);
+        new_sector_rows[index].second_name_index = UINT32_MAX;
     }
+    g_ce_live_cons = new_cons;
+    g_ce_live_sectors = new_sectors;
+    g_ce_live_sector_rows = new_sector_rows;
     g_ce_live_con_count = con_count;
-    g_ce_live_sector_count = sector_count;
+    g_ce_live_mapped_system_count = 0u;
+    g_ce_live_sector_count = 0u;
+    g_ce_live_sector_row_count = sector_row_count;
     g_ce_live_snapshot_galaxy = galaxy_ptr;
     diagnostic_size = snprintf(diagnostic, sizeof(diagnostic),
-        "{\"status\":\"captured\",\"systems\":%u,\"sectors\":%u}\r\n",
-        con_count, sector_count);
+        "{\"status\":\"captured\",\"systems\":%u,\"sector_rows\":%u}\r\n",
+        con_count, sector_row_count);
     if (diagnostic_size > 0) ce_write_text_marker(
         "live-arm-switch.jsonl", diagnostic, (size_t)diagnostic_size);
     return 1;
+
+capture_fail:
+    for (index = 0u; index < con_count; ++index) {
+        if (new_cons[index].second_name != 0u) {
+            HeapFree(GetProcessHeap(), 0,
+                (void *)(uintptr_t)(new_cons[index].second_name - 8u));
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, new_cons);
+    HeapFree(GetProcessHeap(), 0, new_sectors);
+    if (new_sector_rows != NULL) HeapFree(GetProcessHeap(), 0, new_sector_rows);
+    {
+        const char *failure =
+            "{\"status\":\"capture-failed\",\"stage\":\"snapshot\"}\r\n";
+        ce_write_text_marker("live-arm-switch.jsonl", failure, strlen(failure));
+    }
+    return 0;
+}
+
+static uint32_t ce_live_sector_index(uint32_t object) {
+    uint32_t index;
+    for (index = 0u; index < g_ce_live_sector_count; ++index) {
+        if (g_ce_live_sectors[index].object == object) return index;
+    }
+    return UINT32_MAX;
+}
+
+static int ce_live_names_equal(uint32_t left, uint32_t right) {
+    const wchar_t *left_text, *right_text;
+    uint32_t left_count, right_count;
+    if (left == right) return 1;
+    if (!ce_live_read_wide_string(left, &left_text, &left_count) ||
+            !ce_live_read_wide_string(right, &right_text, &right_count) ||
+            left_count != right_count) return 0;
+    return memcmp(left_text, right_text, left_count * sizeof(wchar_t)) == 0;
 }
 
 static void ce_apply_live_arm(int second_home) {
     uint32_t index;
     uint32_t seed = (uint32_t)InterlockedCompareExchange(&g_ce_live_seed, 0, 0);
-    float min_x = 10000000.0f, max_x = -10000000.0f;
-    float min_y = 10000000.0f, max_y = -10000000.0f;
+    float sector_x[24] = {0};
+    float sector_y[24] = {0};
+    uint32_t sector_members[24] = {0};
     char report[256];
     int report_size;
-    if (g_ce_live_cons == NULL || g_ce_live_sectors == NULL) return;
+    if (g_ce_live_cons == NULL || g_ce_live_sectors == NULL ||
+            g_ce_live_sector_count == 0u) return;
+    qsort(g_ce_live_sectors, g_ce_live_sector_count,
+        sizeof(g_ce_live_sectors[0]), ce_compare_live_sector_objects);
+    for (index = 0u; index < g_ce_live_sector_count; ++index) {
+        ce_live_sector_snapshot *sector = &g_ce_live_sectors[index];
+        if (sector->second_name == 0u || sector->second_name_index != index) {
+            sector->second_name = ce_make_immortal_unicode(
+                g_ce_second_sector_names[index % (sizeof(g_ce_second_sector_names) /
+                    sizeof(g_ce_second_sector_names[0]))]);
+            sector->second_name_index = index;
+        }
+    }
     for (index = 0; index < g_ce_live_con_count; ++index) {
-        float x = g_ce_live_cons[index].old_x;
-        float y = g_ce_live_cons[index].old_y;
-        if (x < min_x) min_x = x;
-        if (x > max_x) max_x = x;
-        if (y < min_y) min_y = y;
-        if (y > max_y) max_y = y;
+        uint32_t sector = ce_live_sector_index(g_ce_live_cons[index].sector_object);
+        if (sector < g_ce_live_sector_count) {
+            sector_x[sector] += g_ce_live_cons[index].old_x;
+            sector_y[sector] += g_ce_live_cons[index].old_y;
+            ++sector_members[sector];
+        }
+    }
+    for (index = 0; index < g_ce_live_sector_count; ++index) {
+        if (sector_members[index] != 0u) {
+            sector_x[index] /= (float)sector_members[index];
+            sector_y[index] /= (float)sector_members[index];
+        }
     }
     for (index = 0; index < g_ce_live_con_count; ++index) {
         ce_live_con_snapshot *item = &g_ce_live_cons[index];
@@ -2104,8 +2194,15 @@ static void ce_apply_live_arm(int second_home) {
             uint32_t id = *(const uint32_t *)(uintptr_t)(item->object + 4u);
             uint32_t hx = ce_mix32(seed ^ id ^ (index * 0x9e3779b9u));
             uint32_t hy = ce_mix32((seed + 0x85ebca6bu) ^ id ^ (index * 0xc2b2ae35u));
-            x = min_x + ((float)(hx & 0xffffu) / 65535.0f) * (max_x - min_x);
-            y = min_y + ((float)(hy & 0xffffu) / 65535.0f) * (max_y - min_y);
+            uint32_t sector = ce_live_sector_index(item->sector_object);
+            if (sector < g_ce_live_sector_count && sector_members[sector] != 0u) {
+                float dx = item->old_x - sector_x[sector];
+                float dy = item->old_y - sector_y[sector];
+                float scale = 0.66f + ((float)(hx & 0xffu) / 255.0f) * 0.12f;
+                float skew = ((float)((hy >> 8u) & 0xffu) / 255.0f - 0.5f) * 0.16f;
+                x = sector_x[sector] + dx * scale - dy * skew;
+                y = sector_y[sector] + dy * scale + dx * skew;
+            }
         }
         *(uint32_t *)(uintptr_t)(item->object + 0x10u) =
             second_home ? item->second_name : item->old_name;
@@ -2114,8 +2211,24 @@ static void ce_apply_live_arm(int second_home) {
     }
     for (index = 0; index < g_ce_live_sector_count; ++index) {
         ce_live_sector_snapshot *item = &g_ce_live_sectors[index];
+        *(uint32_t *)(uintptr_t)(item->object + 0x0cu) =
+            second_home && item->second_name != 0u ? item->second_name : item->old_name;
+    }
+    for (index = 0; index < g_ce_live_sector_row_count; ++index) {
+        ce_live_sector_snapshot *item = &g_ce_live_sector_rows[index];
+        uint32_t sector_index;
+        uint32_t second_name = 0u;
+        for (sector_index = 0u; sector_index < g_ce_live_sector_count; ++sector_index) {
+            if (ce_live_names_equal(
+                    item->old_name, g_ce_live_sectors[sector_index].old_name)) {
+                second_name = g_ce_live_sectors[sector_index].second_name;
+                break;
+            }
+        }
+        if (second_name == 0u && index < g_ce_live_sector_count)
+            second_name = g_ce_live_sectors[index].second_name;
         *(uint32_t *)(uintptr_t)(item->object + 0x18u) =
-            second_home ? item->second_name : item->old_name;
+            second_home && second_name != 0u ? second_name : item->old_name;
     }
     InterlockedExchange(&g_ce_active_arm, second_home ? 1 : 0);
     report_size = snprintf(report, sizeof(report),
@@ -2223,22 +2336,88 @@ static HWND ce_show_loading_window(void) {
 /* F8 is a vanilla quick-save key.  Consume it and forward an otherwise unused
    F24 key to the script UI, so opening the inter-arm portal never also opens
    the vanilla "quick save is absent" dialog. */
+/* This used to be a thread-specific WH_KEYBOARD hook, which only ever sees
+   keys that pass through GetMessage/PeekMessage on the hooked thread's
+   queue. Live testing showed vanilla's own F8 quicksave still fired every
+   time regardless -- this engine almost certainly reads its hotkeys from
+   polled raw key state (DirectInput-style), not from WM_KEYDOWN messages,
+   so swallowing the message never stopped it. WH_KEYBOARD_LL sits at the
+   OS-wide low-level input stage, ahead of that polled state entirely:
+   returning nonzero here drops the keystroke system-wide before any
+   consumer (message queue or polling) ever observes it. */
+static void ce_post_virtual_key(HWND window, UINT key) {
+    PostMessageW(window, WM_KEYDOWN, key, 1L);
+    PostMessageW(window, WM_KEYUP, key, 0xc0000001L);
+}
+
+/* GetAsyncKeyState is documented to be unreliable from inside a
+   WH_KEYBOARD_LL callback: the low-level hook chain runs before the OS
+   updates the async key-state table for that event, so querying Ctrl/Shift
+   state here can read stale (not-yet-down) values and the combo silently
+   never fires -- confirmed against Microsoft's own hook documentation.
+   Track Ctrl/Shift ourselves from the same down/up event stream instead,
+   the same way g_ce_f8_down already tracks F8. */
 static LRESULT CALLBACK ce_portal_keyboard_proc(int code, WPARAM wparam, LPARAM lparam) {
-    if (code == HC_ACTION && wparam == VK_F8) {
-        if ((lparam & (1L << 31)) == 0 && (lparam & (1L << 30)) == 0) {
-            HWND game_window = GetForegroundWindow();
-            DWORD game_pid = 0;
-            GetWindowThreadProcessId(game_window, &game_pid);
-            if (game_pid == GetCurrentProcessId()) {
-                PostMessageW(game_window, WM_KEYDOWN, VK_F24, 1L);
-                PostMessageW(game_window, WM_KEYUP, VK_F24, 0xc0000001L);
+    if (code == HC_ACTION) {
+        const KBDLLHOOKSTRUCT *info = (const KBDLLHOOKSTRUCT *)lparam;
+        HWND game_window = GetForegroundWindow();
+        DWORD game_pid = 0;
+        int is_down = wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN;
+        int is_up = wparam == WM_KEYUP || wparam == WM_SYSKEYUP;
+        static const DWORD cheat[] = {'E', 'L', 'T', 'A', 'N'};
+        GetWindowThreadProcessId(game_window, &game_pid);
+        if (game_pid != GetCurrentProcessId())
+            return CallNextHookEx(g_ce_keyboard_hook, code, wparam, lparam);
+        if (info->vkCode == VK_F8) {
+            if (is_down) {
+                if (InterlockedExchange(&g_ce_f8_down, 1) == 0)
+                    ce_post_virtual_key(game_window, VK_F24);
+            } else if (is_up) {
+                InterlockedExchange(&g_ce_f8_down, 0);
+            }
+            return 1;
+        }
+        if (info->vkCode == VK_CONTROL || info->vkCode == VK_LCONTROL ||
+                info->vkCode == VK_RCONTROL) {
+            if (is_down) {
+                InterlockedExchange(&g_ce_ctrl_down, 1);
+            } else if (is_up) {
+                InterlockedExchange(&g_ce_ctrl_down, 0);
+                g_ce_cheat_progress = 0u;
+            }
+        } else if (info->vkCode == VK_SHIFT || info->vkCode == VK_LSHIFT ||
+                info->vkCode == VK_RSHIFT) {
+            if (is_down) {
+                InterlockedExchange(&g_ce_shift_down, 1);
+            } else if (is_up) {
+                InterlockedExchange(&g_ce_shift_down, 0);
+                g_ce_cheat_progress = 0u;
+            }
+        } else if (is_down && info->vkCode >= 'A' && info->vkCode <= 'Z' &&
+                InterlockedCompareExchange(&g_ce_ctrl_down, 0, 0) != 0 &&
+                InterlockedCompareExchange(&g_ce_shift_down, 0, 0) != 0) {
+            if (info->vkCode == cheat[g_ce_cheat_progress]) {
+                ++g_ce_cheat_progress;
+            } else {
+                g_ce_cheat_progress = info->vkCode == cheat[0] ? 1u : 0u;
+            }
+            if (g_ce_cheat_progress == sizeof(cheat) / sizeof(cheat[0])) {
+                g_ce_cheat_progress = 0u;
+                ce_post_virtual_key(game_window, VK_F23);
             }
         }
-        return 1;
     }
     return CallNextHookEx(g_ce_keyboard_hook, code, wparam, lparam);
 }
 
+/* The F8 portal only works if VK_F8 is remapped to VK_F24 by the keyboard
+   hook below (see ce_portal_keyboard_proc): the script's OnKey handler
+   listens for F24, not F8, precisely so the vanilla quicksave binding on
+   F8 stays suppressed. The hook install used to happen only after
+   ce_capture_live_arm succeeded, so any capture failure (e.g. sector
+   objects not found) silently left F8 unmapped -- pressing it fell
+   straight through to the vanilla "no quicksave" dialog. Install the hook
+   as soon as the galaxy resolves, independent of capture succeeding. */
 uint32_t CE_CALL CEAdapterInstallLiveArmSwitch(uint32_t galaxy_ptr, uint32_t seed) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;
@@ -2247,15 +2426,47 @@ uint32_t CE_CALL CEAdapterInstallLiveArmSwitch(uint32_t galaxy_ptr, uint32_t see
             galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) return 0;
     InterlockedExchange(&g_ce_live_galaxy_ptr, (LONG)galaxy_ptr);
     InterlockedExchange(&g_ce_live_seed, (LONG)seed);
-    if (!ce_capture_live_arm(galaxy_ptr)) return 0;
     if (g_ce_keyboard_hook == NULL) {
         const char *ready = "{\"status\":\"ready\",\"mode\":\"manual-portal\"}\r\n";
-        g_ce_keyboard_hook = SetWindowsHookExA(
-            WH_KEYBOARD, ce_portal_keyboard_proc, NULL, GetCurrentThreadId());
+        g_ce_keyboard_hook = SetWindowsHookExW(
+            WH_KEYBOARD_LL, ce_portal_keyboard_proc, g_ce_adapter_instance, 0);
         if (g_ce_keyboard_hook == NULL) return 0;
         ce_write_text_marker("live-arm-switch.jsonl", ready, strlen(ready));
     }
+    return ce_capture_live_arm(galaxy_ptr);
+}
+
+uint32_t CE_CALL CEAdapterSetSystemSector(
+        uint32_t galaxy_ptr, uint32_t system_index, uint32_t sector_ptr) {
+    uint32_t sector_index;
+    uint32_t name, characters;
+    const wchar_t *unused_text;
+    if (g_ce_live_snapshot_galaxy != galaxy_ptr || g_ce_live_cons == NULL ||
+            g_ce_live_sectors == NULL || system_index >= g_ce_live_con_count ||
+            sector_ptr == 0u) return 0;
+    sector_index = ce_live_sector_index(sector_ptr);
+    if (sector_index == UINT32_MAX) {
+        if (g_ce_live_sector_count >= 24u ||
+                !ce_region_has_access((const void *)(uintptr_t)sector_ptr, 0x10u, 1)) return 0;
+        name = *(const uint32_t *)(uintptr_t)(sector_ptr + 0x0cu);
+        if (!ce_live_read_wide_string(name, &unused_text, &characters)) return 0;
+        sector_index = g_ce_live_sector_count++;
+        g_ce_live_sectors[sector_index].object = sector_ptr;
+        g_ce_live_sectors[sector_index].old_name = name;
+        g_ce_live_sectors[sector_index].second_name = 0u;
+        g_ce_live_sectors[sector_index].second_name_index = UINT32_MAX;
+    }
+    if (g_ce_live_cons[system_index].sector_object == 0u)
+        ++g_ce_live_mapped_system_count;
+    g_ce_live_cons[system_index].sector_object = sector_ptr;
     return 1;
+}
+
+uint32_t CE_CALL CEAdapterPortalReady(uint32_t galaxy_ptr) {
+    return g_ce_live_snapshot_galaxy == galaxy_ptr && g_ce_live_cons != NULL &&
+        g_ce_live_sectors != NULL && g_ce_live_sector_count != 0u &&
+        g_ce_live_mapped_system_count == g_ce_live_con_count &&
+        InterlockedCompareExchange(&g_ce_portal_status, 0, 0) == 0 ? 1u : 0u;
 }
 
 uint32_t CE_CALL CEAdapterPortalStatus(void) {
@@ -2265,7 +2476,7 @@ uint32_t CE_CALL CEAdapterPortalStatus(void) {
 uint32_t CE_CALL CEAdapterRegisterPortal(uint32_t galaxy_ptr, uint32_t hole_id) {
     char report[192];
     int report_size;
-    if (hole_id == 0u || !ce_capture_live_arm(galaxy_ptr) ||
+    if (hole_id == 0u || !CEAdapterPortalReady(galaxy_ptr) ||
             InterlockedCompareExchange(&g_ce_portal_status, 1, 0) != 0) return 0;
     InterlockedExchange(&g_ce_portal_galaxy_ptr, (LONG)galaxy_ptr);
     InterlockedExchange(&g_ce_portal_hole_id, (LONG)hole_id);

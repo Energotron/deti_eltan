@@ -10,6 +10,7 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
 }
 $dataRoot = Join-Path $OutputRoot "DATA"
 $scriptRoot = Join-Path $dataRoot "Script"
+$assetOutputRoot = Join-Path $dataRoot "ChildrenOfEltan"
 $cfgRoot = Join-Path $OutputRoot "CFG"
 $langRoot = Join-Path $cfgRoot "Rus"
 $rscript = Join-Path $projectRoot "references\tools\RScript_4.10f\RScript.exe"
@@ -18,7 +19,10 @@ $sourceRson = Join-Path $projectRoot "src\scripts\CE_MapSmoke.rson"
 $sourceMain = Join-Path $projectRoot "src\config\CE_MapSmoke.Main.txt"
 $sourceLang = Join-Path $projectRoot "src\config\CE_MapSmoke.Lang.txt"
 $sourcePortalLang = Join-Path $projectRoot "src\config\CE_MapSmoke.Portal.Lang.txt"
+$sourceTransitLang = Join-Path $projectRoot "src\config\CE_InterarmTransit.Lang.txt"
 $sourceCache = Join-Path $projectRoot "smoke_module\CFG\CacheData.txt"
+$sourceMapBackground = Join-Path $projectRoot "src\assets\second_home_map_bg.gi"
+$sourceAnchorIcon = Join-Path $projectRoot "src\assets\twin_home_anchor.gi"
 $outputScr = Join-Path $scriptRoot "CE_MapSmoke.scr"
 $outputText = Join-Path $langRoot "CE_MapSmoke.txt"
 $outputMain = Join-Path $cfgRoot "Main.dat"
@@ -26,10 +30,14 @@ $outputLang = Join-Path $langRoot "Lang.dat"
 $outputCache = Join-Path $cfgRoot "CacheData.dat"
 $outputPackage = Join-Path $OutputRoot "ChildrenOfEltanSmoke.pkg"
 
-foreach ($required in @($rscript, $blockPar, $sourceRson, $sourceMain, $sourceLang, $sourcePortalLang, $sourceCache)) {
+foreach ($required in @($rscript, $blockPar, $sourceRson, $sourceMain, $sourceLang, $sourcePortalLang, $sourceTransitLang, $sourceCache, $sourceMapBackground, $sourceAnchorIcon)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing required file: $required" }
 }
-New-Item -ItemType Directory -Path $scriptRoot, $langRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $scriptRoot, $langRoot, $assetOutputRoot -Force | Out-Null
+Copy-Item -LiteralPath $sourceMapBackground `
+    -Destination (Join-Path $assetOutputRoot "SecondHomeMap.gi") -Force
+Copy-Item -LiteralPath $sourceAnchorIcon `
+    -Destination (Join-Path $assetOutputRoot "TwinHomeAnchor.gi") -Force
 
 & (Join-Path $PSScriptRoot "build-engine-adapter.ps1") -OutputRoot $dataRoot
 if ($LASTEXITCODE -ne 0) { throw "Engine adapter build failed" }
@@ -55,9 +63,13 @@ if (-not (Test-Path -LiteralPath $outputMain) -or (Get-Item -LiteralPath $output
 $combinedLang = Join-Path ([IO.Path]::GetTempPath()) ("ce-map-smoke-lang-" + [guid]::NewGuid().ToString("N") + ".txt")
 $langBytes = [IO.File]::ReadAllBytes($sourceLang)
 $portalBytes = [Text.Encoding]::ASCII.GetBytes("`r`n" + [IO.File]::ReadAllText($sourcePortalLang, [Text.Encoding]::ASCII))
-$combinedBytes = New-Object byte[] ($langBytes.Length + $portalBytes.Length)
+$windows1251 = [Text.Encoding]::GetEncoding(1251)
+$transitText = [IO.File]::ReadAllText($sourceTransitLang, (New-Object Text.UTF8Encoding($false, $true)))
+$transitBytes = $windows1251.GetBytes("`r`n" + $transitText)
+$combinedBytes = New-Object byte[] ($langBytes.Length + $portalBytes.Length + $transitBytes.Length)
 [Array]::Copy($langBytes, 0, $combinedBytes, 0, $langBytes.Length)
 [Array]::Copy($portalBytes, 0, $combinedBytes, $langBytes.Length, $portalBytes.Length)
+[Array]::Copy($transitBytes, 0, $combinedBytes, $langBytes.Length + $portalBytes.Length, $transitBytes.Length)
 [IO.File]::WriteAllBytes($combinedLang, $combinedBytes)
 & $blockPar --cli --convert $combinedLang $outputLang
 Start-Sleep -Milliseconds 500

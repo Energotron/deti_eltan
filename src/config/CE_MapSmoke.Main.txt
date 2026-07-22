@@ -6,8 +6,121 @@ BV ^{
     }
 }
 ML ^{
+    Galaxy ^{
+        Panel ^{
+            CEAnchorCheat ^{
+                Panel ^{
+                    Active=True
+                    Name=CEAnchorCheatGalaxy
+                    Pos=0,0,-100
+                    Size=1,1
+                    OnKey ~{
+                        0=if(KEY==134)
+                        0 ~{
+                            0=unknown ceAnchor=0;
+                            0=dword ceItemIndex=1;
+                            0=while(ceItemIndex<ShipItems(Player()))
+                            0 ~{
+                                0=unknown ceCandidate=ShipItems(Player(),ceItemIndex);
+                                0=if(EquipmentImageName(ceCandidate)=='CE_Item_TwinHomeAnchor') ceAnchor=ceCandidate;
+                                0=ceItemIndex=ceItemIndex+1;
+                            }
+                            0=if(!ceAnchor)
+                            0 ~{
+                                0=ceAnchor=CreateQuestItem('CE_Item_TwinHomeAnchor',None);
+                                0=NoDropItem(ceAnchor,1);
+                                0=CanSellItem(ceAnchor,0);
+                                0=AddItemToShip(Player(),ceAnchor);
+                                0=MessageBox(CT('CE.Transit.AnchorGranted'));
+                            }
+                            0=else
+                            0 ~{
+                                0=NoDropItem(ceAnchor,1);
+                                0=CanSellItem(ceAnchor,0);
+                                0=MessageBox(CT('CE.Transit.AnchorAlreadyAboard'));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ship ^{
+        Panel ^{
+            CEAnchorCheat ^{
+                Panel ^{
+                    Active=True
+                    Name=CEAnchorCheatShip
+                    Pos=0,0,-100
+                    Size=1,1
+                    OnKey ~{
+                        0=if(KEY==134)
+                        0 ~{
+                            0=unknown ceAnchor=0;
+                            0=dword ceItemIndex=1;
+                            0=while(ceItemIndex<ShipItems(Player()))
+                            0 ~{
+                                0=unknown ceCandidate=ShipItems(Player(),ceItemIndex);
+                                0=if(EquipmentImageName(ceCandidate)=='CE_Item_TwinHomeAnchor') ceAnchor=ceCandidate;
+                                0=ceItemIndex=ceItemIndex+1;
+                            }
+                            0=if(!ceAnchor)
+                            0 ~{
+                                0=ceAnchor=CreateQuestItem('CE_Item_TwinHomeAnchor',None);
+                                0=NoDropItem(ceAnchor,1);
+                                0=CanSellItem(ceAnchor,0);
+                                0=AddItemToShip(Player(),ceAnchor);
+                                0=MessageBox(CT('CE.Transit.AnchorGranted'));
+                            }
+                            0=else
+                            0 ~{
+                                0=NoDropItem(ceAnchor,1);
+                                0=CanSellItem(ceAnchor,0);
+                                0=MessageBox(CT('CE.Transit.AnchorAlreadyAboard'));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     StarMap ^{
         Panel ^{
+            CEAnchorCheat ^{
+                Panel ^{
+                    Active=True
+                    Name=CEAnchorCheatStarMap
+                    Pos=0,0,-101
+                    Size=1,1
+                    OnKey ~{
+                        0=if(KEY==134)
+                        0 ~{
+                            0=unknown ceAnchor=0;
+                            0=dword ceItemIndex=1;
+                            0=while(ceItemIndex<ShipItems(Player()))
+                            0 ~{
+                                0=unknown ceCandidate=ShipItems(Player(),ceItemIndex);
+                                0=if(EquipmentImageName(ceCandidate)=='CE_Item_TwinHomeAnchor') ceAnchor=ceCandidate;
+                                0=ceItemIndex=ceItemIndex+1;
+                            }
+                            0=if(!ceAnchor)
+                            0 ~{
+                                0=ceAnchor=CreateQuestItem('CE_Item_TwinHomeAnchor',None);
+                                0=NoDropItem(ceAnchor,1);
+                                0=CanSellItem(ceAnchor,0);
+                                0=AddItemToShip(Player(),ceAnchor);
+                                0=MessageBox(CT('CE.Transit.AnchorGranted'));
+                            }
+                            0=else
+                            0 ~{
+                                0=NoDropItem(ceAnchor,1);
+                                0=CanSellItem(ceAnchor,0);
+                                0=MessageBox(CT('CE.Transit.AnchorAlreadyAboard'));
+                            }
+                        }
+                    }
+                }
+            }
             CEInterarmTransit ^{
                 Panel ^{
                     Active=True
@@ -17,28 +130,30 @@ ML ^{
                     OnKey ~{
                         0=if(KEY==135 && KEYMOD==0 && GetShipPlanet(Player())==0 && !ShipInHole(Player()))
                         0 ~{
+                            0=unknown cePortalReady=ImportedFunction('CESecondMapAdapter','CEAdapterPortalReady');
                             0=unknown cePortalStatus=ImportedFunction('CESecondMapAdapter','CEAdapterPortalStatus');
-                            0=if(cePortalStatus()==0)
+                            0=if(cePortalReady(GalaxyPtr()) && cePortalStatus()==0)
                             0 ~{
                                 0=unknown ceOriginStar=ShipStar(Player());
                                 0=unknown ceDestinationStar=ceOriginStar;
                                 0=dword ceDestinationAttempts=0;
-                                0=while((ceDestinationStar==ceOriginStar || Dist(ceOriginStar,ceDestinationStar)<500) && ceDestinationAttempts<64)
+                                0=while((ceDestinationStar==ceOriginStar || Dist(ceOriginStar,ceDestinationStar)<500 || !SectorVisible(StarToCon(ceDestinationStar))) && ceDestinationAttempts<64)
                                 0 ~{
                                     0=ceDestinationStar=GalaxyStar(Rnd(0,GalaxyStars()-1));
                                     0=ceDestinationAttempts=ceDestinationAttempts+1;
                                 }
-                                0=while(ceDestinationStar==ceOriginStar)
+                                0=if(ceDestinationStar!=ceOriginStar && SectorVisible(StarToCon(ceDestinationStar)))
                                 0 ~{
-                                    0=ceDestinationStar=GalaxyStar(Rnd(0,GalaxyStars()-1));
+                                    0=dword ceHole=HoleCreate2(ceOriginStar,ceDestinationStar);
+                                    0=HoleX1(ceHole,CoordX(Player())+350);
+                                    0=HoleY1(ceHole,CoordY(Player()));
+                                    0=HoleMap(ceHole,'SkipAB');
+                                    0=unknown ceRegisterPortal=ImportedFunction('CESecondMapAdapter','CEAdapterRegisterPortal');
+                                    0=ceRegisterPortal(GalaxyPtr(),Id(ceHole));
                                 }
-                                0=dword ceHole=HoleCreate2(ceOriginStar,ceDestinationStar);
-                                0=HoleX1(ceHole,CoordX(Player())+350);
-                                0=HoleY1(ceHole,CoordY(Player()));
-                                0=HoleMap(ceHole,'SkipAB');
-                                0=unknown ceRegisterPortal=ImportedFunction('CESecondMapAdapter','CEAdapterRegisterPortal');
-                                0=ceRegisterPortal(GalaxyPtr(),Id(ceHole));
+                                0=else MessageBox(CT('CE.Transit.NoDestination'));
                             }
+                            0=else MessageBox(CT('CE.Transit.AnchorNotReady'));
                         }
                     }
                 }
@@ -96,6 +211,8 @@ Data ^{
             CEAdapterArmGalaxySaveSnapshot=dword,CEAdapterArmGalaxySaveSnapshot,dword
             CEAdapterPollSecondHomeTransform=dword,CEAdapterPollSecondHomeTransform,dword,dword
             CEAdapterInstallLiveArmSwitch=dword,CEAdapterInstallLiveArmSwitch,dword,dword
+            CEAdapterSetSystemSector=dword,CEAdapterSetSystemSector,dword,dword,dword
+            CEAdapterPortalReady=dword,CEAdapterPortalReady,dword
             CEAdapterPortalStatus=dword,CEAdapterPortalStatus
             CEAdapterRegisterPortal=dword,CEAdapterRegisterPortal,dword,dword
             CEAdapterEnterRegisteredPortal=dword,CEAdapterEnterRegisteredPortal,dword,dword

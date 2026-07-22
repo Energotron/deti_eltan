@@ -30,6 +30,8 @@ int main(int argc, char **argv) {
     typedef uint32_t (__cdecl *ce_three_dword_fn)(uint32_t, uint32_t, uint32_t);
     ce_two_dword_fn poll_second_home;
     ce_two_dword_fn install_live_switch;
+    ce_three_dword_fn set_system_sector;
+    ce_dword_fn portal_ready;
     ce_noarg_fn portal_status;
     ce_two_dword_fn register_portal;
     ce_two_dword_fn enter_portal;
@@ -101,17 +103,20 @@ int main(int argc, char **argv) {
     arm_save_snapshot = (ce_dword_fn)require_export(module, "CEAdapterArmGalaxySaveSnapshot");
     poll_second_home = (ce_two_dword_fn)require_export(module, "CEAdapterPollSecondHomeTransform");
     install_live_switch = (ce_two_dword_fn)require_export(module, "CEAdapterInstallLiveArmSwitch");
+    set_system_sector = (ce_three_dword_fn)require_export(module, "CEAdapterSetSystemSector");
+    portal_ready = (ce_dword_fn)require_export(module, "CEAdapterPortalReady");
     portal_status = (ce_noarg_fn)require_export(module, "CEAdapterPortalStatus");
     register_portal = (ce_two_dword_fn)require_export(module, "CEAdapterRegisterPortal");
     enter_portal = (ce_two_dword_fn)require_export(module, "CEAdapterEnterRegisteredPortal");
     complete_portal = (ce_dword_fn)require_export(module, "CEAdapterCompleteRegisteredPortal");
 
-    if (abi() != 13 || capabilities() != 32753 || supports_multi() != 0) return 3;
+    if (abi() != 15 || capabilities() != 65521 || supports_multi() != 0) return 3;
     if (probe_engine_galaxy(marker) != 0 || create_second_galaxy(marker, 1, 0) != 0 ||
         second_galaxy_status() != 0 || enter_ready_second_galaxy(marker) != 0 ||
         return_old_galaxy(marker) != 0 || active_arm() != 0 ||
         snapshot_galaxy(marker) != 0 || arm_save_snapshot(marker) != 0 ||
         poll_second_home(marker, marker) != 0 || install_live_switch(marker, marker) != 0 ||
+        set_system_sector(marker, marker, marker) != 0 || portal_ready(marker) != 0 ||
         portal_status() != 0 || register_portal(marker, marker) != 0 ||
         enter_portal(marker, marker) != 0 || complete_portal(marker) != 0) return 17;
     if (echo(marker) != marker || bind(0) != 0 || bind(marker) != 1) return 4;
@@ -145,6 +150,6 @@ int main(int argc, char **argv) {
     if (observe_layout((uint32_t)(uintptr_t)sample.bytes, marker, 132) != 1 ||
         layout_observation_count() != 33) return 15;
     FreeLibrary(module);
-    printf("OK: ABI=13 manual portal transit exported; host remains safely disabled\n");
+    printf("OK: ABI=15 anchor portal and map visual fixes exported; host remains safely disabled\n");
     return 0;
 }

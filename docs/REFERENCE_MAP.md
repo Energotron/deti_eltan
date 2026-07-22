@@ -15,15 +15,19 @@
 | создать транспорт/лайнер/дипломата | `BuyTransport(planet,type,finance)` | список функций, строки 1426–1433 | типы `0/1/2` подтверждены |
 | вернуть NPC к нативной логике | `ShipFreeFlight(ship)` | список функций, строки 1637–1642 | проверить после снятия стейта/OrderLock |
 | переместить корабль/станцию | `TransferShip(ship,target)` | список функций, строки 1454–1459 | это мгновенный перенос, не переход карт |
-| создать квестовый предмет | `CreateQuestItem` | `Invaders (den).rson:1402` | конкретный item tag должен существовать в данных |
+| создать квестовый груз в обычном трюме | `CreateQuestItem(name, owner)` | `script-functions/aScriptFun.pas:8079-8089`; `Solyanka/GTLBHGadgets/Mod_GTLBHGadgets.rson:293` | создаёт `TUselessItem`, а не устанавливаемый артефакт; item tag должен существовать в `Lang.dat/UselessItems` |
 | связать предмет со скриптом | `LinkItemToScript` | `Invaders (den).rson:1404` | нужна уникальная TItem-ссылка |
 | положить предмет на корабль | `AddItemToShip` | `Invaders (den).rson:1405` | отдельно проверять свободный трюм |
+| запретить выброс квестового груза | `NoDropItem(item,1)` | `script-functions/aScriptFun.pas:9975-9993` | не заменяет проверку продажи |
+| активировать квестовый груз из трюма | `UselessItems.<id>.OnUseCode` | `Solyanka/ShuQuad/Lang_ShuQuad.txt:142-153`; `Solyanka/GTLBHGadgets/Lang_Rus_GTLBHGadgets.txt:69-89` | код хранится в Lang; предмет остаётся `TUselessItem` |
 | уничтожить предмет | `ItemDestroy` / `FreeItem` | `OriginalScripts/sr1/Script02.rson:703`; `Invaders (den).rson:1738` | `FreeItem` использовать только после извлечения |
 | начать диалог | `Dialog(dialog,target)` | `Invaders (den).rson:2431` | цель должна существовать и быть доступна |
 | удалить NPC | `ShipDestroy(ship,type)` | `Invaders (den).rson:2550` | тип эффекта проверить на CE-placeholder |
 | назначить кастомную фракцию системе | `StarCustomFaction` | `Invaders (den).rson:1358` | требует иконку; неверные данные могут вызвать crash |
 | владелец кастомной планеты | `PlanetCustomFaction` | список функций, строки 691–694 | UI незаселённых планет ограничен |
 | создать чёрную дыру | `HoleCreate2(star1,star2)` | список функций, строки 3485–3489 | только между системами текущей галактики |
+| мгновенно повторить UX Субпортала | `OnUseCodeBlackHole(CreateArt(t_ArtBlackHole,None))` | `script-functions/aScriptFun.pas:12966-13045` | временный Subportal уничтожается; созданная дыра всё ещё принадлежит текущей `Galaxy`, поэтому межрукавное состояние переключает адаптер |
+| сменить систему выхода созданной ЧД | `HoleStar2(hole,star)` | `script-functions/aScriptFun.pas:7934-7943` | координаты выхода остаются уже сгенерированными в новой системе |
 | проверить участие игрока в клане когда-либо | `ShipInPirateClan(Player())` | `OriginalScripts/PC_part0.rson:668` | не равно текущей стороне |
 | проверить текущую сторону клана | `ShipOnSidePirateClan(Player())` | список функций, строки 1497–1498 | использовать вместе с историческим флагом |
 | получить пиратский ранг | `GetShipPirateRank(Player())` | `OriginalScripts/PC_final.rson:2429` | диапазон 0–7 |

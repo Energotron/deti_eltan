@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 
-EXPECTED_ABI = 6
+EXPECTED_ABI = 15
 EXPECTED_MARKER = 1128616787
 CAP_SMOKE_MARKER = 1 << 4
 CAP_READONLY_FINGERPRINT = 1 << 5

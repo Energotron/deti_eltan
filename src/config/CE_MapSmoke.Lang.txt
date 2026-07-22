@@ -3,11 +3,13 @@ Script ^{
         Functions ~{
             SwapButton ~{
                 0=unknown ceStatus = ImportedFunction('CESecondMapAdapter','CEAdapterSecondGalaxyStatus');
+                0=unknown ceProbeRawPtr = ImportedFunction('CESecondMapAdapter','CEAdapterProbeRawGalaxyPointer');
                 0=int ceGenerationStatus = ceStatus();
                 0=if(ceGenerationStatus!=2)
                 0 ~{
                     0=Ether(6,'CE_Button_NotReady','Тест «Детей Эльтан»: вторая галактика ещё не готова, пропустите день.');
                 }
+                0=else
                 0 ~{
                     0=unknown ceCreateDest = ImportedFunction('CESecondMapAdapter','CEAdapterCreateSecondDestination');
                     0=unknown ceProbeNextDay = ImportedFunction('CESecondMapAdapter','CEAdapterProbeNextDayOnSecondGalaxy');
@@ -19,6 +21,7 @@ Script ^{
                         0=Ether(6,'CE_SecondHome_Fail','Тест «Детей Эльтан»: создание TCon не удалось.');
                         0=ceDisable();
                     }
+                    0=else
                     0 ~{
                         0=int ceNextDayOk = ceProbeNextDay(GalaxyPtr());
                         0=if(ceNextDayOk==0)
@@ -26,13 +29,17 @@ Script ^{
                             0=Ether(6,'CE_NextDay_Fail','Тест «Детей Эльтан»: NextDay второй галактики упал.');
                             0=ceDisable();
                         }
+                        0=else
                         0 ~{
+                            0=ceProbeRawPtr(GalaxyPtr(),900000+CurTurn());
                             0=int ceEnterOk = ceEnterReady(GalaxyPtr());
+                            0=ceProbeRawPtr(GalaxyPtr(),910000+CurTurn());
                             0=if(ceEnterOk==0)
                             0 ~{
                                 0=Ether(6,'CE_SecondHome_Fail','Тест «Детей Эльтан»: переход не удался.');
                                 0=ceDisable();
                             }
+                            0=else
                             0 ~{
                                 0=Ether(6,'CE_SecondHome_Enter','Тест «Детей Эльтан»: переход во вторую галактику выполнен!');
                             }

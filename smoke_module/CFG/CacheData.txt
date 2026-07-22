@@ -1,3 +1,9 @@
 Script ^{
     CE_MapSmoke=data\Script\CE_MapSmoke.scr
 }
+FormGalaxy2 ^{
+    2bg=data\ChildrenOfEltan\SecondHomeMap.gi
+}
+ItemsUseless ^{
+    2CE_Item_TwinHomeAnchor_s=data\ChildrenOfEltan\TwinHomeAnchor.gi
+}

@@ -1,0 +1,61 @@
+UselessItems ~{
+    CE_Item_TwinHomeAnchor ^{
+        Cost=Huge
+        Description=Уникальный квестовый груз
+        Name=Якорь Двух Домов
+        Owner=None
+        Size=150
+        Text=Согласующий модуль удерживает резонанс между старым рукавом и Вторым Домом. Якорь находится в трюме, не занимает артефактный слот и не расходуется при переходе. В текущем техническом срезе резонансная ячейка не требуется.
+        OnUseCode ^{
+            01=if(GetShipPlanet(Player())!=0 || ShipInHole(Player()))
+            02 ^{
+                01=MessageBox(CT('CE.Transit.AnchorSpaceOnly'));
+            }
+            03=else
+            04 ^{
+                01=unknown cePortalReady=ImportedFunction('CESecondMapAdapter','CEAdapterPortalReady');
+                02=if(!cePortalReady(GalaxyPtr()))
+                03 ^{
+                    01=MessageBox(CT('CE.Transit.AnchorNotReady'));
+                }
+                04=else
+                05 ^{
+                    01=unknown ceOriginStar=ShipStar(Player());
+                    02=unknown ceDestinationStar=ceOriginStar;
+                    03=dword ceDestinationAttempts=0;
+                    04=while((ceDestinationStar==ceOriginStar || StarToCon(ceDestinationStar)==StarToCon(ceOriginStar) || !SectorVisible(StarToCon(ceDestinationStar))) && ceDestinationAttempts<96)
+                    05 ^{
+                        01=ceDestinationStar=GalaxyStar(Rnd(0,GalaxyStars()-1));
+                        02=ceDestinationAttempts=ceDestinationAttempts+1;
+                    }
+                    06=ceDestinationAttempts=0;
+                    07=while((ceDestinationStar==ceOriginStar || !SectorVisible(StarToCon(ceDestinationStar))) && ceDestinationAttempts<96)
+                    08 ^{
+                        01=ceDestinationStar=GalaxyStar(Rnd(0,GalaxyStars()-1));
+                        02=ceDestinationAttempts=ceDestinationAttempts+1;
+                    }
+                    09=unknown ceSubportal=CreateArt(t_ArtBlackHole,None);
+                    10=dword ceHole=OnUseCodeBlackHole(ceSubportal);
+                    11=if(ceHole)
+                    12 ^{
+                        01=if(ceDestinationStar!=ceOriginStar) HoleStar2(ceHole,ceDestinationStar);
+                        02=HoleMap(ceHole,'SkipAB');
+                        03=unknown ceRegisterPortal=ImportedFunction('CESecondMapAdapter','CEAdapterRegisterPortal');
+                        04=if(!ceRegisterPortal(GalaxyPtr(),Id(ceHole))) MessageBox(CT('CE.Transit.PortalRegistrationFailed'));
+                    }
+                }
+            }
+        }
+    }
+}
+
+CE ^{
+    Transit ^{
+        AnchorGranted=В трюм помещён «Якорь Двух Домов». Откройте трюм и активируйте его как Субпортал.
+        AnchorAlreadyAboard=«Якорь Двух Домов» уже находится в трюме.
+        AnchorSpaceOnly=Якорь можно калибровать только в обычном космосе.
+        AnchorNotReady=Якорь не находит вторую половину коридора. Дождитесь завершения инициализации карты и попробуйте снова.
+        NoDestination=Не удалось выбрать открытую систему выхода. Откройте ещё один сектор и повторите попытку.
+        PortalRegistrationFailed=Коридор открылся, но переходный контроллер не принял его сигнатуру. Не входите в эту дыру и повторите попытку после загрузки сохранения.
+    }
+}
