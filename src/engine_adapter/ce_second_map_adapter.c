@@ -179,6 +179,9 @@ static void *g_ce_load_trampoline = NULL;
 static volatile LONG g_ce_live_galaxy_ptr = 0;
 static volatile LONG g_ce_live_seed = 0;
 static volatile LONG g_ce_live_switch_lock = 0;
+static volatile LONG g_ce_portal_status = 0;
+static volatile LONG g_ce_portal_hole_id = 0;
+static volatile LONG g_ce_portal_galaxy_ptr = 0;
 static HHOOK g_ce_keyboard_hook = NULL;
 static ATOM g_ce_loading_window_class = 0;
 
@@ -251,7 +254,8 @@ uint32_t CE_CALL CEAdapterCapabilities(void) {
         CE_CAP_NATIVE_GALAXY_SNAPSHOT |
         CE_CAP_SAVE_LIFECYCLE_SNAPSHOT |
         CE_CAP_LOAD_LIFECYCLE_TRANSFORM |
-        CE_CAP_LIVE_ARM_SWITCH;
+        CE_CAP_LIVE_ARM_SWITCH |
+        CE_CAP_MANUAL_PORTAL_TRANSIT;
 }
 
 uint32_t CE_CALL CEAdapterBindGalaxy(uint32_t galaxy_ptr) {
@@ -2216,34 +2220,20 @@ static HWND ce_show_loading_window(void) {
     return window;
 }
 
-static LRESULT CALLBACK ce_live_keyboard_proc(int code, WPARAM wparam, LPARAM lparam) {
-    if (code == HC_ACTION && wparam == VK_F8 && (lparam & (1L << 31)) == 0 &&
-        (lparam & (1L << 30)) == 0 &&
-        InterlockedCompareExchange(&g_ce_live_switch_lock, 1, 0) == 0) {
-        uint32_t galaxy_ptr = (uint32_t)InterlockedCompareExchange(
-            &g_ce_live_galaxy_ptr, 0, 0);
-        if (ce_capture_live_arm(galaxy_ptr)) {
+/* F8 is a vanilla quick-save key.  Consume it and forward an otherwise unused
+   F24 key to the script UI, so opening the inter-arm portal never also opens
+   the vanilla "quick save is absent" dialog. */
+static LRESULT CALLBACK ce_portal_keyboard_proc(int code, WPARAM wparam, LPARAM lparam) {
+    if (code == HC_ACTION && wparam == VK_F8) {
+        if ((lparam & (1L << 31)) == 0 && (lparam & (1L << 30)) == 0) {
             HWND game_window = GetForegroundWindow();
             DWORD game_pid = 0;
             GetWindowThreadProcessId(game_window, &game_pid);
-            if (game_pid != GetCurrentProcessId()) game_window = NULL;
-            HWND loading = ce_show_loading_window();
-            Sleep(700u);
-            ce_apply_live_arm(InterlockedCompareExchange(&g_ce_active_arm, 0, 0) == 0);
-            Sleep(450u);
-            if (loading != NULL) DestroyWindow(loading);
-            EnumWindows(ce_invalidate_process_window, 0);
-            /* The galaxy map snapshots labels when it opens.  A portal entered
-               from the map therefore returns the player to local space; opening
-               the map again builds the destination view from the new arm. */
-            if (game_window != NULL) {
-                ShowWindow(game_window, SW_RESTORE);
-                SetForegroundWindow(game_window);
-                PostMessageW(game_window, WM_KEYDOWN, (WPARAM)'M', 0x00320001L);
-                PostMessageW(game_window, WM_KEYUP, (WPARAM)'M', 0xc0320001L);
+            if (game_pid == GetCurrentProcessId()) {
+                PostMessageW(game_window, WM_KEYDOWN, VK_F24, 1L);
+                PostMessageW(game_window, WM_KEYUP, VK_F24, 0xc0000001L);
             }
         }
-        InterlockedExchange(&g_ce_live_switch_lock, 0);
         return 1;
     }
     return CallNextHookEx(g_ce_keyboard_hook, code, wparam, lparam);
@@ -2259,12 +2249,76 @@ uint32_t CE_CALL CEAdapterInstallLiveArmSwitch(uint32_t galaxy_ptr, uint32_t see
     InterlockedExchange(&g_ce_live_seed, (LONG)seed);
     if (!ce_capture_live_arm(galaxy_ptr)) return 0;
     if (g_ce_keyboard_hook == NULL) {
+        const char *ready = "{\"status\":\"ready\",\"mode\":\"manual-portal\"}\r\n";
         g_ce_keyboard_hook = SetWindowsHookExA(
-            WH_KEYBOARD, ce_live_keyboard_proc, NULL, GetCurrentThreadId());
+            WH_KEYBOARD, ce_portal_keyboard_proc, NULL, GetCurrentThreadId());
         if (g_ce_keyboard_hook == NULL) return 0;
-        ce_write_text_marker("live-arm-switch.jsonl",
-            "{\"status\":\"ready\",\"hotkey\":\"F8\"}\r\n", 34u);
+        ce_write_text_marker("live-arm-switch.jsonl", ready, strlen(ready));
     }
+    return 1;
+}
+
+uint32_t CE_CALL CEAdapterPortalStatus(void) {
+    return (uint32_t)InterlockedCompareExchange(&g_ce_portal_status, 0, 0);
+}
+
+uint32_t CE_CALL CEAdapterRegisterPortal(uint32_t galaxy_ptr, uint32_t hole_id) {
+    char report[192];
+    int report_size;
+    if (hole_id == 0u || !ce_capture_live_arm(galaxy_ptr) ||
+            InterlockedCompareExchange(&g_ce_portal_status, 1, 0) != 0) return 0;
+    InterlockedExchange(&g_ce_portal_galaxy_ptr, (LONG)galaxy_ptr);
+    InterlockedExchange(&g_ce_portal_hole_id, (LONG)hole_id);
+    report_size = snprintf(report, sizeof(report),
+        "{\"status\":\"portal-opened\",\"hole_id\":%u,\"arm\":\"%s\"}\r\n",
+        hole_id, InterlockedCompareExchange(&g_ce_active_arm, 0, 0) == 0
+            ? "OLD_ARM" : "SECOND_HOME");
+    if (report_size > 0) ce_write_text_marker(
+        "live-arm-switch.jsonl", report, (size_t)report_size);
+    return 1;
+}
+
+uint32_t CE_CALL CEAdapterEnterRegisteredPortal(uint32_t galaxy_ptr, uint32_t hole_id) {
+    char report[192];
+    int report_size;
+    if (hole_id == 0u ||
+            (uint32_t)InterlockedCompareExchange(&g_ce_portal_hole_id, 0, 0) != hole_id ||
+            (uint32_t)InterlockedCompareExchange(&g_ce_portal_galaxy_ptr, 0, 0) != galaxy_ptr ||
+            InterlockedCompareExchange(&g_ce_portal_status, 2, 1) != 1) return 0;
+    report_size = snprintf(report, sizeof(report),
+        "{\"status\":\"portal-entered\",\"hole_id\":%u,\"phase\":\"awaiting-exit\"}\r\n",
+        hole_id);
+    if (report_size > 0) ce_write_text_marker(
+        "live-arm-switch.jsonl", report, (size_t)report_size);
+    return 1;
+}
+
+uint32_t CE_CALL CEAdapterCompleteRegisteredPortal(uint32_t galaxy_ptr) {
+    HWND loading;
+    char report[192];
+    int report_size;
+    if ((uint32_t)InterlockedCompareExchange(&g_ce_portal_galaxy_ptr, 0, 0) != galaxy_ptr ||
+            InterlockedCompareExchange(&g_ce_portal_status, 3, 2) != 2) return 0;
+    if (InterlockedCompareExchange(&g_ce_live_switch_lock, 1, 0) != 0) {
+        InterlockedExchange(&g_ce_portal_status, 2);
+        return 0;
+    }
+    loading = ce_show_loading_window();
+    Sleep(700u);
+    ce_apply_live_arm(InterlockedCompareExchange(&g_ce_active_arm, 0, 0) == 0);
+    Sleep(450u);
+    if (loading != NULL) DestroyWindow(loading);
+    EnumWindows(ce_invalidate_process_window, 0);
+    InterlockedExchange(&g_ce_portal_hole_id, 0);
+    InterlockedExchange(&g_ce_portal_galaxy_ptr, 0);
+    InterlockedExchange(&g_ce_portal_status, 0);
+    InterlockedExchange(&g_ce_live_switch_lock, 0);
+    report_size = snprintf(report, sizeof(report),
+        "{\"status\":\"portal-complete\",\"arm\":\"%s\"}\r\n",
+        InterlockedCompareExchange(&g_ce_active_arm, 0, 0) == 0
+            ? "OLD_ARM" : "SECOND_HOME");
+    if (report_size > 0) ce_write_text_marker(
+        "live-arm-switch.jsonl", report, (size_t)report_size);
     return 1;
 }
 

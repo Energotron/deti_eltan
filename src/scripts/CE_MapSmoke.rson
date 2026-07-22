@@ -46,7 +46,7 @@
         },
         {
           "Type": "Top", "Name": "Adapter smoke", "Pos.x": 240, "Pos.y": 80,
-          "Parent": -1, "#": 6, "Total.Lines": 16, "Code.Type": "Turn",
+          "Parent": -1, "#": 6, "Total.Lines": 26, "Code.Type": "Turn",
           "Code": [
             "unknown ceProbeRawPtr = ImportedFunction('CESecondMapAdapter','CEAdapterProbeRawGalaxyPointer');",
             "ceProbeRawPtr(GalaxyPtr(),CurTurn());",
@@ -63,7 +63,17 @@
             "unknown cePollSecondHome = ImportedFunction('CESecondMapAdapter','CEAdapterPollSecondHomeTransform');",
             "cePollSecondHome(GalaxyPtr(),1128616787);",
             "unknown ceLiveArmSwitch = ImportedFunction('CESecondMapAdapter','CEAdapterInstallLiveArmSwitch');",
-            "ceLiveArmSwitch(GalaxyPtr(),1128616787);"
+            "ceLiveArmSwitch(GalaxyPtr(),1128616787);",
+            "if(ShipInHole(Player())) {",
+            "  unknown ceEnterPortal = ImportedFunction('CESecondMapAdapter','CEAdapterEnterRegisteredPortal');",
+            "  ceEnterPortal(GalaxyPtr(),Id(ShipOrderObj(Player())));",
+            "} else {",
+            "  unknown cePortalStatus = ImportedFunction('CESecondMapAdapter','CEAdapterPortalStatus');",
+            "  unknown ceCompletePortal = ImportedFunction('CESecondMapAdapter','CEAdapterCompleteRegisteredPortal');",
+            "  if(cePortalStatus()==2 && ceCompletePortal(GalaxyPtr())) {",
+            "    ShipDeleteCustomShipInfo(Player(),'CE_InterarmPortalWatch');",
+            "  }",
+            "}"
           ]
         }
       ],

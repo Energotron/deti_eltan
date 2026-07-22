@@ -16,7 +16,7 @@ extern "C" {
 #endif
 
 enum {
-    CE_ADAPTER_ABI_VERSION = 12,
+    CE_ADAPTER_ABI_VERSION = 13,
     CE_CAP_BIND_GALAXY_POINTER = 1u << 0,
     CE_CAP_NATIVE_MULTI_GALAXY = 1u << 1,
     CE_CAP_NATIVE_SWITCH = 1u << 2,
@@ -30,7 +30,8 @@ enum {
     CE_CAP_NATIVE_GALAXY_SNAPSHOT = 1u << 10,
     CE_CAP_SAVE_LIFECYCLE_SNAPSHOT = 1u << 11,
     CE_CAP_LOAD_LIFECYCLE_TRANSFORM = 1u << 12,
-    CE_CAP_LIVE_ARM_SWITCH = 1u << 13
+    CE_CAP_LIVE_ARM_SWITCH = 1u << 13,
+    CE_CAP_MANUAL_PORTAL_TRANSIT = 1u << 14
 };
 
 CE_EXPORT uint32_t CE_CALL CEAdapterAbiVersion(void);
@@ -82,6 +83,14 @@ CE_EXPORT uint32_t CE_CALL CEAdapterPollSecondHomeTransform(
 CE_EXPORT uint32_t CE_CALL CEAdapterInstallLiveArmSwitch(
     uint32_t galaxy_ptr, uint32_t seed
 );
+CE_EXPORT uint32_t CE_CALL CEAdapterPortalStatus(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterRegisterPortal(
+    uint32_t galaxy_ptr, uint32_t hole_id
+);
+CE_EXPORT uint32_t CE_CALL CEAdapterEnterRegisteredPortal(
+    uint32_t galaxy_ptr, uint32_t hole_id
+);
+CE_EXPORT uint32_t CE_CALL CEAdapterCompleteRegisteredPortal(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeSaveFormatVersion(uint32_t old_galaxy_ptr, uint32_t turn);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeConClass(uint32_t old_galaxy_ptr, uint32_t turn);
 CE_EXPORT uint32_t CE_CALL CEAdapterGetGeneratedStarCount(uint32_t galaxy_ptr);

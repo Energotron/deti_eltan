@@ -1,0 +1,27 @@
+ShipInfo ^{
+    AddInfo ^{
+        CustomInfos ^{
+            CE_InterarmPortalWatch ^{
+                Description=
+                Icon=1
+                Name=CE interarm portal watcher
+                OnActCode ^{
+                    00=[t_OnStep|0,1,2,3,4,5,6,7,8,9,10,11]
+                    01=unknown cePortalStatus=ImportedFunction('CESecondMapAdapter','CEAdapterPortalStatus');
+                    02=if(ShipInHole(Player()) && Id(ShipOrderObj(Player()))==ShipCustomShipInfoData(0,CurInfo(),1))
+                    03 ^{
+                        01=unknown ceEnterPortal=ImportedFunction('CESecondMapAdapter','CEAdapterEnterRegisteredPortal');
+                        02=ceEnterPortal(GalaxyPtr(),Id(ShipOrderObj(Player())));
+                    }
+                    04=else if(!ShipInHole(Player()) && cePortalStatus()==2)
+                    05 ^{
+                        01=unknown ceCompletePortal=ImportedFunction('CESecondMapAdapter','CEAdapterCompleteRegisteredPortal');
+                        02=if(ceCompletePortal(GalaxyPtr())) ShipDeleteCustomShipInfo(0,CurInfo());
+                    }
+                }
+                OnActCodeTypes=t_OnStep
+                OnActStepTypes=0,1,2,3,4,5,6,7,8,9,10,11
+            }
+        }
+    }
+}

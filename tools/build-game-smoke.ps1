@@ -17,6 +17,7 @@ $blockPar = Join-Path $projectRoot "references\tools\BlockParEditor_1.9\BlockPar
 $sourceRson = Join-Path $projectRoot "src\scripts\CE_MapSmoke.rson"
 $sourceMain = Join-Path $projectRoot "src\config\CE_MapSmoke.Main.txt"
 $sourceLang = Join-Path $projectRoot "src\config\CE_MapSmoke.Lang.txt"
+$sourcePortalLang = Join-Path $projectRoot "src\config\CE_MapSmoke.Portal.Lang.txt"
 $sourceCache = Join-Path $projectRoot "smoke_module\CFG\CacheData.txt"
 $outputScr = Join-Path $scriptRoot "CE_MapSmoke.scr"
 $outputText = Join-Path $langRoot "CE_MapSmoke.txt"
@@ -25,7 +26,7 @@ $outputLang = Join-Path $langRoot "Lang.dat"
 $outputCache = Join-Path $cfgRoot "CacheData.dat"
 $outputPackage = Join-Path $OutputRoot "ChildrenOfEltanSmoke.pkg"
 
-foreach ($required in @($rscript, $blockPar, $sourceRson, $sourceMain, $sourceLang, $sourceCache)) {
+foreach ($required in @($rscript, $blockPar, $sourceRson, $sourceMain, $sourceLang, $sourcePortalLang, $sourceCache)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing required file: $required" }
 }
 New-Item -ItemType Directory -Path $scriptRoot, $langRoot -Force | Out-Null
@@ -51,8 +52,16 @@ if (-not (Test-Path -LiteralPath $outputMain) -or (Get-Item -LiteralPath $output
     throw "BlockParEditor did not produce CFG\Main.dat"
 }
 
-& $blockPar --cli --convert $sourceLang $outputLang
+$combinedLang = Join-Path ([IO.Path]::GetTempPath()) ("ce-map-smoke-lang-" + [guid]::NewGuid().ToString("N") + ".txt")
+$langBytes = [IO.File]::ReadAllBytes($sourceLang)
+$portalBytes = [Text.Encoding]::ASCII.GetBytes("`r`n" + [IO.File]::ReadAllText($sourcePortalLang, [Text.Encoding]::ASCII))
+$combinedBytes = New-Object byte[] ($langBytes.Length + $portalBytes.Length)
+[Array]::Copy($langBytes, 0, $combinedBytes, 0, $langBytes.Length)
+[Array]::Copy($portalBytes, 0, $combinedBytes, $langBytes.Length, $portalBytes.Length)
+[IO.File]::WriteAllBytes($combinedLang, $combinedBytes)
+& $blockPar --cli --convert $combinedLang $outputLang
 Start-Sleep -Milliseconds 500
+Remove-Item -LiteralPath $combinedLang -Force -ErrorAction SilentlyContinue
 if (-not (Test-Path -LiteralPath $outputLang) -or (Get-Item -LiteralPath $outputLang).Length -lt 32) {
     throw "BlockParEditor did not produce CFG\Rus\Lang.dat"
 }
