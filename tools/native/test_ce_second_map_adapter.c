@@ -29,6 +29,7 @@ int main(int argc, char **argv) {
     typedef uint32_t (__cdecl *ce_two_dword_fn)(uint32_t, uint32_t);
     typedef uint32_t (__cdecl *ce_three_dword_fn)(uint32_t, uint32_t, uint32_t);
     ce_two_dword_fn poll_second_home;
+    ce_two_dword_fn install_live_switch;
     ce_two_dword_fn run_smoke;
     ce_two_dword_fn probe;
     ce_two_dword_fn sample_layout;
@@ -95,13 +96,14 @@ int main(int argc, char **argv) {
     snapshot_galaxy = (ce_dword_fn)require_export(module, "CEAdapterSnapshotGalaxy");
     arm_save_snapshot = (ce_dword_fn)require_export(module, "CEAdapterArmGalaxySaveSnapshot");
     poll_second_home = (ce_two_dword_fn)require_export(module, "CEAdapterPollSecondHomeTransform");
+    install_live_switch = (ce_two_dword_fn)require_export(module, "CEAdapterInstallLiveArmSwitch");
 
-    if (abi() != 11 || capabilities() != 8177 || supports_multi() != 0) return 3;
+    if (abi() != 12 || capabilities() != 16369 || supports_multi() != 0) return 3;
     if (probe_engine_galaxy(marker) != 0 || create_second_galaxy(marker, 1, 0) != 0 ||
         second_galaxy_status() != 0 || enter_ready_second_galaxy(marker) != 0 ||
         return_old_galaxy(marker) != 0 || active_arm() != 0 ||
         snapshot_galaxy(marker) != 0 || arm_save_snapshot(marker) != 0 ||
-        poll_second_home(marker, marker) != 0) return 17;
+        poll_second_home(marker, marker) != 0 || install_live_switch(marker, marker) != 0) return 17;
     if (echo(marker) != marker || bind(0) != 0 || bind(marker) != 1) return 4;
     if (get_bound() != marker) return 5;
     if (run_smoke(0, 1128616787u) != 0 || run_smoke(marker, 1128616787u) != 1) return 6;
@@ -133,6 +135,6 @@ int main(int argc, char **argv) {
     if (observe_layout((uint32_t)(uintptr_t)sample.bytes, marker, 132) != 1 ||
         layout_observation_count() != 33) return 15;
     FreeLibrary(module);
-    printf("OK: ABI=11 save/load lifecycle hooks exported; host remains safely disabled\n");
+    printf("OK: ABI=12 lifecycle hooks and live arm switch exported; host remains safely disabled\n");
     return 0;
 }

@@ -28,7 +28,7 @@ New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $testDir -Force | Out-Null
 
 & $compiler --target=i686-w64-windows-gnu -std=c11 -O2 -Wall -Wextra -Werror `
-    -shared -I $include $source -o $dll
+    -shared -I $include $source -o $dll -lgdi32
 if ($LASTEXITCODE -ne 0) { throw "Adapter DLL compilation failed" }
 
 & $compiler --target=i686-w64-windows-gnu -std=c11 -O2 -Wall -Wextra -Werror `

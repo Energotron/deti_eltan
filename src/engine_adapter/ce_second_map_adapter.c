@@ -5,6 +5,7 @@
 #include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
+#include <wchar.h>
 
 /* This adapter is compiled with clang/MinGW and calls directly into the
    game's Delphi/Borland-compiled code via raw inline-asm CALLs. Confirmed
@@ -175,6 +176,11 @@ static volatile LONG g_ce_load_hook_installed = 0;
 static volatile LONG g_ce_load_transform_armed = 0;
 static volatile LONG g_ce_load_transform_seed = 0;
 static void *g_ce_load_trampoline = NULL;
+static volatile LONG g_ce_live_galaxy_ptr = 0;
+static volatile LONG g_ce_live_seed = 0;
+static volatile LONG g_ce_live_switch_lock = 0;
+static HHOOK g_ce_keyboard_hook = NULL;
+static ATOM g_ce_loading_window_class = 0;
 
 /* Steam build 20648864 / Rangers.exe 2.1.2500.0 only. */
 enum {
@@ -244,7 +250,8 @@ uint32_t CE_CALL CEAdapterCapabilities(void) {
         CE_CAP_EXPERIMENTAL_ENGINE_GALAXY |
         CE_CAP_NATIVE_GALAXY_SNAPSHOT |
         CE_CAP_SAVE_LIFECYCLE_SNAPSHOT |
-        CE_CAP_LOAD_LIFECYCLE_TRANSFORM;
+        CE_CAP_LOAD_LIFECYCLE_TRANSFORM |
+        CE_CAP_LIVE_ARM_SWITCH;
 }
 
 uint32_t CE_CALL CEAdapterBindGalaxy(uint32_t galaxy_ptr) {
@@ -1795,6 +1802,472 @@ static uint32_t ce_mix32(uint32_t value) {
     return value;
 }
 
+/* A live arm switch must keep every engine reference valid.  Replacing the
+   global TGalaxy pointer was proven unsafe (NextDay retained references to
+   the old object), so ABI 12 snapshots and edits the loaded TCon/sector
+   objects in place.  Object identity, planets, fleets, ownership and route
+   targets remain untouched; only the map-facing coordinates and names are
+   swapped, and the original values can be restored exactly. */
+typedef struct ce_live_con_snapshot {
+    uint32_t object;
+    uint32_t old_name;
+    uint32_t second_name;
+    float old_x;
+    float old_y;
+} ce_live_con_snapshot;
+
+typedef struct ce_live_sector_snapshot {
+    uint32_t object;
+    uint32_t old_name;
+    uint32_t second_name;
+} ce_live_sector_snapshot;
+
+static ce_live_con_snapshot *g_ce_live_cons = NULL;
+static ce_live_sector_snapshot *g_ce_live_sectors = NULL;
+static uint32_t g_ce_live_con_count = 0;
+static uint32_t g_ce_live_sector_count = 0;
+static uint32_t g_ce_live_snapshot_galaxy = 0;
+
+static const wchar_t *const g_ce_second_system_names[] = {
+    L"Эльтанская Рана", L"Первый Приют", L"Ковчег-IV", L"Крепость Карх",
+    L"Узел Без Лица", L"Люмен", L"Призма Единства", L"Пепельный рынок",
+    L"Сиротское гнездо", L"Город Незажжённых", L"Врата Второго Дома",
+    L"Латунное Солнце", L"Наковальня Карха", L"Корона Тарга",
+    L"Железная Клятва", L"Красная Кузня", L"Покой Молота",
+    L"Бронзовый Дозор", L"Стальное Сердце", L"Очаг Воителей",
+    L"Девять Щитов", L"Маяк Плавильщиков", L"Базальтовый Трон",
+    L"Бледная Маска", L"Скрытый Глаз", L"Безымянный Путь",
+    L"Хранилище Шёпота", L"Зеркальная Тень", L"Тайная Нить",
+    L"Пустой Свидетель", L"Седьмая Тишина", L"Обсидиановый След",
+    L"Закрытая Дверь", L"Немой Оракул", L"Ночной Шифр", L"Медная Чаша",
+    L"Общая Мера", L"Купеческий Рассвет", L"Три Договора",
+    L"Янтарная Биржа", L"Караванный Очаг", L"Справедливая Цена",
+    L"Монета Странника", L"Открытая Книга", L"Позолоченный Тракт",
+    L"Тихая Гавань", L"Точка Равновесия", L"Кристальная Теорема",
+    L"Живое Уравнение", L"Белый Архив", L"Семь Спектров", L"Свет Разума",
+    L"Ось Гармонии", L"Синяя Аксиома", L"Линза Памяти", L"Ясная Мысль",
+    L"Хоровое Число", L"Совершенная Орбита", L"Дальняя Гипотеза",
+    L"Угольная Дорога", L"Вольный Фонарь", L"Пыльное Убежище",
+    L"Последний Караван", L"Серый Колодец", L"Сломанный Компас",
+    L"Огонь Скитальцев", L"Крайняя Таверна", L"Ржавый Якорь",
+    L"Долгие Сумерки", L"Хлеб Изгнанников", L"Пограничный Колокол",
+    L"Споровая Луна", L"Зелёное Эхо", L"Голодная Туманность",
+    L"Мёртвый Сад", L"Хитиновый Разлом", L"Заражённый Маяк",
+    L"Безмолвный Рой", L"Костяная Орбита", L"Кислотный Рассвет",
+    L"Пустой Кокон", L"Прилив Шрама", L"Последнее Противоядие"
+};
+
+static const wchar_t *const g_ce_second_sector_names[] = {
+    L"Кузни Карха", L"Железный Предел", L"Бастион Тарг", L"Клин Молота",
+    L"Безликая Глубина", L"Тихий Излом", L"Чёрный Узел",
+    L"Завеса Неведомых", L"Люменский Пояс", L"Террасы Меры",
+    L"Медный Реестр", L"Долина Договоров", L"Призматический Хор",
+    L"Решётка Эха", L"Сияющий Архив", L"Контур Единства",
+    L"Пепельная окраина", L"Вольные Пустоши", L"Караванный Разлом",
+    L"Серые Причалы", L"Клисанский шрам", L"Зелёная Рана",
+    L"Споровый Рубеж", L"Немая Зараза"
+};
+
+/* This 32-bit Delphi build stores the UTF-16 string byte length (BSTR-style),
+   not the character count, in the dword immediately before its data.  The
+   preceding dword is kept immortal so the engine can retain the pointer. */
+static uint32_t ce_make_immortal_unicode(const wchar_t *text) {
+    size_t length = wcslen(text);
+    size_t bytes = 8u + (length + 1u) * sizeof(wchar_t);
+    unsigned char *block = (unsigned char *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bytes);
+    if (block == NULL || length > 0x7fffffffu) return 0;
+    *(int32_t *)(void *)block = -1;
+    *(uint32_t *)(void *)(block + 4u) = (uint32_t)(length * sizeof(wchar_t));
+    memcpy(block + 8u, text, (length + 1u) * sizeof(wchar_t));
+    return (uint32_t)(uintptr_t)(block + 8u);
+}
+
+static int ce_read_plain_list(uint32_t list, uint32_t *array_out, uint32_t *count_out) {
+    uint32_t array;
+    uint32_t count;
+    if (!ce_region_has_access((const void *)(uintptr_t)list, 12u, 0)) return 0;
+    array = *(const uint32_t *)(uintptr_t)(list + 4u);
+    count = *(const uint32_t *)(uintptr_t)(list + 8u);
+    if (count == 0u || count > 10000u ||
+        !ce_region_has_access((const void *)(uintptr_t)array, count * 4u, 0)) return 0;
+    *array_out = array;
+    *count_out = count;
+    return 1;
+}
+
+static int ce_live_read_wide_string(uint32_t pointer, const wchar_t **text_out,
+        uint32_t *characters_out) {
+    uint32_t byte_length;
+    const wchar_t *text;
+    uint32_t characters, index;
+    int has_cyrillic = 0;
+    if (pointer < 0x10000u ||
+            !ce_region_has_access((const void *)(uintptr_t)(pointer - 4u), 4u, 0)) return 0;
+    byte_length = *(const uint32_t *)(uintptr_t)(pointer - 4u);
+    if (byte_length < 2u || byte_length > 96u || (byte_length & 1u) != 0u ||
+            !ce_region_has_access((const void *)(uintptr_t)pointer, byte_length, 0)) return 0;
+    characters = byte_length / 2u;
+    text = (const wchar_t *)(uintptr_t)pointer;
+    for (index = 0; index < characters; ++index) {
+        wchar_t ch = text[index];
+        if (ch >= 0x0400 && ch <= 0x052fu) has_cyrillic = 1;
+        else if (ch != L' ' && ch != L'-' && ch != L'\'' &&
+                !(ch >= L'0' && ch <= L'9')) return 0;
+    }
+    if (!has_cyrillic) return 0;
+    *text_out = text;
+    *characters_out = characters;
+    return 1;
+}
+
+static int ce_live_row_index_matches(uint32_t pointer, uint32_t expected) {
+    const wchar_t *text;
+    uint32_t byte_length, characters;
+    wchar_t first, second;
+    if (pointer < 0x10000u ||
+            !ce_region_has_access((const void *)(uintptr_t)(pointer - 4u), 4u, 0)) return 0;
+    byte_length = *(const uint32_t *)(uintptr_t)(pointer - 4u);
+    characters = expected < 10u ? 1u : 2u;
+    if (byte_length != characters * 2u ||
+            !ce_region_has_access((const void *)(uintptr_t)pointer, byte_length, 0)) return 0;
+    text = (const wchar_t *)(uintptr_t)pointer;
+    first = (wchar_t)(L'0' + (expected < 10u ? expected : expected / 10u));
+    if (text[0] != first) return 0;
+    if (characters == 2u) {
+        second = (wchar_t)(L'0' + (expected % 10u));
+        if (text[1] != second) return 0;
+    }
+    return 1;
+}
+
+/* The map owns a linked TStringList of currently opened sectors.  Each row
+   has its previous row at +4, decimal key at +0x14 and generated name at
+   +0x18.  Closed sectors are deliberately absent (vanilla adds them when
+   bought), so the count is discovered rather than fixed at nineteen. */
+static int ce_find_live_sector_rows(uint32_t rows[24], uint32_t *count_out) {
+    SYSTEM_INFO system_info;
+    uintptr_t address, maximum;
+    uint32_t best_rows[24];
+    uint32_t best_count = 0u;
+    uint32_t row_vmt = (uint32_t)(uintptr_t)GetModuleHandleW(NULL) +
+        (0x008273a8u - 0x00400000u);
+    GetSystemInfo(&system_info);
+    address = (uintptr_t)system_info.lpMinimumApplicationAddress;
+    maximum = (uintptr_t)system_info.lpMaximumApplicationAddress;
+    if (maximum > UINT32_MAX) maximum = UINT32_MAX;
+    while (address < maximum) {
+        MEMORY_BASIC_INFORMATION memory;
+        uintptr_t start, end, cursor, next;
+        DWORD page;
+        if (VirtualQuery((const void *)address, &memory, sizeof(memory)) != sizeof(memory)) {
+            address += 0x10000u;
+            continue;
+        }
+        start = (uintptr_t)memory.BaseAddress;
+        next = start + memory.RegionSize;
+        if (next <= address) break;
+        page = memory.Protect & 0xffu;
+        if (memory.State == MEM_COMMIT && memory.Type == MEM_PRIVATE &&
+                (memory.Protect & PAGE_GUARD) == 0u &&
+                (page == PAGE_READWRITE || page == PAGE_WRITECOPY ||
+                 page == PAGE_EXECUTE_READWRITE || page == PAGE_EXECUTE_WRITECOPY) &&
+                memory.RegionSize >= 0x30u) {
+            end = next - 0x30u;
+            cursor = (start + 3u) & ~(uintptr_t)3u;
+            for (; cursor <= end; cursor += 4u) {
+                uint32_t tail;
+                if (*(const uint32_t *)cursor != row_vmt) continue;
+                for (tail = 4u; tail < 24u; ++tail) {
+                    uint32_t current = (uint32_t)cursor;
+                    uint32_t remaining = tail + 1u;
+                    while (remaining != 0u) {
+                        uint32_t index = remaining - 1u;
+                        uint32_t key, name, characters;
+                        const wchar_t *unused_text;
+                        if (!ce_region_has_access((const void *)(uintptr_t)current, 0x1cu, 0) ||
+                                *(const uint32_t *)(uintptr_t)current != row_vmt) break;
+                        key = *(const uint32_t *)(uintptr_t)(current + 0x14u);
+                        name = *(const uint32_t *)(uintptr_t)(current + 0x18u);
+                        if (!ce_live_row_index_matches(key, index) ||
+                                !ce_live_read_wide_string(name, &unused_text, &characters)) break;
+                        rows[index] = current;
+                        if (index != 0u)
+                            current = *(const uint32_t *)(uintptr_t)(current + 4u);
+                        --remaining;
+                    }
+                    if (remaining == 0u && tail + 1u > best_count) {
+                        best_count = tail + 1u;
+                        memcpy(best_rows, rows, best_count * sizeof(best_rows[0]));
+                    }
+                }
+            }
+        }
+        address = next;
+    }
+    if (best_count == 0u) return 0;
+    memcpy(rows, best_rows, best_count * sizeof(rows[0]));
+    *count_out = best_count;
+    return 1;
+}
+
+static int ce_capture_live_arm(uint32_t galaxy_ptr) {
+    uint32_t con_list, con_array, con_count;
+    uint32_t sector_rows[24];
+    uint32_t sector_count = 0u;
+    uint32_t index;
+    if (g_ce_live_snapshot_galaxy == galaxy_ptr && g_ce_live_cons != NULL) return 1;
+    char diagnostic[256];
+    int diagnostic_size;
+    if (!ce_region_has_access((const void *)(uintptr_t)(galaxy_ptr + 0x38u), 4u, 0)) {
+        ce_write_text_marker("live-arm-switch.jsonl",
+            "{\"status\":\"capture-failed\",\"stage\":\"galaxy\"}\r\n", 47u);
+        return 0;
+    }
+    con_list = *(const uint32_t *)(uintptr_t)(galaxy_ptr + 0x2cu);
+    if (!ce_read_plain_list(con_list, &con_array, &con_count)) {
+        ce_write_text_marker("live-arm-switch.jsonl",
+            "{\"status\":\"capture-failed\",\"stage\":\"systems\"}\r\n", 48u);
+        return 0;
+    }
+    if (!ce_find_live_sector_rows(sector_rows, &sector_count)) {
+        diagnostic_size = snprintf(diagnostic, sizeof(diagnostic),
+            "{\"status\":\"capture-failed\",\"stage\":\"sector-rows\"}\r\n");
+        if (diagnostic_size > 0) ce_write_text_marker(
+            "live-arm-switch.jsonl", diagnostic, (size_t)diagnostic_size);
+        return 0;
+    }
+    g_ce_live_cons = (ce_live_con_snapshot *)HeapAlloc(
+        GetProcessHeap(), HEAP_ZERO_MEMORY, con_count * sizeof(*g_ce_live_cons));
+    g_ce_live_sectors = (ce_live_sector_snapshot *)HeapAlloc(
+        GetProcessHeap(), HEAP_ZERO_MEMORY, sector_count * sizeof(*g_ce_live_sectors));
+    if (g_ce_live_cons == NULL || g_ce_live_sectors == NULL) return 0;
+    for (index = 0; index < con_count; ++index) {
+        uint32_t object = *(const uint32_t *)(uintptr_t)(con_array + index * 4u);
+        if (!ce_region_has_access((const void *)(uintptr_t)object, 0x1cu, 1)) return 0;
+        g_ce_live_cons[index].object = object;
+        g_ce_live_cons[index].old_name = *(const uint32_t *)(uintptr_t)(object + 0x10u);
+        memcpy(&g_ce_live_cons[index].old_x,
+            (const void *)(uintptr_t)(object + 0x14u), sizeof(float));
+        memcpy(&g_ce_live_cons[index].old_y,
+            (const void *)(uintptr_t)(object + 0x18u), sizeof(float));
+        g_ce_live_cons[index].second_name = ce_make_immortal_unicode(
+            g_ce_second_system_names[index % (sizeof(g_ce_second_system_names) /
+                sizeof(g_ce_second_system_names[0]))]);
+        if (g_ce_live_cons[index].second_name == 0u) return 0;
+    }
+    for (index = 0; index < sector_count; ++index) {
+        uint32_t object = sector_rows[index];
+        if (!ce_region_has_access((const void *)(uintptr_t)object, 0x1cu, 1)) return 0;
+        g_ce_live_sectors[index].object = object;
+        g_ce_live_sectors[index].old_name = *(const uint32_t *)(uintptr_t)(object + 0x18u);
+        g_ce_live_sectors[index].second_name = ce_make_immortal_unicode(
+            g_ce_second_sector_names[index % (sizeof(g_ce_second_sector_names) /
+                sizeof(g_ce_second_sector_names[0]))]);
+        if (g_ce_live_sectors[index].second_name == 0u) return 0;
+    }
+    g_ce_live_con_count = con_count;
+    g_ce_live_sector_count = sector_count;
+    g_ce_live_snapshot_galaxy = galaxy_ptr;
+    diagnostic_size = snprintf(diagnostic, sizeof(diagnostic),
+        "{\"status\":\"captured\",\"systems\":%u,\"sectors\":%u}\r\n",
+        con_count, sector_count);
+    if (diagnostic_size > 0) ce_write_text_marker(
+        "live-arm-switch.jsonl", diagnostic, (size_t)diagnostic_size);
+    return 1;
+}
+
+static void ce_apply_live_arm(int second_home) {
+    uint32_t index;
+    uint32_t seed = (uint32_t)InterlockedCompareExchange(&g_ce_live_seed, 0, 0);
+    float min_x = 10000000.0f, max_x = -10000000.0f;
+    float min_y = 10000000.0f, max_y = -10000000.0f;
+    char report[256];
+    int report_size;
+    if (g_ce_live_cons == NULL || g_ce_live_sectors == NULL) return;
+    for (index = 0; index < g_ce_live_con_count; ++index) {
+        float x = g_ce_live_cons[index].old_x;
+        float y = g_ce_live_cons[index].old_y;
+        if (x < min_x) min_x = x;
+        if (x > max_x) max_x = x;
+        if (y < min_y) min_y = y;
+        if (y > max_y) max_y = y;
+    }
+    for (index = 0; index < g_ce_live_con_count; ++index) {
+        ce_live_con_snapshot *item = &g_ce_live_cons[index];
+        float x = item->old_x;
+        float y = item->old_y;
+        if (second_home) {
+            uint32_t id = *(const uint32_t *)(uintptr_t)(item->object + 4u);
+            uint32_t hx = ce_mix32(seed ^ id ^ (index * 0x9e3779b9u));
+            uint32_t hy = ce_mix32((seed + 0x85ebca6bu) ^ id ^ (index * 0xc2b2ae35u));
+            x = min_x + ((float)(hx & 0xffffu) / 65535.0f) * (max_x - min_x);
+            y = min_y + ((float)(hy & 0xffffu) / 65535.0f) * (max_y - min_y);
+        }
+        *(uint32_t *)(uintptr_t)(item->object + 0x10u) =
+            second_home ? item->second_name : item->old_name;
+        memcpy((void *)(uintptr_t)(item->object + 0x14u), &x, sizeof(x));
+        memcpy((void *)(uintptr_t)(item->object + 0x18u), &y, sizeof(y));
+    }
+    for (index = 0; index < g_ce_live_sector_count; ++index) {
+        ce_live_sector_snapshot *item = &g_ce_live_sectors[index];
+        *(uint32_t *)(uintptr_t)(item->object + 0x18u) =
+            second_home ? item->second_name : item->old_name;
+    }
+    InterlockedExchange(&g_ce_active_arm, second_home ? 1 : 0);
+    report_size = snprintf(report, sizeof(report),
+        "{\"status\":\"switched\",\"abi\":%u,\"arm\":\"%s\","
+        "\"systems\":%u,\"sectors\":%u}\r\n",
+        CEAdapterAbiVersion(), second_home ? "SECOND_HOME" : "OLD_ARM",
+        g_ce_live_con_count, g_ce_live_sector_count);
+    if (report_size > 0) ce_write_text_marker(
+        "live-arm-switch.jsonl", report, (size_t)report_size);
+}
+
+static BOOL CALLBACK ce_invalidate_process_window(HWND hwnd, LPARAM unused) {
+    DWORD pid = 0;
+    (void)unused;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == GetCurrentProcessId()) InvalidateRect(hwnd, NULL, TRUE);
+    return TRUE;
+}
+
+static LRESULT CALLBACK ce_loading_window_proc(
+    HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
+) {
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint;
+        RECT rect;
+        HDC dc = BeginPaint(hwnd, &paint);
+        HBRUSH background = CreateSolidBrush(RGB(2, 10, 28));
+        HFONT font = CreateFontW(-42, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Arial");
+        HFONT old_font;
+        GetClientRect(hwnd, &rect);
+        FillRect(dc, &rect, background);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(110, 220, 255));
+        old_font = (HFONT)SelectObject(dc, font);
+        DrawTextW(dc, L"РЕЗОНАНСНЫЙ ПЕРЕХОД", -1, &rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        rect.top += 110;
+        SetTextColor(dc, RGB(210, 240, 255));
+        SelectObject(dc, old_font);
+        DeleteObject(font);
+        font = CreateFontW(-24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Arial");
+        old_font = (HFONT)SelectObject(dc, font);
+        DrawTextW(dc, InterlockedCompareExchange(&g_ce_active_arm, 0, 0) == 0
+            ? L"Загрузка Второго Дома..." : L"Возвращение в Первый рукав...",
+            -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(dc, old_font);
+        DeleteObject(font);
+        DeleteObject(background);
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+static HWND ce_show_loading_window(void) {
+    WNDCLASSW window_class;
+    HWND owner = NULL;
+    HWND window;
+    RECT rect;
+    if (g_ce_loading_window_class == 0) {
+        memset(&window_class, 0, sizeof(window_class));
+        window_class.lpfnWndProc = ce_loading_window_proc;
+        window_class.hInstance = (HINSTANCE)GetModuleHandleW(NULL);
+        window_class.hCursor = LoadCursor(NULL, IDC_WAIT);
+        window_class.lpszClassName = L"ChildrenOfEltanArmLoading";
+        g_ce_loading_window_class = RegisterClassW(&window_class);
+        if (g_ce_loading_window_class == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            return NULL;
+        }
+    }
+    {
+        HWND candidate = GetTopWindow(NULL);
+        while (candidate != NULL) {
+            DWORD pid = 0;
+            GetWindowThreadProcessId(candidate, &pid);
+            if (pid == GetCurrentProcessId() && IsWindowVisible(candidate)) {
+                owner = candidate;
+                break;
+            }
+            candidate = GetNextWindow(candidate, GW_HWNDNEXT);
+        }
+    }
+    if (owner != NULL && GetWindowRect(owner, &rect)) {
+        window = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            L"ChildrenOfEltanArmLoading", L"Children of Eltan", WS_POPUP,
+            rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
+            owner, NULL, (HINSTANCE)GetModuleHandleW(NULL), NULL);
+    } else {
+        window = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            L"ChildrenOfEltanArmLoading", L"Children of Eltan", WS_POPUP,
+            0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+            NULL, NULL, (HINSTANCE)GetModuleHandleW(NULL), NULL);
+    }
+    if (window != NULL) {
+        ShowWindow(window, SW_SHOW);
+        UpdateWindow(window);
+    }
+    return window;
+}
+
+static LRESULT CALLBACK ce_live_keyboard_proc(int code, WPARAM wparam, LPARAM lparam) {
+    if (code == HC_ACTION && wparam == VK_F8 && (lparam & (1L << 31)) == 0 &&
+        (lparam & (1L << 30)) == 0 &&
+        InterlockedCompareExchange(&g_ce_live_switch_lock, 1, 0) == 0) {
+        uint32_t galaxy_ptr = (uint32_t)InterlockedCompareExchange(
+            &g_ce_live_galaxy_ptr, 0, 0);
+        if (ce_capture_live_arm(galaxy_ptr)) {
+            HWND game_window = GetForegroundWindow();
+            DWORD game_pid = 0;
+            GetWindowThreadProcessId(game_window, &game_pid);
+            if (game_pid != GetCurrentProcessId()) game_window = NULL;
+            HWND loading = ce_show_loading_window();
+            Sleep(700u);
+            ce_apply_live_arm(InterlockedCompareExchange(&g_ce_active_arm, 0, 0) == 0);
+            Sleep(450u);
+            if (loading != NULL) DestroyWindow(loading);
+            EnumWindows(ce_invalidate_process_window, 0);
+            /* The galaxy map snapshots labels when it opens.  A portal entered
+               from the map therefore returns the player to local space; opening
+               the map again builds the destination view from the new arm. */
+            if (game_window != NULL) {
+                ShowWindow(game_window, SW_RESTORE);
+                SetForegroundWindow(game_window);
+                PostMessageW(game_window, WM_KEYDOWN, (WPARAM)'M', 0x00320001L);
+                PostMessageW(game_window, WM_KEYUP, (WPARAM)'M', 0xc0320001L);
+            }
+        }
+        InterlockedExchange(&g_ce_live_switch_lock, 0);
+        return 1;
+    }
+    return CallNextHookEx(g_ce_keyboard_hook, code, wparam, lparam);
+}
+
+uint32_t CE_CALL CEAdapterInstallLiveArmSwitch(uint32_t galaxy_ptr, uint32_t seed) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    if (!ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) return 0;
+    InterlockedExchange(&g_ce_live_galaxy_ptr, (LONG)galaxy_ptr);
+    InterlockedExchange(&g_ce_live_seed, (LONG)seed);
+    if (!ce_capture_live_arm(galaxy_ptr)) return 0;
+    if (g_ce_keyboard_hook == NULL) {
+        g_ce_keyboard_hook = SetWindowsHookExA(
+            WH_KEYBOARD, ce_live_keyboard_proc, NULL, GetCurrentThreadId());
+        if (g_ce_keyboard_hook == NULL) return 0;
+        ce_write_text_marker("live-arm-switch.jsonl",
+            "{\"status\":\"ready\",\"hotkey\":\"F8\"}\r\n", 34u);
+    }
+    return 1;
+}
+
 __attribute__((used)) static void CE_CALL ce_transform_loaded_second_home(
     uint32_t galaxy_ptr, uint32_t reader
 ) {
@@ -1904,6 +2377,11 @@ uint32_t CE_CALL CEAdapterPollSecondHomeTransform(
     DWORD ignored_protect;
     LONG hook_state;
     int32_t relative;
+
+    /* Existing saves retain their compiled Turn graph.  ABI 11 saves call
+       this export already, so use it as the compatibility bridge that
+       installs the ABI 12 portal hotkey without requiring a new campaign. */
+    CEAdapterInstallLiveArmSwitch(galaxy_ptr, seed);
 
     if (GetFileAttributesA("C:\\ce_debug\\arm-second-home.flag") == INVALID_FILE_ATTRIBUTES) {
         return 0;
