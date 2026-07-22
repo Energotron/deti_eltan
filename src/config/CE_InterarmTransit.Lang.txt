@@ -4,7 +4,7 @@ UselessItems ~{
         Description=Уникальный квестовый груз
         Name=Якорь Двух Домов
         Owner=None
-        Size=150
+        Size=1
         Text=Согласующий модуль удерживает резонанс между старым рукавом и Вторым Домом. Якорь находится в трюме, не занимает артефактный слот и не расходуется при переходе. В текущем техническом срезе резонансная ячейка не требуется.
         OnUseCode ^{
             01=if(GetShipPlanet(Player())!=0 || ShipInHole(Player()))
@@ -21,27 +21,43 @@ UselessItems ~{
                 04=else
                 05 ^{
                     01=unknown ceOriginStar=ShipStar(Player());
-                    02=unknown ceDestinationStar=ceOriginStar;
-                    03=dword ceDestinationAttempts=0;
-                    04=while((ceDestinationStar==ceOriginStar || StarToCon(ceDestinationStar)==StarToCon(ceOriginStar) || !SectorVisible(StarToCon(ceDestinationStar))) && ceDestinationAttempts<96)
-                    05 ^{
-                        01=ceDestinationStar=GalaxyStar(Rnd(0,GalaxyStars()-1));
-                        02=ceDestinationAttempts=ceDestinationAttempts+1;
+                    02=unknown ceOriginSector=StarToCon(ceOriginStar);
+                    03=unknown ceOriginX=CoordX(ceOriginStar);
+                    04=unknown ceOriginY=CoordY(ceOriginStar);
+                    05=unknown ceDestinationStar=ceOriginStar;
+                    06=unknown ceBestDistSq=-1;
+                    07=dword ceScanIndex=0;
+                    08=while(ceScanIndex<GalaxyStars())
+                    09 ^{
+                        01=unknown ceCandidate=GalaxyStar(ceScanIndex);
+                        02=if(StarToCon(ceCandidate)!=ceOriginSector)
+                        03 ^{
+                            01=unknown ceDx=CoordX(ceCandidate)-ceOriginX;
+                            02=unknown ceDy=CoordY(ceCandidate)-ceOriginY;
+                            03=unknown ceDistSq=ceDx*ceDx+ceDy*ceDy;
+                            04=if(ceDistSq>ceBestDistSq)
+                            05 ^{
+                                01=ceBestDistSq=ceDistSq;
+                                02=ceDestinationStar=ceCandidate;
+                            }
+                        }
+                        04=ceScanIndex=ceScanIndex+1;
                     }
-                    06=ceDestinationAttempts=0;
-                    07=while((ceDestinationStar==ceOriginStar || !SectorVisible(StarToCon(ceDestinationStar))) && ceDestinationAttempts<96)
-                    08 ^{
-                        01=ceDestinationStar=GalaxyStar(Rnd(0,GalaxyStars()-1));
-                        02=ceDestinationAttempts=ceDestinationAttempts+1;
+                    10=if(ceDestinationStar==ceOriginStar)
+                    11 ^{
+                        01=MessageBox(CT('CE.Transit.NoDestination'));
                     }
-                    09=unknown ceSubportal=CreateArt(t_ArtBlackHole,None);
-                    10=dword ceHole=OnUseCodeBlackHole(ceSubportal);
-                    11=if(ceHole)
-                    12 ^{
-                        01=if(ceDestinationStar!=ceOriginStar) HoleStar2(ceHole,ceDestinationStar);
-                        02=HoleMap(ceHole,'SkipAB');
-                        03=unknown ceRegisterPortal=ImportedFunction('CESecondMapAdapter','CEAdapterRegisterPortal');
-                        04=if(!ceRegisterPortal(GalaxyPtr(),Id(ceHole))) MessageBox(CT('CE.Transit.PortalRegistrationFailed'));
+                    12=else
+                    13 ^{
+                        01=dword ceHole=HoleCreate2(ceOriginStar,ceDestinationStar);
+                        02=if(ceHole)
+                        03 ^{
+                            01=HoleX1(ceHole,CoordX(Player())+350);
+                            02=HoleY1(ceHole,CoordY(Player()));
+                            03=HoleMap(ceHole,'SkipAB');
+                            04=unknown ceRegisterPortal=ImportedFunction('CESecondMapAdapter','CEAdapterRegisterPortal');
+                            05=if(!ceRegisterPortal(GalaxyPtr(),Id(ceHole))) MessageBox(CT('CE.Transit.PortalRegistrationFailed'));
+                        }
                     }
                 }
             }
@@ -55,7 +71,7 @@ CE ^{
         AnchorAlreadyAboard=«Якорь Двух Домов» уже находится в трюме.
         AnchorSpaceOnly=Якорь можно калибровать только в обычном космосе.
         AnchorNotReady=Якорь не находит вторую половину коридора. Дождитесь завершения инициализации карты и попробуйте снова.
-        NoDestination=Не удалось выбрать открытую систему выхода. Откройте ещё один сектор и повторите попытку.
+        NoDestination=Не удалось выбрать систему выхода в другом секторе. Откройте ещё один сектор и повторите попытку.
         PortalRegistrationFailed=Коридор открылся, но переходный контроллер не принял его сигнатуру. Не входите в эту дыру и повторите попытку после загрузки сохранения.
     }
 }

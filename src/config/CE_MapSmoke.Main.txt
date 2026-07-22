@@ -15,30 +15,10 @@ ML ^{
                     Pos=0,0,-100
                     Size=1,1
                     OnKey ~{
-                        0=if(KEY==134)
+                        0=if(KEYMOD==3 && KEY>=65 && KEY<=90)
                         0 ~{
-                            0=unknown ceAnchor=0;
-                            0=dword ceItemIndex=1;
-                            0=while(ceItemIndex<ShipItems(Player()))
-                            0 ~{
-                                0=unknown ceCandidate=ShipItems(Player(),ceItemIndex);
-                                0=if(EquipmentImageName(ceCandidate)=='CE_Item_TwinHomeAnchor') ceAnchor=ceCandidate;
-                                0=ceItemIndex=ceItemIndex+1;
-                            }
-                            0=if(!ceAnchor)
-                            0 ~{
-                                0=ceAnchor=CreateQuestItem('CE_Item_TwinHomeAnchor',None);
-                                0=NoDropItem(ceAnchor,1);
-                                0=CanSellItem(ceAnchor,0);
-                                0=AddItemToShip(Player(),ceAnchor);
-                                0=MessageBox(CT('CE.Transit.AnchorGranted'));
-                            }
-                            0=else
-                            0 ~{
-                                0=NoDropItem(ceAnchor,1);
-                                0=CanSellItem(ceAnchor,0);
-                                0=MessageBox(CT('CE.Transit.AnchorAlreadyAboard'));
-                            }
+                            0=unknown ceAdvanceCheat=ImportedFunction('CESecondMapAdapter','CEAdapterAdvanceCheatCode');
+                            0=ceAdvanceCheat(KEY,KEYMOD);
                         }
                     }
                 }
@@ -54,30 +34,10 @@ ML ^{
                     Pos=0,0,-100
                     Size=1,1
                     OnKey ~{
-                        0=if(KEY==134)
+                        0=if(KEYMOD==3 && KEY>=65 && KEY<=90)
                         0 ~{
-                            0=unknown ceAnchor=0;
-                            0=dword ceItemIndex=1;
-                            0=while(ceItemIndex<ShipItems(Player()))
-                            0 ~{
-                                0=unknown ceCandidate=ShipItems(Player(),ceItemIndex);
-                                0=if(EquipmentImageName(ceCandidate)=='CE_Item_TwinHomeAnchor') ceAnchor=ceCandidate;
-                                0=ceItemIndex=ceItemIndex+1;
-                            }
-                            0=if(!ceAnchor)
-                            0 ~{
-                                0=ceAnchor=CreateQuestItem('CE_Item_TwinHomeAnchor',None);
-                                0=NoDropItem(ceAnchor,1);
-                                0=CanSellItem(ceAnchor,0);
-                                0=AddItemToShip(Player(),ceAnchor);
-                                0=MessageBox(CT('CE.Transit.AnchorGranted'));
-                            }
-                            0=else
-                            0 ~{
-                                0=NoDropItem(ceAnchor,1);
-                                0=CanSellItem(ceAnchor,0);
-                                0=MessageBox(CT('CE.Transit.AnchorAlreadyAboard'));
-                            }
+                            0=unknown ceAdvanceCheat=ImportedFunction('CESecondMapAdapter','CEAdapterAdvanceCheatCode');
+                            0=ceAdvanceCheat(KEY,KEYMOD);
                         }
                     }
                 }
@@ -93,30 +53,10 @@ ML ^{
                     Pos=0,0,-101
                     Size=1,1
                     OnKey ~{
-                        0=if(KEY==134)
+                        0=if(KEYMOD==3 && KEY>=65 && KEY<=90)
                         0 ~{
-                            0=unknown ceAnchor=0;
-                            0=dword ceItemIndex=1;
-                            0=while(ceItemIndex<ShipItems(Player()))
-                            0 ~{
-                                0=unknown ceCandidate=ShipItems(Player(),ceItemIndex);
-                                0=if(EquipmentImageName(ceCandidate)=='CE_Item_TwinHomeAnchor') ceAnchor=ceCandidate;
-                                0=ceItemIndex=ceItemIndex+1;
-                            }
-                            0=if(!ceAnchor)
-                            0 ~{
-                                0=ceAnchor=CreateQuestItem('CE_Item_TwinHomeAnchor',None);
-                                0=NoDropItem(ceAnchor,1);
-                                0=CanSellItem(ceAnchor,0);
-                                0=AddItemToShip(Player(),ceAnchor);
-                                0=MessageBox(CT('CE.Transit.AnchorGranted'));
-                            }
-                            0=else
-                            0 ~{
-                                0=NoDropItem(ceAnchor,1);
-                                0=CanSellItem(ceAnchor,0);
-                                0=MessageBox(CT('CE.Transit.AnchorAlreadyAboard'));
-                            }
+                            0=unknown ceAdvanceCheat=ImportedFunction('CESecondMapAdapter','CEAdapterAdvanceCheatCode');
+                            0=ceAdvanceCheat(KEY,KEYMOD);
                         }
                     }
                 }
@@ -212,8 +152,19 @@ Data ^{
             CEAdapterPollSecondHomeTransform=dword,CEAdapterPollSecondHomeTransform,dword,dword
             CEAdapterInstallLiveArmSwitch=dword,CEAdapterInstallLiveArmSwitch,dword,dword
             CEAdapterSetSystemSector=dword,CEAdapterSetSystemSector,dword,dword,dword
+            CEAdapterDumpNamedObject=dword,CEAdapterDumpNamedObject,dword,dword
+            CEAdapterCapturePlanetName=dword,CEAdapterCapturePlanetName,dword,dword
+            CEAdapterCaptureStationName=dword,CEAdapterCaptureStationName,dword,dword
+            CEAdapterBeginSectorSurvey=dword,CEAdapterBeginSectorSurvey
+            CEAdapterDumpSectorIndexed=dword,CEAdapterDumpSectorIndexed,dword,dword
+            CEAdapterSurveyClusterList=dword,CEAdapterSurveyClusterList,dword
+            CEAdapterSetSectorIndex=dword,CEAdapterSetSectorIndex,dword,dword
+            CEAdapterProbeSectorFlagBefore=dword,CEAdapterProbeSectorFlagBefore,dword
+            CEAdapterProbeSectorFlagAfter=dword,CEAdapterProbeSectorFlagAfter,dword
             CEAdapterPortalReady=dword,CEAdapterPortalReady,dword
             CEAdapterPortalStatus=dword,CEAdapterPortalStatus
+            CEAdapterAdvanceCheatCode=dword,CEAdapterAdvanceCheatCode,dword,dword
+            CEAdapterConsumeCheatTrigger=dword,CEAdapterConsumeCheatTrigger
             CEAdapterRegisterPortal=dword,CEAdapterRegisterPortal,dword,dword
             CEAdapterEnterRegisteredPortal=dword,CEAdapterEnterRegisteredPortal,dword,dword
             CEAdapterCompleteRegisteredPortal=dword,CEAdapterCompleteRegisteredPortal,dword

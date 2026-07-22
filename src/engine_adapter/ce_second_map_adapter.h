@@ -87,8 +87,19 @@ CE_EXPORT uint32_t CE_CALL CEAdapterInstallLiveArmSwitch(
 CE_EXPORT uint32_t CE_CALL CEAdapterSetSystemSector(
     uint32_t galaxy_ptr, uint32_t system_index, uint32_t sector_ptr
 );
+CE_EXPORT uint32_t CE_CALL CEAdapterDumpNamedObject(uint32_t object_ptr, uint32_t kind);
+CE_EXPORT uint32_t CE_CALL CEAdapterCapturePlanetName(uint32_t galaxy_ptr, uint32_t planet_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterCaptureStationName(uint32_t galaxy_ptr, uint32_t station_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterBeginSectorSurvey(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterDumpSectorIndexed(uint32_t sector_ptr, uint32_t index);
+CE_EXPORT uint32_t CE_CALL CEAdapterSurveyClusterList(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterSetSectorIndex(uint32_t sector_ptr, uint32_t new_index);
+CE_EXPORT uint32_t CE_CALL CEAdapterProbeSectorFlagBefore(uint32_t sector_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterProbeSectorFlagAfter(uint32_t sector_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterPortalReady(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterPortalStatus(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterAdvanceCheatCode(uint32_t key, uint32_t keymod);
+CE_EXPORT uint32_t CE_CALL CEAdapterConsumeCheatTrigger(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterRegisterPortal(
     uint32_t galaxy_ptr, uint32_t hole_id
 );

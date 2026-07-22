@@ -3,7 +3,7 @@
     "id": "CE_Item_TwinHomeAnchor",
     "name_ru": "Якорь Двух Домов",
     "kind": "quest_cargo",
-    "cargo_mass_design": 150,
+    "cargo_mass_design": 1,
     "consumed_on_transit": false,
     "uses_artifact_slot": false,
     "uses_new_slot": false
@@ -12,7 +12,7 @@
     "id": "CE_Item_ResonanceCell",
     "name_ru": "Резонансная ячейка Двух Домов",
     "kind": "consumable_cargo",
-    "cargo_mass_design": 25,
+    "cargo_mass_design": 1,
     "consumed_on_transit": true,
     "uses_artifact_slot": false,
     "uses_new_slot": false
@@ -21,7 +21,7 @@
     "id": "CE_Item_FalseResonanceCell",
     "name_ru": "Поддельная резонансная ячейка",
     "kind": "dangerous_cargo",
-    "cargo_mass_design": 25,
+    "cargo_mass_design": 2,
     "consumed_on_transit": true,
     "uses_artifact_slot": false,
     "uses_new_slot": false
