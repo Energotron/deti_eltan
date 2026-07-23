@@ -17,7 +17,9 @@ $objdump = Join-Path $ToolchainRoot "bin\llvm-objdump.exe"
 $source = Join-Path $projectRoot "src\engine_adapter\ce_second_map_adapter.c"
 $include = Join-Path $projectRoot "src\engine_adapter"
 $testSource = Join-Path $projectRoot "tools\native\test_ce_second_map_adapter.c"
+$sectorHelperSource = Join-Path $projectRoot "tools\native\ce_sector_name_helper.c"
 $dll = Join-Path $OutputRoot "CESecondMapAdapter.dll"
+$sectorHelperExe = Join-Path $OutputRoot "ce_sector_name_helper.exe"
 $testDir = Join-Path ([IO.Path]::GetTempPath()) ("ce-adapter-test-" + [guid]::NewGuid().ToString("N"))
 $testExe = Join-Path $testDir "test_ce_second_map_adapter.exe"
 
@@ -34,6 +36,10 @@ if ($LASTEXITCODE -ne 0) { throw "Adapter DLL compilation failed" }
 & $compiler --target=i686-w64-windows-gnu -std=c11 -O2 -Wall -Wextra -Werror `
     $testSource -o $testExe
 if ($LASTEXITCODE -ne 0) { throw "Adapter test host compilation failed" }
+
+& $compiler --target=i686-w64-windows-gnu -std=c11 -O2 -Wall -Wextra -Werror -municode `
+    $sectorHelperSource -o $sectorHelperExe
+if ($LASTEXITCODE -ne 0) { throw "Sector name helper compilation failed" }
 
 $machineLine = & $objdump -f $dll | Select-String "architecture: i386"
 if (-not $machineLine) { throw "Adapter DLL is not PE32/i386" }

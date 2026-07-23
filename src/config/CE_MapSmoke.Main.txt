@@ -18,7 +18,12 @@ ML ^{
                         0=if(KEYMOD==3 && KEY>=65 && KEY<=90)
                         0 ~{
                             0=unknown ceAdvanceCheat=ImportedFunction('CESecondMapAdapter','CEAdapterAdvanceCheatCode');
-                            0=ceAdvanceCheat(KEY,KEYMOD);
+                            0=if(ceAdvanceCheat(KEY,KEYMOD))ForceNextDay();
+                        }
+                        1=if(KEY==77)
+                        1 ~{
+                            0=unknown ceLogMapKey=ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');
+                            0=ceLogMapKey(300);
                         }
                     }
                 }
@@ -37,7 +42,12 @@ ML ^{
                         0=if(KEYMOD==3 && KEY>=65 && KEY<=90)
                         0 ~{
                             0=unknown ceAdvanceCheat=ImportedFunction('CESecondMapAdapter','CEAdapterAdvanceCheatCode');
-                            0=ceAdvanceCheat(KEY,KEYMOD);
+                            0=if(ceAdvanceCheat(KEY,KEYMOD))ForceNextDay();
+                        }
+                        1=if(KEY==77)
+                        1 ~{
+                            0=unknown ceLogMapKey2=ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');
+                            0=ceLogMapKey2(301);
                         }
                     }
                 }
@@ -56,7 +66,12 @@ ML ^{
                         0=if(KEYMOD==3 && KEY>=65 && KEY<=90)
                         0 ~{
                             0=unknown ceAdvanceCheat=ImportedFunction('CESecondMapAdapter','CEAdapterAdvanceCheatCode');
-                            0=ceAdvanceCheat(KEY,KEYMOD);
+                            0=if(ceAdvanceCheat(KEY,KEYMOD))ForceNextDay();
+                        }
+                        1=if(KEY==77)
+                        1 ~{
+                            0=unknown ceLogMapKey3=ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');
+                            0=ceLogMapKey3(302);
                         }
                     }
                 }
@@ -153,11 +168,24 @@ Data ^{
             CEAdapterInstallLiveArmSwitch=dword,CEAdapterInstallLiveArmSwitch,dword,dword
             CEAdapterSetSystemSector=dword,CEAdapterSetSystemSector,dword,dword,dword
             CEAdapterDumpNamedObject=dword,CEAdapterDumpNamedObject,dword,dword
+            CEAdapterDumpShipSnapshot=dword,CEAdapterDumpShipSnapshot,dword,dword
+            CEAdapterWatchShipForChanges=dword,CEAdapterWatchShipForChanges,dword
             CEAdapterCapturePlanetName=dword,CEAdapterCapturePlanetName,dword,dword
             CEAdapterCaptureStationName=dword,CEAdapterCaptureStationName,dword,dword
+            CEAdapterCaptureDominatorFlag=dword,CEAdapterCaptureDominatorFlag,dword,dword
+            CEAdapterWasDominator=dword,CEAdapterWasDominator,dword
+            CEAdapterLogDominatorFlagCount=dword,CEAdapterLogDominatorFlagCount
+            CEAdapterHideBossShip=dword,CEAdapterHideBossShip,dword,dword
+            CEAdapterRestoreBossShip=dword,CEAdapterRestoreBossShip,dword
+            CEAdapterHiddenBossCount=dword,CEAdapterHiddenBossCount
+            CEAdapterHiddenBossShipAt=dword,CEAdapterHiddenBossShipAt,dword
+            CEAdapterLogCheckpoint=dword,CEAdapterLogCheckpoint,dword
+            CEAdapterSetPendingShipSweep=dword,CEAdapterSetPendingShipSweep,dword
+            CEAdapterConsumePendingShipSweep=dword,CEAdapterConsumePendingShipSweep
             CEAdapterBeginSectorSurvey=dword,CEAdapterBeginSectorSurvey
             CEAdapterDumpSectorIndexed=dword,CEAdapterDumpSectorIndexed,dword,dword
             CEAdapterSurveyClusterList=dword,CEAdapterSurveyClusterList,dword
+            CEAdapterCompareStarConCounts=dword,CEAdapterCompareStarConCounts,dword
             CEAdapterSetSectorIndex=dword,CEAdapterSetSectorIndex,dword,dword
             CEAdapterProbeSectorFlagBefore=dword,CEAdapterProbeSectorFlagBefore,dword
             CEAdapterProbeSectorFlagAfter=dword,CEAdapterProbeSectorFlagAfter,dword

@@ -88,11 +88,24 @@ CE_EXPORT uint32_t CE_CALL CEAdapterSetSystemSector(
     uint32_t galaxy_ptr, uint32_t system_index, uint32_t sector_ptr
 );
 CE_EXPORT uint32_t CE_CALL CEAdapterDumpNamedObject(uint32_t object_ptr, uint32_t kind);
+CE_EXPORT uint32_t CE_CALL CEAdapterDumpShipSnapshot(uint32_t ship_ptr, uint32_t phase);
+CE_EXPORT uint32_t CE_CALL CEAdapterWatchShipForChanges(uint32_t ship_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterCapturePlanetName(uint32_t galaxy_ptr, uint32_t planet_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterCaptureStationName(uint32_t galaxy_ptr, uint32_t station_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterCaptureDominatorFlag(uint32_t system_index, uint32_t star_owner_value);
+CE_EXPORT uint32_t CE_CALL CEAdapterWasDominator(uint32_t system_index);
+CE_EXPORT uint32_t CE_CALL CEAdapterLogDominatorFlagCount(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterHideBossShip(uint32_t ship_ptr, uint32_t original_star_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterRestoreBossShip(uint32_t ship_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterHiddenBossCount(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterHiddenBossShipAt(uint32_t index);
+CE_EXPORT uint32_t CE_CALL CEAdapterLogCheckpoint(uint32_t id);
+CE_EXPORT uint32_t CE_CALL CEAdapterSetPendingShipSweep(uint32_t second_home);
+CE_EXPORT uint32_t CE_CALL CEAdapterConsumePendingShipSweep(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterBeginSectorSurvey(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterDumpSectorIndexed(uint32_t sector_ptr, uint32_t index);
 CE_EXPORT uint32_t CE_CALL CEAdapterSurveyClusterList(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterCompareStarConCounts(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterSetSectorIndex(uint32_t sector_ptr, uint32_t new_index);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeSectorFlagBefore(uint32_t sector_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeSectorFlagAfter(uint32_t sector_ptr);

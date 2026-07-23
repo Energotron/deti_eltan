@@ -142,6 +142,7 @@ static void ce_write_fault_report(const char *label) {
    spawn here -- which fires once at process attach, before any galaxy or
    Turn processing exists -- was the only variant that stopped it). */
 static DWORD WINAPI ce_hook_thread_proc(LPVOID unused);
+static DWORD WINAPI ce_sector_spawn_thread_proc(LPVOID unused);
 
 /* Unconditional load marker: proves the engine actually mapped this DLL
    into its process, independent of whether any exported function is ever
@@ -154,6 +155,17 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
         DisableThreadLibraryCalls(instance);
         ce_write_progress("dllmain-process-attach");
         thread = CreateThread(NULL, 0, ce_hook_thread_proc, NULL, 0, NULL);
+        if (thread != NULL) CloseHandle(thread);
+        /* Started here, at process attach, for the exact same reason as
+           ce_hook_thread_proc above: anything reachable from Turn-code
+           appears to run nested inside TGalaxy.NextDay's own call stack,
+           and a heavy OS call made from there -- CreateThread previously,
+           now confirmed CreateProcess too (see ce_spawn_sector_name_helper
+           and ce_sector_spawn_thread_proc) -- can crash the game. This
+           thread sleeps and polls a plain flag instead of ever being
+           called into from Turn-code, so the actual CreateProcess call
+           never happens on a NextDay-reachable stack. */
+        thread = CreateThread(NULL, 0, ce_sector_spawn_thread_proc, NULL, 0, NULL);
         if (thread != NULL) CloseHandle(thread);
         /* ce_find_sector_name_references disabled: spawning it here
            correlated with a fresh game crash on new-game creation.
@@ -1847,6 +1859,17 @@ typedef struct ce_live_con_snapshot {
     float old_x;
     float old_y;
     uint32_t sector_object;
+    /* Old-arm baseline for StarOwner()==1 (Dominators), captured once per
+       system_index by CEAdapterCaptureDominatorFlag (called from RScript,
+       which is the only side that can call the real StarOwner() built-in --
+       this DLL has no way to invoke RScript's own functions, only the
+       reverse). dominator_captured guards the idempotent "first value seen
+       wins" capture: the per-star Turn-code loop that calls this runs every
+       turn, including while Second Home's own suppression is active, so
+       without this guard a later (already-suppressed) read would silently
+       overwrite the true baseline. */
+    uint32_t old_dominator;
+    uint32_t dominator_captured;
 } ce_live_con_snapshot;
 
 typedef struct ce_live_sector_snapshot {
@@ -1923,19 +1946,23 @@ static const wchar_t *const g_ce_second_system_names[] = {
     L"Ро Кассиопеи", L"Эта Киля"
 };
 
-/* Currently unused: sector renaming is disabled until the real name-field
-   offset is found (see ce_apply_live_arm). Kept for when it is. */
-__attribute__((unused))
-static const wchar_t *const g_ce_second_sector_names[] = {
-    L"Кузни Карха", L"Железный Предел", L"Бастион Тарг", L"Клин Молота",
-    L"Безликая Глубина", L"Тихий Излом", L"Чёрный Узел",
-    L"Завеса Неведомых", L"Люменский Пояс", L"Террасы Меры",
-    L"Медный Реестр", L"Долина Договоров", L"Призматический Хор",
-    L"Решётка Эха", L"Сияющий Архив", L"Контур Единства",
-    L"Пепельная окраина", L"Вольные Пустоши", L"Караванный Разлом",
-    L"Серые Причалы", L"Клисанский шрам", L"Зелёная Рана",
-    L"Споровый Рубеж", L"Немая Зараза"
-};
+/* Sector names are NOT rewritten from inside this DLL at all: the sector
+   label the map actually draws lives in a generic BlockPar-style config-tree
+   "row" object (VMT 0x008273a8, one per Constellations.Name entry, found
+   contiguous in memory 0x30 bytes apart) that is completely separate from
+   the sector game object tracked below (g_ce_live_sectors) -- finding those
+   rows needs a bounded memory scan, and the one in-process scan attempt
+   ever tried for this (ce_find_live_sector_rows) correlated with a real
+   TGalaxy.NextDay crash and was removed. Doing the exact same kind of scan
+   from a separate OS process instead (tools/native/ce_sector_name_helper.c,
+   invoked via CreateProcess in ce_spawn_sector_name_helper below) gets the
+   same result without ever running on any of this process's own threads,
+   so it cannot reproduce that crash. Its own vanilla/Second-Home name pools
+   are the single source of truth now; nothing here duplicates them. First
+   version of that pool was uniform two-word "Adjective + Noun" (matching
+   the same mistake already fixed for stars/planets/stations) -- rebuilt to
+   mostly single words once decompiled Constellations.Name showed vanilla's
+   20 sector names are 100% single words, zero exceptions. */
 
 /* Planet name pointer offset (+0x14) confirmed via ce_dump_named_object
    live dump: object_ptr+0x14 decoded as a valid immortal Unicode string
@@ -2043,6 +2070,47 @@ static int ce_read_plain_list(uint32_t list, uint32_t *array_out, uint32_t *coun
     return 1;
 }
 
+static volatile LONG g_ce_star_con_compared = 0;
+
+/* docs/TGALAXY_LOADFROMSTREAM_FORMAT.md's "Stage 1" (self+0x164, native
+   TStar) turned out to be a separate, far more elaborate class than
+   "Stage 2" (self+0x2c, native TCon) -- the object this whole session has
+   actually been reading/writing as "the star" (name at +0x10, X/Y at
+   +0x14/+0x18) is TCon, not TStar; RScript's GalaxyStar()/StarToCon() were
+   never touching TStar at all. Before spending more effort fully
+   disassembling TStar's large nested format, check empirically whether a
+   synthesized second galaxy would even need TStar.count to match
+   TCon.count: if the live galaxy's own two counts already differ, they are
+   independent and a minimal single-TStar record would be enough
+   regardless of how many TCon systems are created. Read-only, bounded,
+   one-shot -- same safety class as every other list read this session. */
+uint32_t CE_CALL CEAdapterCompareStarConCounts(uint32_t galaxy_ptr) {
+    uint32_t tstar_list, tstar_array, tstar_count = 0;
+    uint32_t tcon_list, tcon_array, tcon_count = 0;
+    char report[192];
+    int report_size;
+    int tstar_ok, tcon_ok;
+
+    if (InterlockedCompareExchange(&g_ce_star_con_compared, 1, 0) != 0) return 0u;
+    if (!ce_region_has_access((const void *)(uintptr_t)(galaxy_ptr + 0x164u), 4u, 0) ||
+        !ce_region_has_access((const void *)(uintptr_t)(galaxy_ptr + 0x2cu), 4u, 0)) {
+        return 0u;
+    }
+    tstar_list = *(const uint32_t *)(uintptr_t)(galaxy_ptr + 0x164u);
+    tcon_list = *(const uint32_t *)(uintptr_t)(galaxy_ptr + 0x2cu);
+    tstar_ok = ce_read_plain_list(tstar_list, &tstar_array, &tstar_count);
+    tcon_ok = ce_read_plain_list(tcon_list, &tcon_array, &tcon_count);
+    report_size = snprintf(report, sizeof(report),
+        "{\"status\":\"star-con-count-compare\",\"tstar_ok\":%s,\"tstar_count\":%u,"
+        "\"tcon_ok\":%s,\"tcon_count\":%u,\"equal\":%s}\r\n",
+        tstar_ok ? "true" : "false", tstar_count,
+        tcon_ok ? "true" : "false", tcon_count,
+        (tstar_ok && tcon_ok && tstar_count == tcon_count) ? "true" : "false");
+    if (report_size > 0) ce_write_text_marker(
+        "live-arm-switch.jsonl", report, (size_t)report_size);
+    return 1u;
+}
+
 static int ce_live_read_wide_string(uint32_t pointer, const wchar_t **text_out,
         uint32_t *characters_out) {
     uint32_t byte_length;
@@ -2093,7 +2161,52 @@ static int ce_capture_live_arm(uint32_t galaxy_ptr) {
     ce_live_sector_snapshot *new_sectors;
     ce_live_sector_snapshot *new_sector_rows = NULL;
     if (g_ce_live_snapshot_galaxy == galaxy_ptr && g_ce_live_cons != NULL) return 1;
-    if (g_ce_live_snapshot_galaxy != 0u) return 0;
+    if (g_ce_live_snapshot_galaxy != 0u) {
+        /* galaxy_ptr no longer matches what we captured before -- most
+           likely the player loaded a different (or the same) save from
+           the in-game menu without restarting Rangers.exe, which appears
+           to allocate a fresh TGalaxy object rather than reusing the old
+           one. A full process restart would have reset every one of these
+           globals to zero fresh via DllMain, so this branch specifically
+           means "same process, new galaxy" -- the old capture is now
+           permanently stale (CEAdapterSetSystemSector/CEAdapterPortalReady
+           both gate on an exact galaxy_ptr match, so leaving it as-is
+           would silently and permanently break the portal/arm-switch
+           feature for the rest of this process's life, which is exactly
+           the "anchor stops working after reloading an earlier save" bug
+           this fixes). Free the stale snapshot and fall through to
+           recapture fresh for the new galaxy. There is no reliable way to
+           know which arm should be "active" for a freshly loaded save --
+           this mod's arm state is a pure runtime overlay, never persisted
+           in the save file itself -- so default back to the old arm, same
+           as a fresh process would start. Any in-flight portal state is
+           tied to the old (now invalid) galaxy_ptr too and must be
+           dropped for the same reason. */
+        if (g_ce_live_cons != NULL) HeapFree(GetProcessHeap(), 0, g_ce_live_cons);
+        if (g_ce_live_sectors != NULL) HeapFree(GetProcessHeap(), 0, g_ce_live_sectors);
+        if (g_ce_live_sector_rows != NULL) HeapFree(GetProcessHeap(), 0, g_ce_live_sector_rows);
+        if (g_ce_live_planets != NULL) HeapFree(GetProcessHeap(), 0, g_ce_live_planets);
+        if (g_ce_live_stations != NULL) HeapFree(GetProcessHeap(), 0, g_ce_live_stations);
+        g_ce_live_cons = NULL;
+        g_ce_live_sectors = NULL;
+        g_ce_live_sector_rows = NULL;
+        g_ce_live_planets = NULL;
+        g_ce_live_stations = NULL;
+        g_ce_live_planet_count = 0u;
+        g_ce_live_planet_capacity = 0u;
+        g_ce_live_station_count = 0u;
+        g_ce_live_station_capacity = 0u;
+        g_ce_live_con_count = 0u;
+        g_ce_live_mapped_system_count = 0u;
+        g_ce_live_sector_count = 0u;
+        g_ce_live_sector_row_count = 0u;
+        g_ce_live_snapshot_galaxy = 0u;
+        InterlockedExchange(&g_ce_active_arm, 0);
+        InterlockedExchange(&g_ce_portal_status, 0);
+        InterlockedExchange(&g_ce_portal_hole_id, 0);
+        InterlockedExchange(&g_ce_portal_galaxy_ptr, 0);
+        InterlockedExchange(&g_ce_live_switch_lock, 0);
+    }
     char diagnostic[256];
     int diagnostic_size;
     if (!ce_region_has_access((const void *)(uintptr_t)(galaxy_ptr + 0x38u), 4u, 0)) {
@@ -2209,6 +2322,71 @@ static int ce_live_names_equal(uint32_t left, uint32_t right) {
     return memcmp(left_text, right_text, left_count * sizeof(wchar_t)) == 0;
 }
 
+static volatile LONG g_ce_pending_sector_spawn_arm = -1;
+
+/* Launches tools/native/ce_sector_name_helper.exe (built to the same
+   directory as this DLL, see build-engine-adapter.ps1) as a completely
+   separate OS process, passing our own PID and the target arm, so it can
+   rewrite the 20 Constellations.Name "row" objects via its own
+   ReadProcessMemory/WriteProcessMemory calls -- see the comment above
+   g_ce_second_planet_names for why this has to live outside this process.
+
+   IMPORTANT: this must never be called directly from ce_apply_live_arm (or
+   anything else reachable from Turn-code) -- an early version did exactly
+   that, reasoning that CreateProcess "returns almost immediately, so it
+   cannot reintroduce the loading-stall bug that a blocking Sleep() caused
+   right here previously." That reasoning only ruled out the BLOCKING
+   variant of the hazard; a live crash on portal entry (matching the exact
+   TGalaxy.NextDay crash class already fought earlier in this project --
+   see the DllMain/ce_hook_thread_proc comments) showed that the hazard is
+   the heavy OS call ITSELF happening on a stack nested inside NextDay, not
+   specifically blocking. CreateThread was already known-unsafe there;
+   CreateProcess apparently is too. This function must only ever be called
+   from ce_sector_spawn_thread_proc, a dedicated thread started once from
+   DllMain (never from Turn-code), which polls g_ce_pending_sector_spawn_arm
+   instead. ce_apply_live_arm only ever sets that flag (a plain interlocked
+   write, no OS call, safe from any call stack) -- see the bottom of that
+   function. */
+static void ce_spawn_sector_name_helper(int second_home) {
+    char module_path[MAX_PATH];
+    char command_line[MAX_PATH + 64];
+    char *last_slash;
+    DWORD length;
+    STARTUPINFOA startup_info;
+    PROCESS_INFORMATION process_info;
+
+    length = GetModuleFileNameA(g_ce_adapter_instance, module_path, sizeof(module_path));
+    if (length == 0u || length >= sizeof(module_path)) return;
+    last_slash = strrchr(module_path, '\\');
+    if (last_slash == NULL) return;
+    last_slash[1] = '\0';
+    if (snprintf(command_line, sizeof(command_line), "\"%sce_sector_name_helper.exe\" %lu %s",
+            module_path, (unsigned long)GetCurrentProcessId(),
+            second_home ? "second" : "old") < 0) return;
+    ZeroMemory(&startup_info, sizeof(startup_info));
+    startup_info.cb = sizeof(startup_info);
+    ZeroMemory(&process_info, sizeof(process_info));
+    if (CreateProcessA(NULL, command_line, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+            NULL, NULL, &startup_info, &process_info)) {
+        CloseHandle(process_info.hThread);
+        CloseHandle(process_info.hProcess);
+    }
+}
+
+/* Runs forever on its own thread (started once from DllMain, see the
+   comment there), completely decoupled from Turn-code/NextDay. Polling
+   interval is not latency-sensitive: the sector rename is already a
+   one-time visual settle after a portal transition, a few hundred
+   milliseconds of extra lag here is unnoticeable. */
+static DWORD WINAPI ce_sector_spawn_thread_proc(LPVOID unused) {
+    (void)unused;
+    for (;;) {
+        LONG requested = InterlockedExchange(&g_ce_pending_sector_spawn_arm, -1);
+        if (requested >= 0) ce_spawn_sector_name_helper(requested != 0);
+        Sleep(75);
+    }
+}
+
 static void ce_apply_live_arm(int second_home) {
     uint32_t index;
     uint32_t seed = (uint32_t)InterlockedCompareExchange(&g_ce_live_seed, 0, 0);
@@ -2271,12 +2449,17 @@ static void ce_apply_live_arm(int second_home) {
         memcpy((void *)(uintptr_t)(item->object + 0x14u), &x, sizeof(x));
         memcpy((void *)(uintptr_t)(item->object + 0x18u), &y, sizeof(y));
     }
-    /* Sector renaming is intentionally skipped here: the dumped object
-       layout showed +0x0c is a coordinate (float), not a name pointer --
-       the offset inherited from the removed VMT-scan code was wrong for
-       this class. Writing a name pointer there would corrupt the
-       sector's own position. Star repositioning/renaming above is
-       unaffected since it uses the confirmed-correct TCon offsets. */
+    /* Sector NAME rewriting never touches this object at all -- see the
+       comment above g_ce_second_planet_names for why (+0x0c here is a
+       coordinate, not a name pointer; the real label lives in a separate
+       config-tree "row" object found and rewritten by an external helper
+       process, spawned below via ce_spawn_sector_name_helper). This loop
+       only ever runs g_ce_live_sector_row_count times, which stays 0 --
+       ce_find_live_sector_rows (the in-process scan that would have
+       populated it) is permanently disabled after correlating with a
+       crash -- so it is dead code kept only so the row-snapshot capture
+       machinery above compiles; it can be removed outright once nothing
+       else references g_ce_live_sector_rows. */
     for (index = 0; index < g_ce_live_sector_row_count; ++index) {
         ce_live_sector_snapshot *item = &g_ce_live_sector_rows[index];
         uint32_t sector_index;
@@ -2351,6 +2534,7 @@ static void ce_apply_live_arm(int second_home) {
             second_home ? item->second_name : item->old_name;
     }
     InterlockedExchange(&g_ce_active_arm, second_home ? 1 : 0);
+    InterlockedExchange(&g_ce_pending_sector_spawn_arm, second_home ? 1 : 0);
     report_size = snprintf(report, sizeof(report),
         "{\"status\":\"switched\",\"abi\":%u,\"arm\":\"%s\","
         "\"systems\":%u,\"sectors\":%u,\"planets\":%u,\"stations\":%u}\r\n",
@@ -2698,6 +2882,180 @@ uint32_t CE_CALL CEAdapterDumpNamedObject(uint32_t object_ptr, uint32_t kind) {
     return 1u;
 }
 
+static volatile LONG g_ce_ship_snapshot_calls = 0;
+
+/* Same bounded read/string-heuristic dump as ce_dump_named_object, wider
+   window (0x400): the player ship (Player(), a TStarShip) is one of the
+   larger native object classes touched so far and its item/cargo list is
+   not yet known to live within any smaller window already proven safe.
+   phase is a caller-supplied tag (0 = before AddItemToShip, 1 = after --
+   see the CE_MapSmoke.rson cheat-grant block, which now brackets the
+   existing, already-working AddItemToShip call with a snapshot on each
+   side) so a single trigger of the cheat produces a matched before/after
+   pair in the same marker file, without needing a separately-timed
+   external snapshot. Capped at 64 total calls (not gated to one-shot,
+   since it needs at least 2 calls per cheat use) purely to keep the log
+   file from growing unbounded if the cheat is used repeatedly. */
+uint32_t CE_CALL CEAdapterDumpShipSnapshot(uint32_t ship_ptr, uint32_t phase) {
+    char diagnostic[16384];
+    int diagnostic_size;
+    uint32_t offset;
+    size_t used = 0;
+    int written;
+
+    if (ship_ptr == 0u || (uint32_t)InterlockedIncrement(&g_ce_ship_snapshot_calls) > 64u) return 0u;
+    written = snprintf(diagnostic, sizeof(diagnostic),
+        "{\"status\":\"ship-snapshot\",\"phase\":%u,\"ship_ptr\":%u,\"words\":[",
+        phase, ship_ptr);
+    if (written < 0) return 0u;
+    used = (size_t)written;
+    for (offset = 0u; offset < 0x400u && used + 96u < sizeof(diagnostic); offset += 4u) {
+        uint32_t value = 0u;
+        int has_string = 0;
+        wchar_t preview[24];
+        uint32_t preview_len = 0u;
+        if (ce_region_has_access(
+                (const void *)(uintptr_t)(ship_ptr + offset), 4u, 0)) {
+            value = *(const uint32_t *)(uintptr_t)(ship_ptr + offset);
+            if (value >= 0x10000u &&
+                    ce_region_has_access((const void *)(uintptr_t)(value - 4u), 4u, 0)) {
+                uint32_t byte_length = *(const uint32_t *)(uintptr_t)(value - 4u);
+                if (byte_length >= 2u && byte_length <= 64u && (byte_length & 1u) == 0u &&
+                        ce_region_has_access((const void *)(uintptr_t)value, byte_length, 0)) {
+                    const wchar_t *text = (const wchar_t *)(uintptr_t)value;
+                    preview_len = byte_length / 2u;
+                    if (preview_len > 20u) preview_len = 20u;
+                    memcpy(preview, text, preview_len * sizeof(wchar_t));
+                    has_string = 1;
+                }
+            }
+        }
+        written = snprintf(diagnostic + used, sizeof(diagnostic) - used,
+            "%s{\"off\":%u,\"val\":%u", offset == 0u ? "" : ",", offset, value);
+        if (written > 0) used += (size_t)written;
+        if (has_string && used + 8u + preview_len * 6u < sizeof(diagnostic)) {
+            uint32_t k;
+            written = snprintf(diagnostic + used, sizeof(diagnostic) - used, ",\"s\":\"");
+            if (written > 0) used += (size_t)written;
+            for (k = 0u; k < preview_len && used + 8u < sizeof(diagnostic); ++k) {
+                written = snprintf(diagnostic + used, sizeof(diagnostic) - used,
+                    "\\u%04x", (unsigned)preview[k]);
+                if (written > 0) used += (size_t)written;
+            }
+            written = snprintf(diagnostic + used, sizeof(diagnostic) - used, "\"");
+            if (written > 0) used += (size_t)written;
+        }
+        written = snprintf(diagnostic + used, sizeof(diagnostic) - used, "}");
+        if (written > 0) used += (size_t)written;
+    }
+    diagnostic_size = snprintf(diagnostic + used, sizeof(diagnostic) - used, "]}\r\n");
+    if (diagnostic_size > 0) used += (size_t)diagnostic_size;
+    ce_write_text_marker("live-arm-switch.jsonl", diagnostic, used);
+    return 1u;
+}
+
+static volatile LONG g_ce_ship_watch_started = 0;
+static volatile LONG g_ce_ship_watch_generation = 0;
+static uint32_t g_ce_ship_watch_previous[0x100];
+
+static int ce_read_ship_words(uint32_t ship_ptr, uint32_t *words_out) {
+    uint32_t offset;
+    for (offset = 0u; offset < 0x400u; offset += 4u) {
+        if (!ce_region_has_access((const void *)(uintptr_t)(ship_ptr + offset), 4u, 0)) return 0;
+        words_out[offset / 4u] = *(const uint32_t *)(uintptr_t)(ship_ptr + offset);
+    }
+    return 1;
+}
+
+/* Passive, generic diff watcher -- unlike CEAdapterDumpShipSnapshot (which
+   only fires around this mod's own AddItemToShip call), this catches a
+   change caused by ANYTHING, including a vanilla dev cheat (e.g. "ARTS",
+   which the user says grants every artifact in the game) that never goes
+   through our own Turn-code path at all. Called every Turn from the
+   existing "Adapter smoke" block (already runs unconditionally each
+   Turn, see CE_MapSmoke.rson); compares the ship's 0x400-byte window
+   against what it saw on the previous Turn and, on any difference, dumps
+   the full current window plus the exact list of changed byte offsets.
+   First call only establishes a baseline (nothing to diff against yet).
+   Capped at 64 dumps total, same log-growth reason as
+   CEAdapterDumpShipSnapshot. */
+uint32_t CE_CALL CEAdapterWatchShipForChanges(uint32_t ship_ptr) {
+    uint32_t current[0x100];
+    uint32_t changed_offsets[0x100];
+    uint32_t changed_count = 0u;
+    uint32_t offset;
+    char diagnostic[16384];
+    int diagnostic_size;
+    size_t used = 0;
+    int written;
+    int first_time;
+
+    if (ship_ptr == 0u || !ce_read_ship_words(ship_ptr, current)) return 0u;
+    first_time = InterlockedCompareExchange(&g_ce_ship_watch_started, 1, 0) == 0;
+    if (!first_time) {
+        for (offset = 0u; offset < 0x100u; ++offset) {
+            if (current[offset] != g_ce_ship_watch_previous[offset]) {
+                changed_offsets[changed_count++] = offset * 4u;
+            }
+        }
+    }
+    memcpy(g_ce_ship_watch_previous, current, sizeof(current));
+    if (first_time || changed_count == 0u) return 1u;
+    if ((uint32_t)InterlockedIncrement(&g_ce_ship_watch_generation) > 64u) return 1u;
+
+    written = snprintf(diagnostic, sizeof(diagnostic),
+        "{\"status\":\"ship-watch-changed\",\"ship_ptr\":%u,\"changed_count\":%u,\"changed_offsets\":[",
+        ship_ptr, changed_count);
+    if (written < 0) return 1u;
+    used = (size_t)written;
+    for (offset = 0u; offset < changed_count && used + 16u < sizeof(diagnostic); ++offset) {
+        written = snprintf(diagnostic + used, sizeof(diagnostic) - used,
+            "%s%u", offset == 0u ? "" : ",", changed_offsets[offset]);
+        if (written > 0) used += (size_t)written;
+    }
+    written = snprintf(diagnostic + used, sizeof(diagnostic) - used, "],\"words\":[");
+    if (written > 0) used += (size_t)written;
+    for (offset = 0u; offset < 0x100u && used + 96u < sizeof(diagnostic); ++offset) {
+        uint32_t value = current[offset];
+        int has_string = 0;
+        wchar_t preview[24];
+        uint32_t preview_len = 0u;
+        if (value >= 0x10000u &&
+                ce_region_has_access((const void *)(uintptr_t)(value - 4u), 4u, 0)) {
+            uint32_t byte_length = *(const uint32_t *)(uintptr_t)(value - 4u);
+            if (byte_length >= 2u && byte_length <= 64u && (byte_length & 1u) == 0u &&
+                    ce_region_has_access((const void *)(uintptr_t)value, byte_length, 0)) {
+                const wchar_t *text = (const wchar_t *)(uintptr_t)value;
+                preview_len = byte_length / 2u;
+                if (preview_len > 20u) preview_len = 20u;
+                memcpy(preview, text, preview_len * sizeof(wchar_t));
+                has_string = 1;
+            }
+        }
+        written = snprintf(diagnostic + used, sizeof(diagnostic) - used,
+            "%s{\"off\":%u,\"val\":%u", offset == 0u ? "" : ",", offset * 4u, value);
+        if (written > 0) used += (size_t)written;
+        if (has_string && used + 8u + preview_len * 6u < sizeof(diagnostic)) {
+            uint32_t k;
+            written = snprintf(diagnostic + used, sizeof(diagnostic) - used, ",\"s\":\"");
+            if (written > 0) used += (size_t)written;
+            for (k = 0u; k < preview_len && used + 8u < sizeof(diagnostic); ++k) {
+                written = snprintf(diagnostic + used, sizeof(diagnostic) - used,
+                    "\\u%04x", (unsigned)preview[k]);
+                if (written > 0) used += (size_t)written;
+            }
+            written = snprintf(diagnostic + used, sizeof(diagnostic) - used, "\"");
+            if (written > 0) used += (size_t)written;
+        }
+        written = snprintf(diagnostic + used, sizeof(diagnostic) - used, "}");
+        if (written > 0) used += (size_t)written;
+    }
+    diagnostic_size = snprintf(diagnostic + used, sizeof(diagnostic) - used, "]}\r\n");
+    if (diagnostic_size > 0) used += (size_t)diagnostic_size;
+    ce_write_text_marker("live-arm-switch.jsonl", diagnostic, used);
+    return 1u;
+}
+
 static volatile LONG g_ce_sector_survey_started = 0;
 
 /* Same bounded-read/string-heuristic shape as ce_dump_named_object, but a
@@ -2884,6 +3242,162 @@ uint32_t CE_CALL CEAdapterCaptureStationName(uint32_t galaxy_ptr, uint32_t stati
         (uint32_t)(sizeof(g_ce_second_station_names) / sizeof(g_ce_second_station_names[0])));
 }
 
+/* star_owner_value is whatever RScript's own StarOwner(star) call just
+   returned (1 == Dominators, per the documented 0=Coalition/1=Dominators/
+   2=Pirates scale) -- this DLL has no way to call that built-in itself.
+   Idempotent per system_index (first value seen wins) so the captured
+   baseline always reflects the true old-arm state, even though the
+   per-star Turn-code loop that calls this keeps running every turn
+   afterwards, including while Second Home's own suppression is active. */
+uint32_t CE_CALL CEAdapterCaptureDominatorFlag(uint32_t system_index, uint32_t star_owner_value) {
+    if (g_ce_live_cons == NULL || system_index >= g_ce_live_con_count) return 0u;
+    if (g_ce_live_cons[system_index].dominator_captured == 0u) {
+        g_ce_live_cons[system_index].old_dominator = star_owner_value == 1u ? 1u : 0u;
+        g_ce_live_cons[system_index].dominator_captured = 1u;
+    }
+    return 1u;
+}
+
+uint32_t CE_CALL CEAdapterWasDominator(uint32_t system_index) {
+    if (g_ce_live_cons == NULL || system_index >= g_ce_live_con_count) return 0u;
+    return g_ce_live_cons[system_index].old_dominator;
+}
+
+static volatile LONG g_ce_dominator_count_logged = 0;
+
+/* One-shot diagnostic: dominators are still visible after 0.0.33's fix
+   despite the per-turn sweep confirmed running (ship-watch-changed fired
+   repeatedly during the Second Home visit). Prime suspect: the dominator
+   flag capture -- gated behind ce_capture_live_arm's "first Turn tick
+   ever" idempotent guard, same as planet/station name capture -- may run
+   too early (before the engine has finished computing real conquest
+   state after a save load), permanently freezing every system's captured
+   flag at 0 (Coalition) regardless of true ownership. This counts how
+   many of the captured systems actually show old_dominator==1, logged
+   once so it can be checked without guessing further. */
+uint32_t CE_CALL CEAdapterLogDominatorFlagCount(void) {
+    uint32_t index, count = 0u;
+    char payload[96];
+    int size;
+    if (InterlockedCompareExchange(&g_ce_dominator_count_logged, 1, 0) != 0) return 0u;
+    if (g_ce_live_cons != NULL) {
+        for (index = 0; index < g_ce_live_con_count; ++index) {
+            if (g_ce_live_cons[index].old_dominator != 0u) ++count;
+        }
+    }
+    size = snprintf(payload, sizeof(payload),
+        "{\"status\":\"dominator-flag-count\",\"count\":%u,\"total\":%u}\r\n",
+        count, g_ce_live_con_count);
+    if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", payload, (size_t)size);
+    return 1u;
+}
+
+typedef struct ce_hidden_boss_entry {
+    uint32_t ship_ptr;
+    uint32_t original_star_ptr;
+} ce_hidden_boss_entry;
+
+#define CE_HIDDEN_BOSS_CAPACITY 32u
+static ce_hidden_boss_entry g_ce_hidden_bosses[CE_HIDDEN_BOSS_CAPACITY];
+static uint32_t g_ce_hidden_boss_count = 0u;
+
+/* Remembers a hidden boss/station ship's original star as a plain raw
+   pointer in this DLL's own memory -- the same proven storage pattern
+   used throughout this project (g_ce_live_cons etc.), deliberately NOT
+   using RScript's ShipAddCustomShipInfo/ShipCustomShipInfoData for this:
+   that mechanism's numeric data slots are documented as plain "int"
+   values (e.g. CurTurn()+Rnd(...) in every real reference-mod example
+   found), never as a native object reference -- storing a raw star
+   pointer through it was an untested assumption this project's own
+   practice is to avoid shipping without verification. Idempotent per
+   ship_ptr (overwrites if already present) so a ship hidden more than
+   once (e.g. re-entering Second Home before ever returning) does not
+   grow the table or leak an entry. */
+uint32_t CE_CALL CEAdapterHideBossShip(uint32_t ship_ptr, uint32_t original_star_ptr) {
+    uint32_t index;
+    if (ship_ptr == 0u || original_star_ptr == 0u) return 0u;
+    for (index = 0; index < g_ce_hidden_boss_count; ++index) {
+        if (g_ce_hidden_bosses[index].ship_ptr == ship_ptr) {
+            g_ce_hidden_bosses[index].original_star_ptr = original_star_ptr;
+            return 1u;
+        }
+    }
+    if (g_ce_hidden_boss_count >= CE_HIDDEN_BOSS_CAPACITY) return 0u;
+    g_ce_hidden_bosses[g_ce_hidden_boss_count].ship_ptr = ship_ptr;
+    g_ce_hidden_bosses[g_ce_hidden_boss_count].original_star_ptr = original_star_ptr;
+    ++g_ce_hidden_boss_count;
+    return 1u;
+}
+
+/* Returns the remembered original star for ship_ptr (0 if none), and
+   removes the entry (swap-with-last) so it is only ever consumed once. */
+uint32_t CE_CALL CEAdapterRestoreBossShip(uint32_t ship_ptr) {
+    uint32_t index;
+    for (index = 0; index < g_ce_hidden_boss_count; ++index) {
+        if (g_ce_hidden_bosses[index].ship_ptr == ship_ptr) {
+            uint32_t original_star = g_ce_hidden_bosses[index].original_star_ptr;
+            g_ce_hidden_bosses[index] = g_ce_hidden_bosses[g_ce_hidden_boss_count - 1u];
+            --g_ce_hidden_boss_count;
+            return original_star;
+        }
+    }
+    return 0u;
+}
+
+/* Same idea as CEAdapterRestoreBossShip but for the restore-side loop,
+   which does not already know each ship_ptr up front -- iterates whatever
+   is currently in the table by position instead. Returns 0 once index is
+   past the end (safe loop terminator for RScript's while-loop style). */
+uint32_t CE_CALL CEAdapterHiddenBossCount(void) {
+    return g_ce_hidden_boss_count;
+}
+
+uint32_t CE_CALL CEAdapterHiddenBossShipAt(uint32_t index) {
+    if (index >= g_ce_hidden_boss_count) return 0u;
+    return g_ce_hidden_bosses[index].ship_ptr;
+}
+
+/* Fine-grained progress marker for live bisection without needing another
+   rebuild-test round-trip: writes {"status":"checkpoint","id":N} to the
+   debug log. Placed at each major step of the arm-switch-completion
+   Dominator/boss handling in CE_MapSmoke.rson so that if the game crashes
+   again, the log's last checkpoint id pinpoints exactly which step was
+   reached, the same way the project's own proven "strip Turn-code down,
+   add pieces back" bisection technique works, but in one pass instead of
+   several rebuild cycles. */
+uint32_t CE_CALL CEAdapterLogCheckpoint(uint32_t id) {
+    char payload[64];
+    int size = snprintf(payload, sizeof(payload), "{\"status\":\"checkpoint\",\"id\":%u}\r\n", id);
+    if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", payload, (size_t)size);
+    return 1u;
+}
+
+/* Two independent argument changes to the BuildListOfNewShips call site
+   (sinceId 0->1, then typeSet/raceSet swapped to the working t_Kling
+   filter) both still crashed at the exact same checkpoint, with the crash
+   never reaching just past the call -- pointing at WHEN it is called
+   (nested in NextDay's own call stack, on the exact Turn the portal
+   transition just completed) rather than WHAT arguments it is given.
+   Deferring the sweep to the very next unconditional per-Turn tick (the
+   "Adapter smoke" block, which fires far more often than once per
+   calendar day during normal flight, so the delay is imperceptible)
+   moves the call off that uniquely fragile moment -- the same fix shape
+   already proven for ce_spawn_sector_name_helper's CreateProcess call. */
+static volatile LONG g_ce_pending_ship_sweep_arm = -1;
+
+uint32_t CE_CALL CEAdapterSetPendingShipSweep(uint32_t second_home) {
+    InterlockedExchange(&g_ce_pending_ship_sweep_arm, second_home != 0u ? 1 : 0);
+    return 1u;
+}
+
+/* Returns 2 if nothing is pending (RScript-friendly sentinel distinct
+   from the real 0/1 arm values), consuming the flag on any non-empty
+   read so it only ever fires once per arm switch. */
+uint32_t CE_CALL CEAdapterConsumePendingShipSweep(void) {
+    LONG value = InterlockedExchange(&g_ce_pending_ship_sweep_arm, -1);
+    return value < 0 ? 2u : (uint32_t)value;
+}
+
 uint32_t CE_CALL CEAdapterPortalReady(uint32_t galaxy_ptr) {
     uint32_t ready = g_ce_live_snapshot_galaxy == galaxy_ptr && g_ce_live_cons != NULL &&
         g_ce_live_sectors != NULL && g_ce_live_sector_count != 0u &&
@@ -2911,11 +3425,31 @@ uint32_t CE_CALL CEAdapterPortalStatus(void) {
    no reference mod calls ShipAddCustomShipInfo or any other engine-mutating
    API from interface code (OnKey/OnPressCode) -- every real example is
    from act-code or a dialog handler, which fire far less often and never
-   from three duplicate panels at once. This function does nothing but
-   advance a plain counter, so it is safe to call from OnKey on every
-   keystroke (even 2-3 times per key from duplicate panels); the actual
-   item grant runs from the Turn-code poll in CE_MapSmoke.rson instead,
-   the same proven-safe context every other heavy call in this mod uses. */
+   from three duplicate panels at once. This function itself does nothing
+   but advance a plain counter (safe to call from OnKey on every keystroke,
+   even 2-3 times per key from duplicate panels); the actual item grant
+   still runs from the Turn-code poll in CE_MapSmoke.rson, the same
+   proven-safe context every other heavy call in this mod uses -- that part
+   is unchanged.
+
+   What changed: this used to always return 0, leaving the player waiting
+   for a real day to pass before Turn-code ever re-ran and noticed the
+   trigger. Confirmed via the decompiled RScript function reference
+   (references\Universe-Original-Mods-Source\Script functions list.txt,
+   "Ход (даты)" section, right next to CurTurn -- a function this mod
+   already calls elsewhere) that ForceNextDay() is a real, documented,
+   no-argument RScript function that forces the next Turn to run
+   immediately. Now returns 1 exactly on the keystroke that completes the
+   sequence, so CE_MapSmoke.Main.txt can call ForceNextDay() right there --
+   still never touching ship/cargo state itself from OnKey, just nudging
+   the clock forward so the ALREADY-safe Turn-code path (which does the
+   real mutation) fires now instead of whenever the player next skips a
+   day. This still needs a real live-game check before it can be trusted:
+   TGalaxy.NextDay is the exact code path that has crashed this project
+   multiple times before when entered in a nested/reentrant way (see the
+   DllMain/ce_hook_thread_proc comments), and OnKey firing from three
+   duplicate panels at once means ForceNextDay could plausibly be invoked
+   more than once for a single keystroke. */
 uint32_t CE_CALL CEAdapterAdvanceCheatCode(uint32_t key, uint32_t keymod) {
     static const uint32_t cheat[] = {'E', 'L', 'T', 'A', 'N'};
     char diagnostic[128];
@@ -2935,6 +3469,7 @@ uint32_t CE_CALL CEAdapterAdvanceCheatCode(uint32_t key, uint32_t keymod) {
         InterlockedExchange(&g_ce_cheat_triggered, 1);
         ce_write_text_marker("live-arm-switch.jsonl",
             "{\"status\":\"cheat-triggered\"}\r\n", 30u);
+        return 1u;
     }
     return 0u;
 }
