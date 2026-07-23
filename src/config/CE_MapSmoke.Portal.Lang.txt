@@ -16,7 +16,7 @@ ShipInfo ^{
                     04=else if(!ShipInHole(Player()) && cePortalStatus()==2)
                     05 ^{
                         01=unknown ceCompletePortal=ImportedFunction('CESecondMapAdapter','CEAdapterCompleteRegisteredPortal');
-                        02=if(ceCompletePortal(GalaxyPtr())) ShipDeleteCustomShipInfo(0,CurInfo());
+                        02=if(ceCompletePortal(GalaxyPtr(),CurTurn())) ShipDeleteCustomShipInfo(0,CurInfo());
                     }
                 }
                 OnActCodeTypes=t_OnStep

@@ -183,16 +183,81 @@ static int row_is_valid(HANDLE process, uint32_t row) {
                sizeof(name_text) / sizeof(name_text[0]));
 }
 
-int wmain(int argc, wchar_t **argv) {
-    DWORD pid;
-    int want_second_home;
-    HANDLE process;
+/* Primary anchor path: find the fixed vanilla NAME text ("Дицея", sector
+   20's name field) and confirm via its neighbour's index text ("20").
+   Only works while that name string is still actually referenced by a
+   row -- i.e. only on the FIRST rename of a given process, before any
+   "second" rename has overwritten every row's +0x18 with a new pointer. */
+static uint32_t find_anchor_via_name(HANDLE process) {
     static const wchar_t needle_text[] = L"Дицея";
     static const wchar_t needle_index[] = L"20";
     uint32_t string_hits[16];
     size_t string_count;
     uint32_t refs[64];
     size_t ref_count;
+    size_t i;
+
+    string_count = scan_bytes(process, (const unsigned char *)needle_text,
+        sizeof(needle_text) - sizeof(wchar_t), string_hits, 16u);
+    for (i = 0; i < string_count; ++i) {
+        size_t j;
+        ref_count = scan_bytes(process, (const unsigned char *)&string_hits[i],
+            sizeof(string_hits[i]), refs, 64u);
+        for (j = 0; j < ref_count; ++j) {
+            uint32_t candidate_row = refs[j] - 0x18u;
+            wchar_t index_text[32];
+            if (read_unicode_field(process, candidate_row + 0x14u, index_text,
+                        sizeof(index_text) / sizeof(index_text[0])) &&
+                    wcscmp(index_text, needle_index) == 0) {
+                return candidate_row;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Fallback anchor path: the +0x14 INDEX field (a fixed numeric string,
+   "1".."20") is never written by this tool -- only +0x18 (the display
+   name) ever changes -- so it stays a valid, arm-independent anchor even
+   after every row has already been renamed to Second Home names and the
+   vanilla name text no longer exists anywhere in memory. Exact-decode
+   comparison (not just the raw byte match) rules out false hits from the
+   short "20" pattern recurring as a substring of an unrelated longer
+   number elsewhere in memory. */
+static uint32_t find_anchor_via_index(HANDLE process) {
+    static const wchar_t needle_index[] = L"20";
+    uint32_t string_hits[16];
+    size_t string_count;
+    uint32_t refs[64];
+    size_t ref_count;
+    size_t i;
+
+    string_count = scan_bytes(process, (const unsigned char *)needle_index,
+        sizeof(needle_index) - sizeof(wchar_t), string_hits, 16u);
+    for (i = 0; i < string_count; ++i) {
+        wchar_t decoded[32];
+        size_t j;
+        if (!read_unicode_from_pointer(process, string_hits[i], decoded,
+                    sizeof(decoded) / sizeof(decoded[0])) ||
+                wcscmp(decoded, needle_index) != 0) {
+            continue;
+        }
+        ref_count = scan_bytes(process, (const unsigned char *)&string_hits[i],
+            sizeof(string_hits[i]), refs, 64u);
+        for (j = 0; j < ref_count; ++j) {
+            uint32_t candidate_row = refs[j] - 0x14u;
+            if (row_is_valid(process, candidate_row)) {
+                return candidate_row;
+            }
+        }
+    }
+    return 0;
+}
+
+int wmain(int argc, wchar_t **argv) {
+    DWORD pid;
+    int want_second_home;
+    HANDLE process;
     uint32_t anchor_row = 0;
     uint32_t rows[64];
     size_t row_count = 0;
@@ -218,33 +283,15 @@ int wmain(int argc, wchar_t **argv) {
         return 1;
     }
 
-    /* Step 1: find the (always-present, seed-independent) vanilla needle
-       text itself -- string_hits[i] is the STRING's own address. */
-    string_count = scan_bytes(process, (const unsigned char *)needle_text,
-        sizeof(needle_text) - sizeof(wchar_t), string_hits, 16u);
-    if (string_count == 0u) {
-        fwprintf(stderr, L"needle not found -- vanilla Constellations.Name not loaded?\n");
-        CloseHandle(process);
-        return 1;
-    }
-
-    /* Step 2: find who points AT that string -- refs[j] is the ADDRESS OF
-       THE FIELD holding that pointer, so (refs[j] - 0x18) is the row base
-       and refs[j] itself IS the row's own +0x18 field address. */
-    for (i = 0; i < string_count && anchor_row == 0u; ++i) {
-        size_t j;
-        ref_count = scan_bytes(process, (const unsigned char *)&string_hits[i],
-            sizeof(string_hits[i]), refs, 64u);
-        for (j = 0; j < ref_count; ++j) {
-            uint32_t candidate_row = refs[j] - 0x18u;
-            wchar_t index_text[32];
-            if (read_unicode_field(process, candidate_row + 0x14u, index_text,
-                        sizeof(index_text) / sizeof(index_text[0])) &&
-                    wcscmp(index_text, needle_index) == 0) {
-                anchor_row = candidate_row;
-                break;
-            }
-        }
+    /* Try the vanilla-name anchor first (fast, very low false-positive
+       risk); if that fails -- e.g. every row has already been renamed to
+       "second" in a prior run of this same tool, so "Дицея" no longer
+       exists anywhere in memory -- fall back to the index-field anchor,
+       which stays valid regardless of which arm's names are currently
+       written. */
+    anchor_row = find_anchor_via_name(process);
+    if (anchor_row == 0u) {
+        anchor_row = find_anchor_via_index(process);
     }
     if (anchor_row == 0u) {
         fwprintf(stderr, L"could not confirm the sector-name row for the anchor\n");

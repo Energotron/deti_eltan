@@ -63,8 +63,9 @@ CE_EXPORT uint32_t CE_CALL CEAdapterCreateAndEnterSecondGalaxy(
     uint32_t galaxy_ptr, uint32_t second_seed, uint32_t player_race
 );
 CE_EXPORT uint32_t CE_CALL CEAdapterSecondGalaxyStatus(void);
-CE_EXPORT uint32_t CE_CALL CEAdapterEnterReadySecondGalaxy(uint32_t galaxy_ptr);
-CE_EXPORT uint32_t CE_CALL CEAdapterReturnToOldGalaxy(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterCreateBareSecondGalaxyForLoad(uint32_t galaxy_ptr, uint32_t second_seed);
+CE_EXPORT uint32_t CE_CALL CEAdapterEnterReadySecondGalaxy(uint32_t galaxy_ptr, uint32_t turn);
+CE_EXPORT uint32_t CE_CALL CEAdapterReturnToOldGalaxy(uint32_t galaxy_ptr, uint32_t turn);
 CE_EXPORT uint32_t CE_CALL CEAdapterActiveArm(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterAbandonEmptySecondGalaxy(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterMarkSecondGalaxyEntryDisabled(void);
@@ -77,6 +78,14 @@ CE_EXPORT uint32_t CE_CALL CEAdapterProbeNextDayOnSecondGalaxy(uint32_t old_gala
 CE_EXPORT uint32_t CE_CALL CEAdapterDumpProcessWindows(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeRawGalaxyPointer(uint32_t galaxy_ptr, uint32_t turn);
 CE_EXPORT uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterLoadSnapshotIntoSecondGalaxy(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterRenameSecondGalaxySystems(uint32_t second_galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterSetRememberedShipStar(uint32_t star_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterGetRememberedShipStar(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterInstallStarLookupRecovery(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterInstallDayProcessRecovery(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterInstallNextDayLabel3Recovery(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterRequestSectorLabelSpawn(uint32_t second_home);
 CE_EXPORT uint32_t CE_CALL CEAdapterArmGalaxySaveSnapshot(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterPollSecondHomeTransform(
     uint32_t galaxy_ptr, uint32_t seed
@@ -100,6 +109,7 @@ CE_EXPORT uint32_t CE_CALL CEAdapterRestoreBossShip(uint32_t ship_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterHiddenBossCount(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterHiddenBossShipAt(uint32_t index);
 CE_EXPORT uint32_t CE_CALL CEAdapterLogCheckpoint(uint32_t id);
+CE_EXPORT uint32_t CE_CALL CEAdapterLogCheckpointValue(uint32_t id, uint32_t value);
 CE_EXPORT uint32_t CE_CALL CEAdapterSetPendingShipSweep(uint32_t second_home);
 CE_EXPORT uint32_t CE_CALL CEAdapterConsumePendingShipSweep(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterBeginSectorSurvey(void);
@@ -119,7 +129,7 @@ CE_EXPORT uint32_t CE_CALL CEAdapterRegisterPortal(
 CE_EXPORT uint32_t CE_CALL CEAdapterEnterRegisteredPortal(
     uint32_t galaxy_ptr, uint32_t hole_id
 );
-CE_EXPORT uint32_t CE_CALL CEAdapterCompleteRegisteredPortal(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterCompleteRegisteredPortal(uint32_t galaxy_ptr, uint32_t turn);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeSaveFormatVersion(uint32_t old_galaxy_ptr, uint32_t turn);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeConClass(uint32_t old_galaxy_ptr, uint32_t turn);
 CE_EXPORT uint32_t CE_CALL CEAdapterGetGeneratedStarCount(uint32_t galaxy_ptr);

@@ -29,6 +29,30 @@ static volatile LONG g_ce_fault_eip = 0;
 static volatile LONG g_ce_fault_access_type = -1;
 static volatile LONG g_ce_fault_access_address = 0;
 static HINSTANCE g_ce_adapter_instance = NULL;
+/* For a software-raised Delphi exception (CE_DELPHI_EXCEPTION_CODE), the
+   ExceptionRecord's own ExceptionAddress lands inside ntdll/kernel32 (the
+   RaiseException plumbing), not at the actual `raise` call site in
+   Rangers.exe -- useless for finding which LoadFromStream stage failed.
+   A heuristic stack scan from the fault-time ESP for words that look like
+   .text return addresses recovers the real call chain without needing a
+   real frame-pointer walk (Delphi/Borland code reliably uses EBP frames,
+   so return addresses sit at predictable-ish offsets above ESP). */
+#define CE_FAULT_STACK_CANDIDATES 12
+static volatile LONG g_ce_fault_stack[CE_FAULT_STACK_CANDIDATES];
+static volatile LONG g_ce_fault_stack_count = 0;
+
+/* Delphi/Borland's own `raise` statement (e.g. the bounds-check helper
+   inside TGalaxy.LoadFromStream's reader, VA 0x0082ef40, confirmed by
+   disassembly) does not fault the CPU -- it calls System.@RaiseExcept
+   (VA 0x00404e20), which calls Win32 RaiseException() with this exact
+   magic code (confirmed: `push 0xeedfade` immediately before the
+   RaiseException call). Our guard originally only caught hardware faults
+   (access violation and friends); a plain Delphi exception raised this
+   way sailed straight through as EXCEPTION_CONTINUE_SEARCH and crashed
+   the whole process outright instead of being recovered, since it tries
+   to unwind through our foreign, non-Delphi call frame. Treat it as
+   another recoverable condition, same as the hardware faults below. */
+#define CE_DELPHI_EXCEPTION_CODE 0xeedfadeu
 
 static LONG WINAPI ce_veh_handler(EXCEPTION_POINTERS *info) {
     DWORD code;
@@ -38,7 +62,7 @@ static LONG WINAPI ce_veh_handler(EXCEPTION_POINTERS *info) {
     code = info->ExceptionRecord->ExceptionCode;
     if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION ||
         code == EXCEPTION_PRIV_INSTRUCTION || code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
-        code == EXCEPTION_STACK_OVERFLOW) {
+        code == EXCEPTION_STACK_OVERFLOW || code == CE_DELPHI_EXCEPTION_CODE) {
         InterlockedExchange(&g_ce_fault_code, (LONG)code);
         InterlockedExchange(&g_ce_fault_eip, (LONG)(uintptr_t)info->ExceptionRecord->ExceptionAddress);
         if (code == EXCEPTION_ACCESS_VIOLATION &&
@@ -50,6 +74,32 @@ static LONG WINAPI ce_veh_handler(EXCEPTION_POINTERS *info) {
         } else {
             InterlockedExchange(&g_ce_fault_access_type, -1);
             InterlockedExchange(&g_ce_fault_access_address, 0);
+        }
+        {
+            /* .text section: VirtualAddress 0x1000, size 0x473800 (confirmed
+               via pefile against this exact installed build) -> VA range
+               0x401000-0x874800. An earlier version of this filter used
+               0x475000 as the high bound, confusing the RVA span with a VA
+               span -- that excluded almost the entire section (including
+               LoadFromStream itself at VA 0x83b6cc) from ever matching. */
+            const uintptr_t text_low = 0x401000u;
+            const uintptr_t text_high = 0x875000u;
+            uintptr_t esp = (uintptr_t)info->ContextRecord->Esp;
+            MEMORY_BASIC_INFORMATION stack_region;
+            LONG found = 0;
+            uintptr_t offset;
+            if (VirtualQuery((const void *)esp, &stack_region, sizeof(stack_region)) == sizeof(stack_region) &&
+                stack_region.State == MEM_COMMIT) {
+                uintptr_t region_end = (uintptr_t)stack_region.BaseAddress + stack_region.RegionSize;
+                for (offset = 0; esp + offset + sizeof(uintptr_t) <= region_end &&
+                     offset < 0x8000u && found < CE_FAULT_STACK_CANDIDATES; offset += 4u) {
+                    uintptr_t value = *(const uintptr_t *)(esp + offset);
+                    if (value >= text_low && value < text_high) {
+                        g_ce_fault_stack[found++] = (LONG)value;
+                    }
+                }
+            }
+            g_ce_fault_stack_count = found;
         }
         InterlockedExchange(&g_ce_guard_active, 0);
         longjmp(g_ce_recovery_point, 1);
@@ -112,6 +162,39 @@ static int ce_write_binary_file(
     return 1;
 }
 
+static int ce_read_binary_file(const char *path, unsigned char **out_data, uint32_t *out_length) {
+    HANDLE file;
+    LARGE_INTEGER size;
+    unsigned char *buffer;
+    DWORD read_bytes = 0;
+
+    *out_data = NULL;
+    *out_length = 0;
+    file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 ||
+        size.QuadPart > 256 * 1024 * 1024) {
+        CloseHandle(file);
+        return 0;
+    }
+    buffer = (unsigned char *)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)size.QuadPart);
+    if (buffer == NULL) {
+        CloseHandle(file);
+        return 0;
+    }
+    if (!ReadFile(file, buffer, (DWORD)size.QuadPart, &read_bytes, NULL) ||
+        read_bytes != (DWORD)size.QuadPart) {
+        HeapFree(GetProcessHeap(), 0, buffer);
+        CloseHandle(file);
+        return 0;
+    }
+    CloseHandle(file);
+    *out_data = buffer;
+    *out_length = (uint32_t)size.QuadPart;
+    return 1;
+}
+
 static void ce_write_progress(const char *label) {
     char payload[128];
     int size = snprintf(payload, sizeof(payload), "%s\r\n", label);
@@ -121,14 +204,27 @@ static void ce_write_progress(const char *label) {
 }
 
 static void ce_write_fault_report(const char *label) {
-    char payload[192];
-    int size = snprintf(payload, sizeof(payload),
-        "%s: code=0x%08lx eip=0x%08lx access_type=%ld access_addr=0x%08lx\r\n",
+    char payload[512];
+    char stack_text[300];
+    size_t stack_used = 0;
+    LONG stack_count = InterlockedCompareExchange(&g_ce_fault_stack_count, 0, 0);
+    LONG i;
+    int size;
+
+    stack_text[0] = '\0';
+    for (i = 0; i < stack_count && stack_used + 16 < sizeof(stack_text); ++i) {
+        int written = snprintf(stack_text + stack_used, sizeof(stack_text) - stack_used,
+            "%s0x%08lx", i == 0 ? "" : ",", (unsigned long)g_ce_fault_stack[i]);
+        if (written > 0) stack_used += (size_t)written;
+    }
+    size = snprintf(payload, sizeof(payload),
+        "%s: code=0x%08lx eip=0x%08lx access_type=%ld access_addr=0x%08lx stack=[%s]\r\n",
         label,
         (unsigned long)InterlockedCompareExchange(&g_ce_fault_code, 0, 0),
         (unsigned long)InterlockedCompareExchange(&g_ce_fault_eip, 0, 0),
         (long)InterlockedCompareExchange(&g_ce_fault_access_type, 0, 0),
-        (unsigned long)InterlockedCompareExchange(&g_ce_fault_access_address, 0, 0));
+        (unsigned long)InterlockedCompareExchange(&g_ce_fault_access_address, 0, 0),
+        stack_text);
     if (size > 0) {
         ce_write_text_marker("con-build-progress.log", payload, (size_t)size);
     }
@@ -200,8 +296,31 @@ static volatile LONG g_ce_layout_last_observation_tag = 0;
 static volatile LONG g_ce_layout_output_latest = 0;
 static volatile LONG g_ce_old_galaxy_ptr = 0;
 static volatile LONG g_ce_second_galaxy_ptr = 0;
+static volatile LONG g_ce_second_snapshot_loaded = 0;
+/* Player().FCurStar is never touched by the raw galaxy-pointer swap --
+   confirmed the hard way (path-drawing from the wrong point, camera
+   losing the ship model, eventual "find star by id" crashes): the ship
+   keeps pointing at a TStar that belongs to whichever galaxy was active
+   when it last moved, which stops existing in the other arm's own list
+   the instant the pointer swap flips which galaxy is "live". The engine's
+   own TransferShip (already used elsewhere in this project to relocate
+   NPC ships) is the correct, validated way to move it -- far safer than
+   guessing FCurStar's compiled byte offset and poking it directly. This
+   plain remembered-pointer pair is just enough bookkeeping for Main.txt's
+   OnKey code to save the ship's star before transferring it into the new
+   arm, then transfer it back to the exact same star on return. */
+static volatile LONG g_ce_remembered_ship_star = 0;
 static volatile LONG g_ce_active_arm = 0;
 static volatile LONG g_ce_native_switch_lock = 0;
+/* Rapid re-triggering of the swap (holding/mashing the OnKey hotkey while
+   the star map is open) toggled the galaxy pointer underneath the map's
+   own rendering multiple times per second and crashed the game -- the
+   pointer swap itself never faulted (checkpoints always completed in
+   matching pairs), so the fix is a cooldown, not a lock. Once a swap (in
+   either direction) succeeds at turn T, no further swap is accepted until
+   CurTurn() != T, forcing at least one day to pass (and the UI to settle)
+   before the reverse swap is allowed. */
+static volatile LONG g_ce_last_swap_turn = -1;
 static volatile LONG g_ce_second_generation_status = 0;
 static volatile LONG g_ce_snapshot_lock = 0;
 static volatile LONG g_ce_snapshot_done = 0;
@@ -210,6 +329,11 @@ static volatile LONG g_ce_save_hook_armed = 0;
 static volatile LONG g_ce_save_hook_expected_galaxy = 0;
 static void *g_ce_save_trampoline = NULL;
 static volatile LONG g_ce_load_hook_installed = 0;
+static volatile LONG g_ce_star_lookup_hook_installed = 0;
+static volatile LONG g_ce_star_lookup_recovered_count = 0;
+static volatile LONG g_ce_day_process_hook_installed = 0;
+static volatile LONG g_ce_nextday_label3_hook_installed = 0;
+static volatile LONG g_ce_nextday_label3_recovered_count = 0;
 static volatile LONG g_ce_load_transform_armed = 0;
 static volatile LONG g_ce_load_transform_seed = 0;
 static void *g_ce_load_trampoline = NULL;
@@ -276,7 +400,48 @@ enum {
     CE_RVA_RAW_RECORD_ALLOC = 0x000067a0u,
     CE_GALAXY_RACE_LIST_COUNT_OFFSET = 0x5cu,
     CE_GALAXY_RACE_LIST_OFFSET = 0xc4u,
-    CE_RACE_RECORD_BYTES = 0x78u
+    CE_RACE_RECORD_BYTES = 0x78u,
+    /* "find star by id in [self+0x164]'s list, raise CE_DELPHI_EXCEPTION_CODE
+       if absent" (VA 0x00841e60) -- the real, repeatedly-reproduced crash
+       ("ThCa label = 1" in the OS error dialog, confirmed by disassembling
+       the reported address) that happens after a clean swap back to the
+       original galaxy following a real visit to the loaded second one.
+       One of its three callers (VA 0x0085176d) resolves a HARDCODED id
+       (20) against whatever galaxy CE_RVA_CON_CONTEXT_CELL currently
+       points to -- exactly the "current context" global this file already
+       zeroes/restores around its own LoadFromStream call -- a strong
+       suspect, but not yet proven. Rather than keep guessing which of the
+       (at least three, likely more) callers holds the stale reference,
+       patch the CALL TO THE RAISE ITSELF (not the lookup function's own
+       entry) so a failed lookup logs and returns 0 (the same "not found"
+       every caller already has to tolerate structurally) instead of
+       crashing the whole game -- turns an unrecoverable hard crash into a
+       diagnosable, harmless miss while the real stale-reference source is
+       still being tracked down. */
+    CE_RVA_STAR_LOOKUP_RAISE_CALL = 0x00441ed3u,
+    /* The `except` handler wrapping every single day-skip's own
+       TGalaxy.NextDay call (VA 0x0072f89e) -- see
+       CEAdapterInstallDayProcessRecovery's own comment. */
+    CE_RVA_DAY_PROCESS_RAISE_CALL = 0x0032f89eu,
+    /* A THIRD, distinct raise site (VA 0x00840d94), found by disassembling
+       from a different OS crash dialog's own reported address
+       ("Error in procedure TGalaxy.NextDay label = 3", confirmed via the
+       hardcoded format string at VA 0x00840edc: "Error in procedure
+       TGalaxy.NextDay label = " with the numeric label appended). Unlike
+       CE_RVA_DAY_PROCESS_RAISE_CALL (the outer wrapper around the call TO
+       NextDay), this address sits just BEFORE CE_RVA_TGALAXY_NEXTDAY's own
+       entry (0x00840f08) in memory, and is reached via a jump rather than
+       linear fall-through from the numbered try/except scaffolding right
+       above it -- almost certainly one of several internal, individually
+       numbered integrity checks the original Pascal source performs while
+       preparing/finishing a day tick (this same hardcoded message string,
+       with a different label number, is reused at multiple such checks).
+       Same fix as the other two: redirect this specific
+       `call System.@RaiseExcept` to a log-and-fall-through stub so a
+       failed check degrades to "nothing happened here" instead of killing
+       the process -- the very next instruction after this call (VA
+       0x00840d99) already falls into the function's normal epilogue. */
+    CE_RVA_NEXTDAY_LABEL3_RAISE_CALL = 0x00440d94u
 };
 
 uint32_t CE_CALL CEAdapterAbiVersion(void) {
@@ -996,6 +1161,7 @@ uint32_t CE_CALL CEAdapterCreateAndEnterSecondGalaxy(
     *galaxy_slot = galaxy_ptr;
     if (star_count != 0u) {
         InterlockedExchange(&g_ce_second_galaxy_ptr, (LONG)second);
+        InterlockedExchange(&g_ce_second_snapshot_loaded, 0);
         InterlockedExchange(&g_ce_second_generation_status, 2);
         ce_write_native_stage(4u, star_count);
         InterlockedExchange(&g_ce_native_switch_lock, 0);
@@ -1014,13 +1180,106 @@ uint32_t CE_CALL CEAdapterSecondGalaxyStatus(void) {
     return (uint32_t)InterlockedCompareExchange(&g_ce_second_generation_status, 0, 0);
 }
 
-uint32_t CE_CALL CEAdapterEnterReadySecondGalaxy(uint32_t galaxy_ptr) {
+/* GenerateStars fills [self+0x164] with a fresh, independently-seeded star
+   list -- fine for the empty Phase A swap test, but fatal for loading a
+   real snapshot into it: LoadFromStream's later cross-reference reads
+   (confirmed by disassembly, e.g. VA 0x00841e60 -- "find star by id in
+   [self+0x164], raise CE_DELPHI_EXCEPTION_CODE if not found") expect the
+   list to contain the EXACT star identities the snapshot references, not
+   an unrelated independently-generated set. Skipping GenerateStars leaves
+   the list empty-but-valid (Initialize alone is what allocates it as a
+   real TList, confirmed safe in the earlier empty-galaxy Phase A work),
+   so LoadFromStream's own star-reading stage can Add() its own entries
+   with the correct identities instead of trying to match against ones
+   that were never going to line up. */
+uint32_t CE_CALL CEAdapterCreateBareSecondGalaxyForLoad(
+    uint32_t galaxy_ptr, uint32_t second_seed
+) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t class_ref;
+    uint32_t second;
+    uint32_t remembered_old;
+    uint32_t remembered_second;
+
+    /* This DLL's globals only ever reset via DllMain (a full process
+       restart) -- exiting to the main menu and starting a NEW game
+       WITHOUT restarting Rangers.exe keeps every one of them exactly as
+       the previous game session left them. An earlier version of this
+       check only looked for staleness while g_ce_active_arm==0, reasoning
+       "if we're not inside the second galaxy, the old_galaxy_ptr should
+       still be the live one" -- but if the player starts a new game
+       WHILE active_arm was still 1 from the previous session (never
+       pressed the hotkey to return first), active_arm stays stuck at 1
+       and that gate never fires. Confirmed in practice: pressing the
+       hotkey in the new session then took the "return" branch (since
+       active_arm read as 1) and wrote the PREVIOUS session's stale
+       old_galaxy_ptr into the engine's live galaxy slot, crashing shortly
+       after. The only reliable signal is comparing the CURRENT galaxy_ptr
+       against every pointer we remember from before, regardless of what
+       active_arm currently claims -- if it matches neither, this is a
+       session our state was never built for. */
+    remembered_old = (uint32_t)InterlockedCompareExchange(&g_ce_old_galaxy_ptr, 0, 0);
+    remembered_second = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
+    if (remembered_old != 0 && galaxy_ptr != remembered_old && galaxy_ptr != remembered_second) {
+        InterlockedExchange(&g_ce_second_galaxy_ptr, 0);
+        InterlockedExchange(&g_ce_second_generation_status, 0);
+        InterlockedExchange(&g_ce_second_snapshot_loaded, 0);
+        InterlockedExchange(&g_ce_active_arm, 0);
+        InterlockedExchange(&g_ce_old_galaxy_ptr, 0);
+        InterlockedExchange(&g_ce_last_swap_turn, -1);
+        ce_write_progress("bare-second-galaxy:stale-session-reset");
+    }
+
+    second = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
+    if (second != 0) return 2u;
+    if (second_seed == 0 ||
+        InterlockedCompareExchange(&g_ce_native_switch_lock, 1, 0) != 0) {
+        return 0;
+    }
+    if (!ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &class_ref)) {
+        InterlockedExchange(&g_ce_native_switch_lock, 0);
+        return 0;
+    }
+
+    second = ce_call_delphi_constructor(
+        class_ref, module_base + CE_RVA_TGALAXY_CONSTRUCTOR
+    );
+    if (second == 0 || !ce_region_has_access((const void *)(uintptr_t)second, 0x1dcu, 1) ||
+        *(const uint32_t *)(uintptr_t)second != class_ref) {
+        InterlockedExchange(&g_ce_native_switch_lock, 0);
+        return 0;
+    }
+
+    memcpy((void *)(uintptr_t)(second + 0x50u),
+        (const void *)(uintptr_t)(galaxy_ptr + 0x50u), 0x10u);
+    memcpy((void *)(uintptr_t)(second + 0x188u),
+        (const void *)(uintptr_t)(galaxy_ptr + 0x188u), 0x27u);
+    *(uint32_t *)(uintptr_t)(second + 0x1d4u) = second_seed;
+
+    InterlockedExchange(&g_ce_old_galaxy_ptr, (LONG)galaxy_ptr);
+    ce_write_progress("bare-second-galaxy:before-initialize");
+    *galaxy_slot = second;
+    ce_call_delphi_method(second, module_base + CE_RVA_TGALAXY_INITIALIZE);
+    *galaxy_slot = galaxy_ptr;
+    ce_write_progress("bare-second-galaxy:after-initialize");
+
+    InterlockedExchange(&g_ce_second_galaxy_ptr, (LONG)second);
+    InterlockedExchange(&g_ce_second_snapshot_loaded, 0);
+    InterlockedExchange(&g_ce_second_generation_status, 2);
+    InterlockedExchange(&g_ce_native_switch_lock, 0);
+    return 1;
+}
+
+uint32_t CE_CALL CEAdapterEnterReadySecondGalaxy(uint32_t galaxy_ptr, uint32_t turn) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;
     uint32_t class_ref;
     uint32_t old_galaxy;
     uint32_t second_galaxy;
 
+    if ((LONG)turn == InterlockedCompareExchange(&g_ce_last_swap_turn, 0, 0)) return 0;
     if (InterlockedCompareExchange(&g_ce_second_generation_status, 0, 0) != 2 ||
         InterlockedCompareExchange(&g_ce_native_switch_lock, 1, 0) != 0) return 0;
     old_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_old_galaxy_ptr, 0, 0);
@@ -1034,18 +1293,20 @@ uint32_t CE_CALL CEAdapterEnterReadySecondGalaxy(uint32_t galaxy_ptr) {
     ce_write_progress("enter-ready:before-swap");
     *galaxy_slot = second_galaxy;
     InterlockedExchange(&g_ce_active_arm, 1);
+    InterlockedExchange(&g_ce_last_swap_turn, (LONG)turn);
     ce_write_progress("enter-ready:after-swap");
     InterlockedExchange(&g_ce_native_switch_lock, 0);
     return 1;
 }
 
-uint32_t CE_CALL CEAdapterReturnToOldGalaxy(uint32_t galaxy_ptr) {
+uint32_t CE_CALL CEAdapterReturnToOldGalaxy(uint32_t galaxy_ptr, uint32_t turn) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;
     uint32_t class_ref;
     uint32_t old_galaxy;
     uint32_t second_galaxy;
 
+    if ((LONG)turn == InterlockedCompareExchange(&g_ce_last_swap_turn, 0, 0)) return 0;
     if (InterlockedCompareExchange(&g_ce_native_switch_lock, 1, 0) != 0) return 0;
     second_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
     old_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_old_galaxy_ptr, 0, 0);
@@ -1057,6 +1318,7 @@ uint32_t CE_CALL CEAdapterReturnToOldGalaxy(uint32_t galaxy_ptr) {
     }
     *galaxy_slot = old_galaxy;
     InterlockedExchange(&g_ce_active_arm, 0);
+    InterlockedExchange(&g_ce_last_swap_turn, (LONG)turn);
     InterlockedExchange(&g_ce_native_switch_lock, 0);
     return 1;
 }
@@ -2324,6 +2586,22 @@ static int ce_live_names_equal(uint32_t left, uint32_t right) {
 
 static volatile LONG g_ce_pending_sector_spawn_arm = -1;
 
+/* ce_apply_live_arm (below) sets this same flag, but it also does a lot of
+   cosmetic-scheme-specific work (swapping star/planet/station names back
+   and forth on a SHARED galaxy's own objects) that has no meaning for the
+   genuinely separate second TGalaxy this session's swap now uses -- that
+   renaming is handled directly by CEAdapterRenameSecondGalaxySystems
+   instead. ce_sector_name_helper.exe itself only ever reads/rewrites
+   whichever galaxy's sector labels are CURRENTLY ON SCREEN (found by
+   scanning for the always-present vanilla needle string, not tied to a
+   specific TGalaxy's own memory), so it works unmodified for either
+   scheme -- this export just requests the same background spawn, without
+   any of the unrelated shared-galaxy bookkeeping. */
+uint32_t CE_CALL CEAdapterRequestSectorLabelSpawn(uint32_t second_home) {
+    InterlockedExchange(&g_ce_pending_sector_spawn_arm, second_home != 0u ? 1 : 0);
+    return 1u;
+}
+
 /* Launches tools/native/ce_sector_name_helper.exe (built to the same
    directory as this DLL, see build-engine-adapter.ps1) as a completely
    separate OS process, passing our own PID and the target arm, so it can
@@ -2387,7 +2665,13 @@ static DWORD WINAPI ce_sector_spawn_thread_proc(LPVOID unused) {
     }
 }
 
-static void ce_apply_live_arm(int second_home) {
+/* No longer called (CEAdapterCompleteRegisteredPortal now drives the real
+   swap instead -- see its own comment) -- kept, not deleted, matching this
+   file's existing precedent for archived-but-still-buildable dead code
+   (e.g. CEAdapterSetRememberedShipStar/GetRememberedShipStar). __used__
+   only to keep -Wunused-function -Werror quiet; unused-warnings for the
+   helpers it alone calls would cascade otherwise. */
+__attribute__((used)) static void ce_apply_live_arm(int second_home) {
     uint32_t index;
     uint32_t seed = (uint32_t)InterlockedCompareExchange(&g_ce_live_seed, 0, 0);
     float sector_x[24] = {0};
@@ -3372,6 +3656,14 @@ uint32_t CE_CALL CEAdapterLogCheckpoint(uint32_t id) {
     return 1u;
 }
 
+uint32_t CE_CALL CEAdapterLogCheckpointValue(uint32_t id, uint32_t value) {
+    char payload[80];
+    int size = snprintf(payload, sizeof(payload),
+        "{\"status\":\"checkpoint\",\"id\":%u,\"value\":%u}\r\n", id, value);
+    if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", payload, (size_t)size);
+    return 1u;
+}
+
 /* Two independent argument changes to the BuildListOfNewShips call site
    (sinceId 0->1, then typeSet/raceSet swapped to the working t_Kling
    filter) both still crashed at the exact same checkpoint, with the crash
@@ -3398,19 +3690,25 @@ uint32_t CE_CALL CEAdapterConsumePendingShipSweep(void) {
     return value < 0 ? 2u : (uint32_t)value;
 }
 
+/* Used to also require g_ce_live_cons/g_ce_live_sectors to be populated --
+   fields only ever written by the archived cosmetic system's
+   CEAdapterInstallLiveArmSwitch/CEAdapterSetSystemSector path, which the
+   real-second-TGalaxy approach never calls. That made this always report
+   "not ready", permanently stuck showing CE.Transit.AnchorNotReady no
+   matter what. The real swap (CEAdapterCreateBareSecondGalaxyForLoad /
+   CEAdapterEnterReadySecondGalaxy / CEAdapterReturnToOldGalaxy, all called
+   from CEAdapterCompleteRegisteredPortal below) needs none of that
+   bookkeeping -- the only real precondition is "not already mid-transit". */
 uint32_t CE_CALL CEAdapterPortalReady(uint32_t galaxy_ptr) {
-    uint32_t ready = g_ce_live_snapshot_galaxy == galaxy_ptr && g_ce_live_cons != NULL &&
-        g_ce_live_sectors != NULL && g_ce_live_sector_count != 0u &&
-        g_ce_live_mapped_system_count == g_ce_live_con_count &&
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t class_ref;
+    uint32_t ready = ce_resolve_engine_galaxy(galaxy_ptr, &module_base, &galaxy_slot, &class_ref) &&
         InterlockedCompareExchange(&g_ce_portal_status, 0, 0) == 0 ? 1u : 0u;
-    char diagnostic[256];
+    char diagnostic[128];
     int diagnostic_size = snprintf(diagnostic, sizeof(diagnostic),
-        "{\"status\":\"portal-ready-check\",\"ready\":%s,\"snapshot_matches\":%s,"
-        "\"cons_count\":%u,\"mapped_count\":%u,\"sector_count\":%u,"
-        "\"portal_status\":%ld}\r\n",
+        "{\"status\":\"portal-ready-check\",\"ready\":%s,\"portal_status\":%ld}\r\n",
         ready ? "true" : "false",
-        g_ce_live_snapshot_galaxy == galaxy_ptr ? "true" : "false",
-        g_ce_live_con_count, g_ce_live_mapped_system_count, g_ce_live_sector_count,
         (long)InterlockedCompareExchange(&g_ce_portal_status, 0, 0));
     if (diagnostic_size > 0) ce_write_text_marker(
         "live-arm-switch.jsonl", diagnostic, (size_t)diagnostic_size);
@@ -3514,31 +3812,74 @@ uint32_t CE_CALL CEAdapterEnterRegisteredPortal(uint32_t galaxy_ptr, uint32_t ho
    second of blocking) around the actual rename. That window sat on top of
    the game's own native loading screen and the sleeps blocked whatever
    thread the native loader needed, which reproduced a real hang at ~15%
-   loading when entering the hole. ce_apply_live_arm itself is a fast,
-   pure in-memory rewrite (no I/O) -- it needs no artificial pause or
-   visual cover, so it just runs immediately. */
-uint32_t CE_CALL CEAdapterCompleteRegisteredPortal(uint32_t galaxy_ptr) {
+   loading when entering the hole. The real swap below is likewise a fast,
+   pure in-memory operation (no I/O, no window) -- it needs no artificial
+   pause or visual cover, so it just runs immediately.
+
+   This used to call ce_apply_live_arm -- the archived cosmetic system's
+   in-place rename, which never actually changes which TGalaxy is active.
+   Flying through a portal now drives the SAME real clone-and-swap the
+   Ctrl+Shift+1 test hotkey uses (CEAdapterCreateBareSecondGalaxyForLoad /
+   CEAdapterLoadSnapshotIntoSecondGalaxy / CEAdapterEnterReadySecondGalaxy
+   on the way in, CEAdapterReturnToOldGalaxy on the way back), so the
+   artifact/black-hole flow in CE_InterarmTransit.Lang.txt actually
+   switches galaxies instead of just relabelling the current one. */
+uint32_t CE_CALL CEAdapterCompleteRegisteredPortal(uint32_t galaxy_ptr, uint32_t turn) {
+    enum { CE_SECOND_HOME_TEST_SEED = 1128616787u };
     char report[192];
     int report_size;
+    int entering;
+    uint32_t ok;
     if ((uint32_t)InterlockedCompareExchange(&g_ce_portal_galaxy_ptr, 0, 0) != galaxy_ptr ||
             InterlockedCompareExchange(&g_ce_portal_status, 3, 2) != 2) return 0;
     if (InterlockedCompareExchange(&g_ce_live_switch_lock, 1, 0) != 0) {
         InterlockedExchange(&g_ce_portal_status, 2);
         return 0;
     }
-    ce_apply_live_arm(InterlockedCompareExchange(&g_ce_active_arm, 0, 0) == 0);
+    entering = InterlockedCompareExchange(&g_ce_active_arm, 0, 0) == 0;
+    if (entering) {
+        CEAdapterCreateBareSecondGalaxyForLoad(galaxy_ptr, CE_SECOND_HOME_TEST_SEED);
+        CEAdapterLoadSnapshotIntoSecondGalaxy(galaxy_ptr);
+        ok = CEAdapterEnterReadySecondGalaxy(galaxy_ptr, turn);
+        if (ok) {
+            /* galaxy_ptr here is still the OLD galaxy (this function's own
+               parameter, captured before the swap above) -- EnterReady
+               already flipped the engine's *own* active-galaxy slot to the
+               second galaxy, but that doesn't retroactively change this
+               local copy. Renaming with the stale pointer would silently
+               rename the OLD galaxy's own systems instead of the one the
+               player is now actually looking at (and, worse, permanently
+               mislabel the old arm's systems for the rest of the process,
+               visible again on the very next return) -- confirmed exactly
+               by a live test: sectors renamed correctly (that path re-scans
+               whichever galaxy is actually live in process memory) but
+               systems did not, then reappeared renamed on the OLD arm
+               after returning. Use the real second-galaxy pointer instead. */
+            CEAdapterRenameSecondGalaxySystems(
+                (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0));
+            CEAdapterRequestSectorLabelSpawn(1);
+        }
+    } else {
+        ok = CEAdapterReturnToOldGalaxy(galaxy_ptr, turn);
+        if (ok) CEAdapterRequestSectorLabelSpawn(0);
+    }
     EnumWindows(ce_invalidate_process_window, 0);
     InterlockedExchange(&g_ce_portal_hole_id, 0);
     InterlockedExchange(&g_ce_portal_galaxy_ptr, 0);
-    InterlockedExchange(&g_ce_portal_status, 0);
+    /* On failure, leave status at 2 (awaiting-exit) instead of completing --
+       the same "try again next tick" shape already used above for lock
+       contention, since the ship is still physically inside the hole from
+       the engine's own point of view either way. */
+    InterlockedExchange(&g_ce_portal_status, ok ? 0 : 2);
     InterlockedExchange(&g_ce_live_switch_lock, 0);
     report_size = snprintf(report, sizeof(report),
-        "{\"status\":\"portal-complete\",\"arm\":\"%s\"}\r\n",
+        "{\"status\":\"%s\",\"arm\":\"%s\"}\r\n",
+        ok ? "portal-complete" : "portal-complete-swap-failed",
         InterlockedCompareExchange(&g_ce_active_arm, 0, 0) == 0
             ? "OLD_ARM" : "SECOND_HOME");
     if (report_size > 0) ce_write_text_marker(
         "live-arm-switch.jsonl", report, (size_t)report_size);
-    return 1;
+    return ok;
 }
 
 __attribute__((used)) static void CE_CALL ce_transform_loaded_second_home(
@@ -3712,6 +4053,27 @@ uint32_t CE_CALL CEAdapterPollSecondHomeTransform(
 #endif
 }
 
+/* The captured buffer's first bytes turned out to be unrelated rich-text
+   (a system encyclopedia entry, "sys_storage1" + color/table markup), not
+   TGalaxy's own "mod set" string LoadFromStream expects first -- meaning
+   the TMemoryStream this hook observes is shared by the engine's whole
+   save-game sequence, and TGalaxy.SaveToStream is only one section written
+   partway through it, not from position 0. Recording the stream's own
+   read/write position at the MOMENT SaveToStream is entered (before it
+   writes anything) gives the correct starting offset to slice out just
+   TGalaxy's own section, so replaying it through LoadFromStream at
+   (sliced) position 0 lines up correctly instead of desyncing immediately. */
+static volatile LONG g_ce_save_start_position = -1;
+
+__attribute__((used)) static void CE_CALL ce_capture_save_start_position(uint32_t stream_ptr) {
+    if (ce_region_has_access((const void *)(uintptr_t)(stream_ptr + 0x0cu), 4u, 0)) {
+        InterlockedExchange(&g_ce_save_start_position,
+            (LONG)(*(const uint32_t *)(uintptr_t)(stream_ptr + 0x0cu)));
+    } else {
+        InterlockedExchange(&g_ce_save_start_position, -1);
+    }
+}
+
 /* SaveToStream cannot safely be called from a Turn callback: the real game
    test deadlocked before producing a byte.  The safe place is the engine's
    own save operation.  This detour lets the original serializer run first,
@@ -3762,18 +4124,26 @@ __attribute__((used)) static void CE_CALL ce_capture_completed_galaxy_save(
         return;
     }
 
-    hash = ce_fnv1a32((const unsigned char *)(uintptr_t)data, length);
-    wrote = ce_write_binary_file("C:\\ce_debug", "galaxy-save-snapshot.bin",
-        (const void *)(uintptr_t)data, length);
-    report_size = snprintf(report, sizeof(report),
-        "{\"status\":\"%s\",\"abi\":%u,\"galaxy_ptr\":%u,"
-        "\"length\":%u,\"fnv1a32\":%u}\r\n",
-        wrote ? "captured" : "write-failed", CEAdapterAbiVersion(),
-        galaxy_ptr, length, hash);
-    if (report_size > 0) ce_write_text_marker(
-        "galaxy-save-snapshot.jsonl", report, (size_t)report_size
-    );
-    if (wrote) InterlockedExchange(&g_ce_snapshot_done, 1);
+    {
+        LONG start_position = InterlockedCompareExchange(&g_ce_save_start_position, 0, 0);
+        uint32_t slice_offset = (start_position >= 0 && (uint32_t)start_position <= length)
+            ? (uint32_t)start_position : 0u;
+        uint32_t slice_length = length - slice_offset;
+        const unsigned char *slice_data = (const unsigned char *)(uintptr_t)data + slice_offset;
+
+        hash = ce_fnv1a32(slice_data, slice_length);
+        wrote = ce_write_binary_file("C:\\ce_debug", "galaxy-save-snapshot.bin",
+            slice_data, slice_length);
+        report_size = snprintf(report, sizeof(report),
+            "{\"status\":\"%s\",\"abi\":%u,\"galaxy_ptr\":%u,"
+            "\"length\":%u,\"slice_offset\":%u,\"slice_length\":%u,\"fnv1a32\":%u}\r\n",
+            wrote ? "captured" : "write-failed", CEAdapterAbiVersion(),
+            galaxy_ptr, length, slice_offset, slice_length, hash);
+        if (report_size > 0) ce_write_text_marker(
+            "galaxy-save-snapshot.jsonl", report, (size_t)report_size
+        );
+        if (wrote) InterlockedExchange(&g_ce_snapshot_done, 1);
+    }
 }
 
 #if defined(__i386__)
@@ -3781,6 +4151,11 @@ __attribute__((naked)) static void ce_tgalaxy_save_hook(void) {
     __asm__ volatile(
         "pushl %edx\n\t"
         "pushl %eax\n\t"
+        "pushl %edx\n\t"
+        "call _ce_capture_save_start_position\n\t"
+        "addl $4, %esp\n\t"
+        "movl (%esp), %eax\n\t"
+        "movl 4(%esp), %edx\n\t"
         "call *_g_ce_save_trampoline\n\t"
         "popl %ecx\n\t"
         "popl %edx\n\t"
@@ -3857,6 +4232,301 @@ uint32_t CE_CALL CEAdapterArmGalaxySaveSnapshot(uint32_t galaxy_ptr) {
     ce_write_text_marker("galaxy-save-snapshot.jsonl",
         "{\"status\":\"armed\"}\r\n", 20u);
     return 1;
+#else
+    (void)galaxy_ptr;
+    return 0;
+#endif
+}
+
+/* Phase B0: the bare second galaxy built by CEAdapterCreateAndEnterSecondGalaxy
+   only has stars (GenerateStars alone, no sectors/economy/names -- the
+   ~8KB "orchestrator" that fills those in during the engine's own bootstrap
+   has never been reverse engineered). Rather than reproduce that,
+   feed a real, fully-populated galaxy's own serialized bytes (captured by
+   the SaveToStream detour above, C:\ce_debug\galaxy-save-snapshot.bin)
+   into TGalaxy.LoadFromStream (VA 0x0083b6cc, documented in
+   docs/TGALAXY_LOADFROMSTREAM_FORMAT.md) called directly against the
+   second galaxy instance. The reader argument that method reads is not a
+   real Delphi object -- no vtable dispatch, just flat field reads at
+   +0x04 (size), +0x0c (cursor), +0x10 (data pointer) -- so it can be
+   fabricated as a plain heap block, the same trick already used for
+   ce_make_immortal_unicode's strings.
+
+   This is the first time this adapter has ever called into
+   LoadFromStream's ~8.8KB of largely undocumented Delphi bytecode, so it
+   is wrapped in the same VEH+setjmp recovery net as every other risky
+   engine call in this file (see the TCon constructor fault above) and the
+   CE_RVA_CON_CONTEXT_CELL guard is zeroed for the duration, exactly like
+   the single-TCon-construction case, since LoadFromStream rebuilds many
+   TCon-like sub-objects in one call and would touch that same shared
+   next-id counter repeatedly. */
+uint32_t CE_CALL CEAdapterLoadSnapshotIntoSecondGalaxy(uint32_t galaxy_ptr) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    uint32_t second_galaxy;
+    unsigned char *file_data = NULL;
+    uint32_t file_length = 0;
+    unsigned char *reader_block;
+    uint32_t result = 0;
+
+    if (InterlockedCompareExchange(&g_ce_second_snapshot_loaded, 0, 0) != 0) {
+        return 2;
+    }
+    second_galaxy = (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0);
+    if (second_galaxy == 0 ||
+        !ce_resolve_engine_galaxy(galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        ce_write_progress("load-snapshot:abort:resolve-failed");
+        return 0;
+    }
+    if (!ce_read_binary_file("C:\\ce_debug\\galaxy-save-snapshot.bin", &file_data, &file_length) ||
+        file_length == 0) {
+        ce_write_progress("load-snapshot:abort:no-file");
+        return 0;
+    }
+
+    reader_block = (unsigned char *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 0x18u);
+    if (reader_block == NULL) {
+        HeapFree(GetProcessHeap(), 0, file_data);
+        ce_write_progress("load-snapshot:abort:reader-alloc-failed");
+        return 0;
+    }
+    *(uint32_t *)(void *)(reader_block + 0x04u) = file_length;
+    *(uint32_t *)(void *)(reader_block + 0x08u) = file_length;
+    *(uint32_t *)(void *)(reader_block + 0x0cu) = 0u;
+    *(uint32_t *)(void *)(reader_block + 0x10u) = (uint32_t)(uintptr_t)file_data;
+
+    {
+        volatile uint32_t context_saved = 0;
+        volatile uint32_t original_context = 0;
+        uintptr_t context_cell = module_base + CE_RVA_CON_CONTEXT_CELL;
+
+        if (ce_region_has_access((const void *)context_cell, 4u, 0)) {
+            original_context = *(const uint32_t *)context_cell;
+            context_saved = 1;
+        }
+
+        ce_ensure_veh_installed();
+        if (setjmp(g_ce_recovery_point) != 0) {
+            if (context_saved && ce_region_has_access((const void *)context_cell, 4u, 1)) {
+                *(uint32_t *)context_cell = original_context;
+            }
+            ce_write_fault_report("load-snapshot:FAULTED");
+            result = 0;
+        } else {
+            InterlockedExchange(&g_ce_guard_active, 1);
+            if (context_saved && ce_region_has_access((const void *)context_cell, 4u, 1)) {
+                *(uint32_t *)context_cell = 0;
+            }
+            ce_write_progress("load-snapshot:before-call");
+            ce_call_delphi_method_dword(
+                second_galaxy, (uint32_t)(uintptr_t)reader_block,
+                module_base + CE_RVA_TGALAXY_LOAD_FROM_STREAM);
+            ce_write_progress("load-snapshot:after-call");
+            if (context_saved && ce_region_has_access((const void *)context_cell, 4u, 1)) {
+                *(uint32_t *)context_cell = original_context;
+            }
+            InterlockedExchange(&g_ce_guard_active, 0);
+            InterlockedExchange(&g_ce_second_snapshot_loaded, 1);
+            result = 1;
+        }
+    }
+
+    HeapFree(GetProcessHeap(), 0, reader_block);
+    HeapFree(GetProcessHeap(), 0, file_data);
+    return result;
+}
+
+/* One-shot system rename for a genuinely separate second TGalaxy -- unlike
+   ce_apply_live_arm (built for the archived cosmetic scheme, where both
+   arms were the SAME shared galaxy and every rename needed an old_name to
+   revert to on toggle), the clone loaded by
+   CEAdapterLoadSnapshotIntoSecondGalaxy lives in its own memory entirely;
+   the original galaxy's objects are never touched, so there is nothing to
+   revert and no toggle state to track. Just overwrite every system's name
+   pointer once, right after a successful load. [self+0x2c] is the TCon
+   list RScript's GalaxyStar()/StarToCon() actually walk (name at +0x10,
+   confirmed by ce_capture_live_arm's own already-working use of the same
+   offset) -- distinct from [self+0x164]'s TStar list that
+   LoadFromStream/CEAdapterGetGeneratedStarCount deal with internally.
+   Sector-level (large region) labels are intentionally out of scope here:
+   those live in a separate BlockPar config-tree row object that the old
+   scheme only ever reached via an out-of-process scan (ce_spawn_sector_
+   name_helper) to avoid a crash correlated with scanning the whole
+   address space in-process -- a later, separate step if wanted. */
+uint32_t CE_CALL CEAdapterRenameSecondGalaxySystems(uint32_t second_galaxy_ptr) {
+    uint32_t con_list, con_array, con_count, index;
+    uint32_t renamed = 0u;
+    const uint32_t pool_size = (uint32_t)(
+        sizeof(g_ce_second_system_names) / sizeof(g_ce_second_system_names[0]));
+
+    if (second_galaxy_ptr == 0u ||
+        !ce_region_has_access((const void *)(uintptr_t)(second_galaxy_ptr + 0x2cu), 4u, 0)) {
+        return 0u;
+    }
+    con_list = *(const uint32_t *)(uintptr_t)(second_galaxy_ptr + 0x2cu);
+    if (!ce_read_plain_list(con_list, &con_array, &con_count)) return 0u;
+
+    for (index = 0; index < con_count; ++index) {
+        uint32_t object = *(const uint32_t *)(uintptr_t)(con_array + index * 4u);
+        uint32_t new_name;
+        if (!ce_region_has_access((const void *)(uintptr_t)object, 0x14u, 1)) continue;
+        new_name = ce_make_immortal_unicode(g_ce_second_system_names[index % pool_size]);
+        if (new_name == 0u) continue;
+        *(uint32_t *)(uintptr_t)(object + 0x10u) = new_name;
+        ++renamed;
+    }
+    return renamed;
+}
+
+uint32_t CE_CALL CEAdapterSetRememberedShipStar(uint32_t star_ptr) {
+    InterlockedExchange(&g_ce_remembered_ship_star, (LONG)star_ptr);
+    return 1u;
+}
+
+uint32_t CE_CALL CEAdapterGetRememberedShipStar(void) {
+    return (uint32_t)InterlockedCompareExchange(&g_ce_remembered_ship_star, 0, 0);
+}
+
+/* See CE_RVA_STAR_LOOKUP_RAISE_CALL's own comment: this replaces the call
+   to System.@RaiseExcept at the exact point the "find star by id" lookup
+   (VA 0x00841e60) gives up, with a small stub that logs and returns
+   normally instead. The lookup's own local result slot is already 0 at
+   that point (initialized before its search loop, only ever overwritten
+   on a successful match), so simply not raising and falling through to
+   the function's existing epilogue reproduces the same "not found" result
+   every caller must already tolerate -- nothing else about the function
+   changes. PUSHAD/POPAD keeps this maximally safe: no assumption about
+   which registers the surrounding code still needs live. */
+__attribute__((used)) static void CE_CALL ce_star_lookup_recover_body(void) {
+    InterlockedIncrement(&g_ce_star_lookup_recovered_count);
+    ce_write_progress("star-lookup:recovered-not-found");
+}
+
+#if defined(__i386__)
+__attribute__((naked)) static void ce_star_lookup_recover_hook(void) {
+    __asm__ volatile(
+        "pushal\n\t"
+        "call _ce_star_lookup_recover_body\n\t"
+        "popal\n\t"
+        "ret\n\t"
+    );
+}
+#endif
+
+#if defined(__i386__)
+/* Shared by every "redirect this specific `call System.@RaiseExcept` to a
+   log-and-fall-through stub instead" patch in this file -- same signature
+   check, same VirtualProtect/patch/flush dance, just parameterized on
+   which 5-byte call site and which flag/hook to use. */
+static uint32_t ce_install_raise_recovery_patch(
+    uint32_t galaxy_ptr, uintptr_t target_rva, void (*hook)(void),
+    volatile LONG *installed_flag
+) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    unsigned char *target;
+    unsigned char patch[5];
+    DWORD old_protect;
+    DWORD ignored_protect;
+    int32_t relative;
+    LONG hook_state;
+
+    hook_state = InterlockedCompareExchange(installed_flag, -1, 0);
+    if (hook_state == 1) return 1u;
+    if (hook_state != 0) return 0u;
+    if (!ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        InterlockedExchange(installed_flag, 0);
+        return 0;
+    }
+    target = (unsigned char *)(module_base + target_rva);
+    if (target[0] != 0xe8) {
+        InterlockedExchange(installed_flag, 0);
+        return 0;
+    }
+    patch[0] = 0xe8;
+    relative = (int32_t)((unsigned char *)(uintptr_t)hook - (target + 5u));
+    memcpy(patch + 1u, &relative, sizeof(relative));
+    if (!VirtualProtect(target, 5u, PAGE_EXECUTE_READWRITE, &old_protect)) {
+        InterlockedExchange(installed_flag, 0);
+        return 0;
+    }
+    memcpy(target, patch, sizeof(patch));
+    FlushInstructionCache(GetCurrentProcess(), target, sizeof(patch));
+    VirtualProtect(target, 5u, old_protect, &ignored_protect);
+    InterlockedExchange(installed_flag, 1);
+    return 1;
+}
+#endif
+
+uint32_t CE_CALL CEAdapterInstallStarLookupRecovery(uint32_t galaxy_ptr) {
+#if defined(__i386__)
+    return ce_install_raise_recovery_patch(galaxy_ptr, CE_RVA_STAR_LOOKUP_RAISE_CALL,
+        ce_star_lookup_recover_hook, &g_ce_star_lookup_hook_installed);
+#else
+    (void)galaxy_ptr;
+    return 0;
+#endif
+}
+
+/* The MUCH more impactful fix, found by re-disassembling from this exact
+   function's start rather than just the reported address: VA 0x0072f89e
+   is not a standalone check -- it is the `except` handler of a try/finally
+   wrapped directly around `call TGalaxy.NextDay` (VA 0x00840f08, confirmed
+   by the disassembly right above it: `mov eax,[0x88263c]; mov eax,[eax];
+   call 0x840f08`) plus one post-processing call (VA 0x00841be8). Every
+   single day-skip in the entire game runs through this one function, and
+   its handler just builds a message and re-raises -- there is no higher
+   catch for it, so ANY exception thrown anywhere inside that day's
+   NextDay (not only the one specific "star not found" case already
+   patched above) surfaces as this exact same "ThCa label = 1" dialog and
+   kills the process. Confirmed empirically: patching only the star-lookup
+   raise did not stop this crash from recurring, meaning a different,
+   still-unidentified fault inside NextDay's own processing was reaching
+   this outer handler instead. Redirecting THIS raise is a strictly more
+   general fix -- the handler's own success path (VA 0x0072f7e3) already
+   jumps past this whole block to the identical epilogue at 0x0072f8a8,
+   so falling through here after logging reproduces exactly what a clean
+   day-skip already does, regardless of which inner check actually failed. */
+uint32_t CE_CALL CEAdapterInstallDayProcessRecovery(uint32_t galaxy_ptr) {
+#if defined(__i386__)
+    return ce_install_raise_recovery_patch(galaxy_ptr, CE_RVA_DAY_PROCESS_RAISE_CALL,
+        ce_star_lookup_recover_hook, &g_ce_day_process_hook_installed);
+#else
+    (void)galaxy_ptr;
+    return 0;
+#endif
+}
+
+/* Own hook/body (rather than reusing ce_star_lookup_recover_hook) so the
+   log clearly identifies WHICH of the three patched raise sites actually
+   fired -- useful now that we have three independent classes of masked
+   check, and the user has separately reported other symptoms (an
+   apparent date rollback, stale station UI after a swap) that may or may
+   not correlate with this specific one tripping. */
+__attribute__((used)) static void CE_CALL ce_nextday_label3_recover_body(void) {
+    InterlockedIncrement(&g_ce_nextday_label3_recovered_count);
+    ce_write_progress("nextday-label3:recovered");
+}
+
+#if defined(__i386__)
+__attribute__((naked)) static void ce_nextday_label3_recover_hook(void) {
+    __asm__ volatile(
+        "pushal\n\t"
+        "call _ce_nextday_label3_recover_body\n\t"
+        "popal\n\t"
+        "ret\n\t"
+    );
+}
+#endif
+
+/* See CE_RVA_NEXTDAY_LABEL3_RAISE_CALL's own comment. */
+uint32_t CE_CALL CEAdapterInstallNextDayLabel3Recovery(uint32_t galaxy_ptr) {
+#if defined(__i386__)
+    return ce_install_raise_recovery_patch(galaxy_ptr, CE_RVA_NEXTDAY_LABEL3_RAISE_CALL,
+        ce_nextday_label3_recover_hook, &g_ce_nextday_label3_hook_installed);
 #else
     (void)galaxy_ptr;
     return 0;

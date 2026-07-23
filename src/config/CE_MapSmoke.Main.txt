@@ -25,6 +25,32 @@ ML ^{
                             0=unknown ceLogMapKey=ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');
                             0=ceLogMapKey(300);
                         }
+                        2=if(KEY==49 && KEYMOD==3)
+                        2 ~{
+                            0=unknown ceAnchor=0;
+                            0=dword ceAnchorIdx=1;
+                            0=while(ceAnchorIdx<ShipItems(Player()))
+                            0 ~{
+                                0=unknown ceAnchorCandidate=ShipItems(Player(),ceAnchorIdx);
+                                0=if(EquipmentImageName(ceAnchorCandidate)=='CE_Item_TwinHomeAnchor') ceAnchor=ceAnchorCandidate;
+                                0=ceAnchorIdx=ceAnchorIdx+1;
+                            }
+                            0=if(!ceAnchor)
+                            0 ~{
+                                0=ceAnchor=CreateQuestItem('CE_Item_TwinHomeAnchor',None);
+                                0=NoDropItem(ceAnchor,1);
+                                0=CanSellItem(ceAnchor,0);
+                                0=AddItemToShip(Player(),ceAnchor);
+                                0=UpdateFormShip();
+                                0=Ether(6,'CE_AnchorGranted',CT('CE.Transit.AnchorGranted'));
+                            }
+                            0=else
+                            0 ~{
+                                0=NoDropItem(ceAnchor,1);
+                                0=CanSellItem(ceAnchor,0);
+                                0=Ether(6,'CE_AnchorAlreadyAboard',CT('CE.Transit.AnchorAlreadyAboard'));
+                            }
+                        }
                     }
                 }
             }
@@ -49,6 +75,32 @@ ML ^{
                             0=unknown ceLogMapKey2=ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');
                             0=ceLogMapKey2(301);
                         }
+                        2=if(KEY==49 && KEYMOD==3)
+                        2 ~{
+                            0=unknown ceAnchor2=0;
+                            0=dword ceAnchorIdx2=1;
+                            0=while(ceAnchorIdx2<ShipItems(Player()))
+                            0 ~{
+                                0=unknown ceAnchorCandidate2=ShipItems(Player(),ceAnchorIdx2);
+                                0=if(EquipmentImageName(ceAnchorCandidate2)=='CE_Item_TwinHomeAnchor') ceAnchor2=ceAnchorCandidate2;
+                                0=ceAnchorIdx2=ceAnchorIdx2+1;
+                            }
+                            0=if(!ceAnchor2)
+                            0 ~{
+                                0=ceAnchor2=CreateQuestItem('CE_Item_TwinHomeAnchor',None);
+                                0=NoDropItem(ceAnchor2,1);
+                                0=CanSellItem(ceAnchor2,0);
+                                0=AddItemToShip(Player(),ceAnchor2);
+                                0=UpdateFormShip();
+                                0=Ether(6,'CE_AnchorGranted',CT('CE.Transit.AnchorGranted'));
+                            }
+                            0=else
+                            0 ~{
+                                0=NoDropItem(ceAnchor2,1);
+                                0=CanSellItem(ceAnchor2,0);
+                                0=Ether(6,'CE_AnchorAlreadyAboard',CT('CE.Transit.AnchorAlreadyAboard'));
+                            }
+                        }
                     }
                 }
             }
@@ -72,6 +124,32 @@ ML ^{
                         1 ~{
                             0=unknown ceLogMapKey3=ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');
                             0=ceLogMapKey3(302);
+                        }
+                        2=if(KEY==49 && KEYMOD==3)
+                        2 ~{
+                            0=unknown ceAnchor3=0;
+                            0=dword ceAnchorIdx3=1;
+                            0=while(ceAnchorIdx3<ShipItems(Player()))
+                            0 ~{
+                                0=unknown ceAnchorCandidate3=ShipItems(Player(),ceAnchorIdx3);
+                                0=if(EquipmentImageName(ceAnchorCandidate3)=='CE_Item_TwinHomeAnchor') ceAnchor3=ceAnchorCandidate3;
+                                0=ceAnchorIdx3=ceAnchorIdx3+1;
+                            }
+                            0=if(!ceAnchor3)
+                            0 ~{
+                                0=ceAnchor3=CreateQuestItem('CE_Item_TwinHomeAnchor',None);
+                                0=NoDropItem(ceAnchor3,1);
+                                0=CanSellItem(ceAnchor3,0);
+                                0=AddItemToShip(Player(),ceAnchor3);
+                                0=UpdateFormShip();
+                                0=Ether(6,'CE_AnchorGranted',CT('CE.Transit.AnchorGranted'));
+                            }
+                            0=else
+                            0 ~{
+                                0=NoDropItem(ceAnchor3,1);
+                                0=CanSellItem(ceAnchor3,0);
+                                0=Ether(6,'CE_AnchorAlreadyAboard',CT('CE.Transit.AnchorAlreadyAboard'));
+                            }
                         }
                     }
                 }
@@ -146,8 +224,9 @@ Data ^{
             CEAdapterProbeEngineGalaxy=dword,CEAdapterProbeEngineGalaxy,dword
             CEAdapterCreateAndEnterSecondGalaxy=dword,CEAdapterCreateAndEnterSecondGalaxy,dword,dword,dword
             CEAdapterSecondGalaxyStatus=dword,CEAdapterSecondGalaxyStatus
-            CEAdapterEnterReadySecondGalaxy=dword,CEAdapterEnterReadySecondGalaxy,dword
-            CEAdapterReturnToOldGalaxy=dword,CEAdapterReturnToOldGalaxy,dword
+            CEAdapterCreateBareSecondGalaxyForLoad=dword,CEAdapterCreateBareSecondGalaxyForLoad,dword,dword
+            CEAdapterEnterReadySecondGalaxy=dword,CEAdapterEnterReadySecondGalaxy,dword,dword
+            CEAdapterReturnToOldGalaxy=dword,CEAdapterReturnToOldGalaxy,dword,dword
             CEAdapterActiveArm=dword,CEAdapterActiveArm
             CEAdapterDumpGalaxyWords=dword,CEAdapterDumpGalaxyWords,dword,dword
             CEAdapterAbandonEmptySecondGalaxy=dword,CEAdapterAbandonEmptySecondGalaxy,dword
@@ -164,6 +243,14 @@ Data ^{
             CEAdapterProbeRawGalaxyPointer=dword,CEAdapterProbeRawGalaxyPointer,dword,dword
             CEAdapterSnapshotGalaxy=dword,CEAdapterSnapshotGalaxy,dword
             CEAdapterArmGalaxySaveSnapshot=dword,CEAdapterArmGalaxySaveSnapshot,dword
+            CEAdapterLoadSnapshotIntoSecondGalaxy=dword,CEAdapterLoadSnapshotIntoSecondGalaxy,dword
+            CEAdapterRenameSecondGalaxySystems=dword,CEAdapterRenameSecondGalaxySystems,dword
+            CEAdapterInstallStarLookupRecovery=dword,CEAdapterInstallStarLookupRecovery,dword
+            CEAdapterInstallDayProcessRecovery=dword,CEAdapterInstallDayProcessRecovery,dword
+            CEAdapterInstallNextDayLabel3Recovery=dword,CEAdapterInstallNextDayLabel3Recovery,dword
+            CEAdapterRequestSectorLabelSpawn=dword,CEAdapterRequestSectorLabelSpawn,dword
+            CEAdapterSetRememberedShipStar=dword,CEAdapterSetRememberedShipStar,dword
+            CEAdapterGetRememberedShipStar=dword,CEAdapterGetRememberedShipStar
             CEAdapterPollSecondHomeTransform=dword,CEAdapterPollSecondHomeTransform,dword,dword
             CEAdapterInstallLiveArmSwitch=dword,CEAdapterInstallLiveArmSwitch,dword,dword
             CEAdapterSetSystemSector=dword,CEAdapterSetSystemSector,dword,dword,dword
@@ -180,6 +267,7 @@ Data ^{
             CEAdapterHiddenBossCount=dword,CEAdapterHiddenBossCount
             CEAdapterHiddenBossShipAt=dword,CEAdapterHiddenBossShipAt,dword
             CEAdapterLogCheckpoint=dword,CEAdapterLogCheckpoint,dword
+            CEAdapterLogCheckpointValue=dword,CEAdapterLogCheckpointValue,dword,dword
             CEAdapterSetPendingShipSweep=dword,CEAdapterSetPendingShipSweep,dword
             CEAdapterConsumePendingShipSweep=dword,CEAdapterConsumePendingShipSweep
             CEAdapterBeginSectorSurvey=dword,CEAdapterBeginSectorSurvey
@@ -195,7 +283,7 @@ Data ^{
             CEAdapterConsumeCheatTrigger=dword,CEAdapterConsumeCheatTrigger
             CEAdapterRegisterPortal=dword,CEAdapterRegisterPortal,dword,dword
             CEAdapterEnterRegisteredPortal=dword,CEAdapterEnterRegisteredPortal,dword,dword
-            CEAdapterCompleteRegisteredPortal=dword,CEAdapterCompleteRegisteredPortal,dword
+            CEAdapterCompleteRegisteredPortal=dword,CEAdapterCompleteRegisteredPortal,dword,dword
             CEAdapterProbeSaveFormatVersion=dword,CEAdapterProbeSaveFormatVersion,dword,dword
             CEAdapterProbeConClass=dword,CEAdapterProbeConClass,dword,dword
         }

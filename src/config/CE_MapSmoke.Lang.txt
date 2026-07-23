@@ -60,7 +60,7 @@ Script ^{
                         0=else
                         0 ~{
                             0=ceProbeRawPtr(GalaxyPtr(),900000+CurTurn());
-                            0=int ceEnterOk = ceEnterReady(GalaxyPtr());
+                            0=int ceEnterOk = ceEnterReady(GalaxyPtr(),CurTurn());
                             0=ceProbeRawPtr(GalaxyPtr(),910000+CurTurn());
                             0=if(ceEnterOk==0)
                             0 ~{

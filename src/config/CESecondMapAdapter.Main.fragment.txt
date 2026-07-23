@@ -27,8 +27,8 @@ Data {
             CEAdapterProbeEngineGalaxy=dword,CEAdapterProbeEngineGalaxy,dword
             CEAdapterCreateAndEnterSecondGalaxy=dword,CEAdapterCreateAndEnterSecondGalaxy,dword,dword,dword
             CEAdapterSecondGalaxyStatus=dword,CEAdapterSecondGalaxyStatus
-            CEAdapterEnterReadySecondGalaxy=dword,CEAdapterEnterReadySecondGalaxy,dword
-            CEAdapterReturnToOldGalaxy=dword,CEAdapterReturnToOldGalaxy,dword
+            CEAdapterEnterReadySecondGalaxy=dword,CEAdapterEnterReadySecondGalaxy,dword,dword
+            CEAdapterReturnToOldGalaxy=dword,CEAdapterReturnToOldGalaxy,dword,dword
             CEAdapterActiveArm=dword,CEAdapterActiveArm
             CEAdapterDumpGalaxyWords=dword,CEAdapterDumpGalaxyWords,dword,dword
             CEAdapterAbandonEmptySecondGalaxy=dword,CEAdapterAbandonEmptySecondGalaxy,dword
@@ -45,6 +45,7 @@ Data {
             CEAdapterProbeRawGalaxyPointer=dword,CEAdapterProbeRawGalaxyPointer,dword,dword
             CEAdapterSnapshotGalaxy=dword,CEAdapterSnapshotGalaxy,dword
             CEAdapterArmGalaxySaveSnapshot=dword,CEAdapterArmGalaxySaveSnapshot,dword
+            CEAdapterLoadSnapshotIntoSecondGalaxy=dword,CEAdapterLoadSnapshotIntoSecondGalaxy,dword
             CEAdapterPollSecondHomeTransform=dword,CEAdapterPollSecondHomeTransform,dword,dword
             CEAdapterProbeSaveFormatVersion=dword,CEAdapterProbeSaveFormatVersion,dword,dword
             CEAdapterProbeConClass=dword,CEAdapterProbeConClass,dword,dword

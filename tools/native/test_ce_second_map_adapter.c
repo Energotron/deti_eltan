@@ -35,16 +35,17 @@ int main(int argc, char **argv) {
     ce_noarg_fn portal_status;
     ce_two_dword_fn register_portal;
     ce_two_dword_fn enter_portal;
-    ce_dword_fn complete_portal;
+    ce_two_dword_fn complete_portal;
     ce_two_dword_fn run_smoke;
     ce_two_dword_fn probe;
     ce_two_dword_fn sample_layout;
     ce_three_dword_fn observe_layout;
     ce_dword_fn probe_engine_galaxy;
     ce_three_dword_fn create_second_galaxy;
-    ce_dword_fn return_old_galaxy;
+    ce_two_dword_fn return_old_galaxy;
     ce_noarg_fn second_galaxy_status;
-    ce_dword_fn enter_ready_second_galaxy;
+    ce_two_dword_fn enter_ready_second_galaxy;
+    ce_dword_fn load_snapshot_into_second;
     ce_noarg_fn fingerprint_hash;
     ce_noarg_fn fingerprint_bytes;
     ce_dword_fn layout_block_hash;
@@ -96,8 +97,10 @@ int main(int argc, char **argv) {
         module, "CEAdapterCreateAndEnterSecondGalaxy"
     );
     second_galaxy_status = (ce_noarg_fn)require_export(module, "CEAdapterSecondGalaxyStatus");
-    enter_ready_second_galaxy = (ce_dword_fn)require_export(module, "CEAdapterEnterReadySecondGalaxy");
-    return_old_galaxy = (ce_dword_fn)require_export(module, "CEAdapterReturnToOldGalaxy");
+    enter_ready_second_galaxy = (ce_two_dword_fn)require_export(module, "CEAdapterEnterReadySecondGalaxy");
+    return_old_galaxy = (ce_two_dword_fn)require_export(module, "CEAdapterReturnToOldGalaxy");
+    load_snapshot_into_second = (ce_dword_fn)require_export(
+        module, "CEAdapterLoadSnapshotIntoSecondGalaxy");
     active_arm = (ce_noarg_fn)require_export(module, "CEAdapterActiveArm");
     snapshot_galaxy = (ce_dword_fn)require_export(module, "CEAdapterSnapshotGalaxy");
     arm_save_snapshot = (ce_dword_fn)require_export(module, "CEAdapterArmGalaxySaveSnapshot");
@@ -108,17 +111,18 @@ int main(int argc, char **argv) {
     portal_status = (ce_noarg_fn)require_export(module, "CEAdapterPortalStatus");
     register_portal = (ce_two_dword_fn)require_export(module, "CEAdapterRegisterPortal");
     enter_portal = (ce_two_dword_fn)require_export(module, "CEAdapterEnterRegisteredPortal");
-    complete_portal = (ce_dword_fn)require_export(module, "CEAdapterCompleteRegisteredPortal");
+    complete_portal = (ce_two_dword_fn)require_export(module, "CEAdapterCompleteRegisteredPortal");
 
     if (abi() != 15 || capabilities() != 65521 || supports_multi() != 0) return 3;
     if (probe_engine_galaxy(marker) != 0 || create_second_galaxy(marker, 1, 0) != 0 ||
-        second_galaxy_status() != 0 || enter_ready_second_galaxy(marker) != 0 ||
-        return_old_galaxy(marker) != 0 || active_arm() != 0 ||
+        second_galaxy_status() != 0 || enter_ready_second_galaxy(marker, marker) != 0 ||
+        return_old_galaxy(marker, marker) != 0 || active_arm() != 0 ||
+        load_snapshot_into_second(marker) != 0 ||
         snapshot_galaxy(marker) != 0 || arm_save_snapshot(marker) != 0 ||
         poll_second_home(marker, marker) != 0 || install_live_switch(marker, marker) != 0 ||
         set_system_sector(marker, marker, marker) != 0 || portal_ready(marker) != 0 ||
         portal_status() != 0 || register_portal(marker, marker) != 0 ||
-        enter_portal(marker, marker) != 0 || complete_portal(marker) != 0) return 17;
+        enter_portal(marker, marker) != 0 || complete_portal(marker, marker) != 0) return 17;
     if (echo(marker) != marker || bind(0) != 0 || bind(marker) != 1) return 4;
     if (get_bound() != marker) return 5;
     if (run_smoke(0, 1128616787u) != 0 || run_smoke(marker, 1128616787u) != 1) return 6;
