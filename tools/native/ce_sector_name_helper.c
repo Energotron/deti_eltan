@@ -110,7 +110,22 @@ static size_t scan_bytes(HANDLE process, const unsigned char *needle, size_t nee
         free(buffer);
         address = next;
     }
-    return hit_count;
+    /* Confirmed live (Windows Event Log, Application Error 0xc0000005 at
+       this module's own RVA 0x159b, mapped via llvm-addr2line straight to
+       find_anchor_via_index's `string_hits[i]` read): every caller treats
+       this return value as a safe bound for indexing its own fixed-size
+       `hits` array, but hit_count was incremented past hit_capacity
+       whenever more matches existed than the array could hold, so the
+       caller's own `for (i = 0; i < string_count; ++i)` loop read past the
+       end of a 16- or 64-element stack array. Clamping the RETURN value
+       (not just the write above) is what actually fixes it -- the write
+       guard alone only stops corrupting `hits[]` itself, not the caller
+       trusting an oversized count afterward. Second Home doubling the
+       amount of scannable process memory made hitting >16 matches for a
+       short 2-wchar needle ("20") a lot more likely than it was with a
+       single galaxy, which is presumably why this was never seen before
+       this session. */
+    return hit_count > hit_capacity ? hit_capacity : hit_count;
 }
 
 /* pointer must already BE a string's own address (e.g. from scan_bytes,

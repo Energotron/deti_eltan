@@ -67,6 +67,7 @@ CE_EXPORT uint32_t CE_CALL CEAdapterCreateBareSecondGalaxyForLoad(uint32_t galax
 CE_EXPORT uint32_t CE_CALL CEAdapterEnterReadySecondGalaxy(uint32_t galaxy_ptr, uint32_t turn);
 CE_EXPORT uint32_t CE_CALL CEAdapterReturnToOldGalaxy(uint32_t galaxy_ptr, uint32_t turn);
 CE_EXPORT uint32_t CE_CALL CEAdapterActiveArm(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterCheckForExternalReload(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterAbandonEmptySecondGalaxy(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterMarkSecondGalaxyEntryDisabled(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeSubobjectConstruction(uint32_t old_galaxy_ptr);
@@ -78,6 +79,22 @@ CE_EXPORT uint32_t CE_CALL CEAdapterProbeNextDayOnSecondGalaxy(uint32_t old_gala
 CE_EXPORT uint32_t CE_CALL CEAdapterDumpProcessWindows(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterProbeRawGalaxyPointer(uint32_t galaxy_ptr, uint32_t turn);
 CE_EXPORT uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterCaptureFreshSnapshot(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterArmCameraRecenter(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterConsumeCameraRecenterPending(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterClearCameraRecenterPending(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterLogTurnHeartbeat(uint32_t turn, uint32_t ship_in_hole);
+CE_EXPORT uint32_t CE_CALL CEAdapterLogArrivalDiagnostics(
+    uint32_t native_x, uint32_t native_y,
+    uint32_t star_x, uint32_t star_y,
+    uint32_t galaxy_stars, uint32_t galaxy_sectors,
+    uint32_t arrival_sector, uint32_t opened_count);
+CE_EXPORT uint32_t CE_CALL CEAdapterLogABTestEvent(uint32_t turn, uint32_t ship_in_hole, uint32_t gab_status);
+CE_EXPORT uint32_t CE_CALL CEAdapterIsABTestOrdered(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterArmABTestOrdered(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterClearABTestOrdered(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterArmPendingArrival(uint32_t entering);
+CE_EXPORT uint32_t CE_CALL CEAdapterConsumePendingArrival(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterLoadSnapshotIntoSecondGalaxy(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterRenameSecondGalaxySystems(uint32_t second_galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterSetRememberedShipStar(uint32_t star_ptr);
@@ -85,6 +102,8 @@ CE_EXPORT uint32_t CE_CALL CEAdapterGetRememberedShipStar(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterInstallStarLookupRecovery(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterInstallDayProcessRecovery(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterInstallNextDayLabel3Recovery(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterInstallDayCounterGuard(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterBuildFreshSecondGalaxy(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterRequestSectorLabelSpawn(uint32_t second_home);
 CE_EXPORT uint32_t CE_CALL CEAdapterArmGalaxySaveSnapshot(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterPollSecondHomeTransform(

@@ -15,18 +15,13 @@ ML ^{
                     Pos=0,0,-100
                     Size=1,1
                     OnKey ~{
-                        0=if(KEYMOD==3 && KEY>=65 && KEY<=90)
+                        0=if(KEY==77)
                         0 ~{
-                            0=unknown ceAdvanceCheat=ImportedFunction('CESecondMapAdapter','CEAdapterAdvanceCheatCode');
-                            0=if(ceAdvanceCheat(KEY,KEYMOD))ForceNextDay();
-                        }
-                        1=if(KEY==77)
-                        1 ~{
                             0=unknown ceLogMapKey=ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');
                             0=ceLogMapKey(300);
                         }
-                        2=if(KEY==49 && KEYMOD==3)
-                        2 ~{
+                        1=if(KEY==49 && KEYMOD==3)
+                        1 ~{
                             0=unknown ceAnchor=0;
                             0=dword ceAnchorIdx=1;
                             0=while(ceAnchorIdx<ShipItems(Player()))
@@ -65,18 +60,13 @@ ML ^{
                     Pos=0,0,-100
                     Size=1,1
                     OnKey ~{
-                        0=if(KEYMOD==3 && KEY>=65 && KEY<=90)
+                        0=if(KEY==77)
                         0 ~{
-                            0=unknown ceAdvanceCheat=ImportedFunction('CESecondMapAdapter','CEAdapterAdvanceCheatCode');
-                            0=if(ceAdvanceCheat(KEY,KEYMOD))ForceNextDay();
-                        }
-                        1=if(KEY==77)
-                        1 ~{
                             0=unknown ceLogMapKey2=ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');
                             0=ceLogMapKey2(301);
                         }
-                        2=if(KEY==49 && KEYMOD==3)
-                        2 ~{
+                        1=if(KEY==49 && KEYMOD==3)
+                        1 ~{
                             0=unknown ceAnchor2=0;
                             0=dword ceAnchorIdx2=1;
                             0=while(ceAnchorIdx2<ShipItems(Player()))
@@ -115,18 +105,13 @@ ML ^{
                     Pos=0,0,-101
                     Size=1,1
                     OnKey ~{
-                        0=if(KEYMOD==3 && KEY>=65 && KEY<=90)
+                        0=if(KEY==77)
                         0 ~{
-                            0=unknown ceAdvanceCheat=ImportedFunction('CESecondMapAdapter','CEAdapterAdvanceCheatCode');
-                            0=if(ceAdvanceCheat(KEY,KEYMOD))ForceNextDay();
-                        }
-                        1=if(KEY==77)
-                        1 ~{
                             0=unknown ceLogMapKey3=ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');
                             0=ceLogMapKey3(302);
                         }
-                        2=if(KEY==49 && KEYMOD==3)
-                        2 ~{
+                        1=if(KEY==49 && KEYMOD==3)
+                        1 ~{
                             0=unknown ceAnchor3=0;
                             0=dword ceAnchorIdx3=1;
                             0=while(ceAnchorIdx3<ShipItems(Player()))
@@ -183,6 +168,8 @@ ML ^{
                                     0=HoleMap(ceHole,'SkipAB');
                                     0=unknown ceRegisterPortal=ImportedFunction('CESecondMapAdapter','CEAdapterRegisterPortal');
                                     0=ceRegisterPortal(GalaxyPtr(),Id(ceHole));
+                                    0=unknown ceArmCameraRecenterHole=ImportedFunction('CESecondMapAdapter','CEAdapterArmCameraRecenter');
+                                    0=ceArmCameraRecenterHole();
                                 }
                                 0=else MessageBox(CT('CE.Transit.NoDestination'));
                             }
@@ -228,6 +215,7 @@ Data ^{
             CEAdapterEnterReadySecondGalaxy=dword,CEAdapterEnterReadySecondGalaxy,dword,dword
             CEAdapterReturnToOldGalaxy=dword,CEAdapterReturnToOldGalaxy,dword,dword
             CEAdapterActiveArm=dword,CEAdapterActiveArm
+            CEAdapterCheckForExternalReload=dword,CEAdapterCheckForExternalReload,dword
             CEAdapterDumpGalaxyWords=dword,CEAdapterDumpGalaxyWords,dword,dword
             CEAdapterAbandonEmptySecondGalaxy=dword,CEAdapterAbandonEmptySecondGalaxy,dword
             CEAdapterGetGeneratedStarCount=dword,CEAdapterGetGeneratedStarCount,dword
@@ -242,12 +230,26 @@ Data ^{
             CEAdapterDumpProcessWindows=dword,CEAdapterDumpProcessWindows
             CEAdapterProbeRawGalaxyPointer=dword,CEAdapterProbeRawGalaxyPointer,dword,dword
             CEAdapterSnapshotGalaxy=dword,CEAdapterSnapshotGalaxy,dword
+            CEAdapterCaptureFreshSnapshot=dword,CEAdapterCaptureFreshSnapshot,dword
+            CEAdapterArmCameraRecenter=dword,CEAdapterArmCameraRecenter
+            CEAdapterConsumeCameraRecenterPending=dword,CEAdapterConsumeCameraRecenterPending
+            CEAdapterClearCameraRecenterPending=dword,CEAdapterClearCameraRecenterPending
+            CEAdapterLogTurnHeartbeat=dword,CEAdapterLogTurnHeartbeat,dword,dword
+            CEAdapterLogArrivalDiagnostics=dword,CEAdapterLogArrivalDiagnostics,dword,dword,dword,dword,dword,dword,dword,dword
+            CEAdapterLogABTestEvent=dword,CEAdapterLogABTestEvent,dword,dword,dword
+            CEAdapterIsABTestOrdered=dword,CEAdapterIsABTestOrdered
+            CEAdapterArmABTestOrdered=dword,CEAdapterArmABTestOrdered
+            CEAdapterClearABTestOrdered=dword,CEAdapterClearABTestOrdered
+            CEAdapterArmPendingArrival=dword,CEAdapterArmPendingArrival,dword
+            CEAdapterConsumePendingArrival=dword,CEAdapterConsumePendingArrival
             CEAdapterArmGalaxySaveSnapshot=dword,CEAdapterArmGalaxySaveSnapshot,dword
             CEAdapterLoadSnapshotIntoSecondGalaxy=dword,CEAdapterLoadSnapshotIntoSecondGalaxy,dword
             CEAdapterRenameSecondGalaxySystems=dword,CEAdapterRenameSecondGalaxySystems,dword
             CEAdapterInstallStarLookupRecovery=dword,CEAdapterInstallStarLookupRecovery,dword
             CEAdapterInstallDayProcessRecovery=dword,CEAdapterInstallDayProcessRecovery,dword
             CEAdapterInstallNextDayLabel3Recovery=dword,CEAdapterInstallNextDayLabel3Recovery,dword
+            CEAdapterInstallDayCounterGuard=dword,CEAdapterInstallDayCounterGuard,dword
+            CEAdapterBuildFreshSecondGalaxy=dword,CEAdapterBuildFreshSecondGalaxy,dword
             CEAdapterRequestSectorLabelSpawn=dword,CEAdapterRequestSectorLabelSpawn,dword
             CEAdapterSetRememberedShipStar=dword,CEAdapterSetRememberedShipStar,dword
             CEAdapterGetRememberedShipStar=dword,CEAdapterGetRememberedShipStar

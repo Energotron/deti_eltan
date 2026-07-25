@@ -20,15 +20,17 @@ UselessItems ~{
                 }
                 04=else
                 05 ^{
-                    01=unknown ceOriginStar=ShipStar(Player());
-                    02=unknown ceOriginSector=StarToCon(ceOriginStar);
-                    03=unknown ceOriginX=CoordX(ceOriginStar);
-                    04=unknown ceOriginY=CoordY(ceOriginStar);
-                    05=unknown ceDestinationStar=ceOriginStar;
-                    06=unknown ceBestDistSq=-1;
-                    07=dword ceScanIndex=0;
-                    08=while(ceScanIndex<GalaxyStars())
-                    09 ^{
+                    01=unknown ceCaptureFresh=ImportedFunction('CESecondMapAdapter','CEAdapterCaptureFreshSnapshot');
+                    02=ceCaptureFresh(GalaxyPtr());
+                    03=unknown ceOriginStar=ShipStar(Player());
+                    04=unknown ceOriginSector=StarToCon(ceOriginStar);
+                    05=unknown ceOriginX=CoordX(ceOriginStar);
+                    06=unknown ceOriginY=CoordY(ceOriginStar);
+                    07=unknown ceDestinationStar=ceOriginStar;
+                    08=unknown ceBestDistSq=-1;
+                    09=dword ceScanIndex=0;
+                    10=while(ceScanIndex<GalaxyStars())
+                    11 ^{
                         01=unknown ceCandidate=GalaxyStar(ceScanIndex);
                         02=if(StarToCon(ceCandidate)!=ceOriginSector)
                         03 ^{
@@ -43,12 +45,12 @@ UselessItems ~{
                         }
                         04=ceScanIndex=ceScanIndex+1;
                     }
-                    10=if(ceDestinationStar==ceOriginStar)
-                    11 ^{
+                    12=if(ceDestinationStar==ceOriginStar)
+                    13 ^{
                         01=MessageBox(CT('CE.Transit.NoDestination'));
                     }
-                    12=else
-                    13 ^{
+                    14=else
+                    15 ^{
                         01=dword ceHole=HoleCreate2(ceOriginStar,ceDestinationStar);
                         02=if(ceHole)
                         03 ^{
@@ -57,6 +59,8 @@ UselessItems ~{
                             03=HoleMap(ceHole,'SkipAB');
                             04=unknown ceRegisterPortal=ImportedFunction('CESecondMapAdapter','CEAdapterRegisterPortal');
                             05=if(!ceRegisterPortal(GalaxyPtr(),Id(ceHole))) MessageBox(CT('CE.Transit.PortalRegistrationFailed'));
+                            06=unknown ceArmCameraRecenterHole=ImportedFunction('CESecondMapAdapter','CEAdapterArmCameraRecenter');
+                            07=ceArmCameraRecenterHole();
                         }
                     }
                 }
@@ -73,5 +77,6 @@ CE ^{
         AnchorNotReady=Якорь не находит вторую половину коридора. Дождитесь завершения инициализации карты и попробуйте снова.
         NoDestination=Не удалось выбрать систему выхода в другом секторе. Откройте ещё один сектор и повторите попытку.
         PortalRegistrationFailed=Коридор открылся, но переходный контроллер не принял его сигнатуру. Не входите в эту дыру и повторите попытку после загрузки сохранения.
+        ArrivedSecondHome=Второй Дом: вы во втором рукаве Галактики.
     }
 }
