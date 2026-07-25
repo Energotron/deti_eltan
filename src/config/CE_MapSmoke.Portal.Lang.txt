@@ -16,7 +16,14 @@ ShipInfo ^{
                     04=else if(!ShipInHole(Player()) && cePortalStatus()==2)
                     05 ^{
                         01=unknown ceCompletePortal=ImportedFunction('CESecondMapAdapter','CEAdapterCompleteRegisteredPortal');
-                        02=if(ceCompletePortal(GalaxyPtr(),CurTurn())) ShipDeleteCustomShipInfo(0,CurInfo());
+                        02=if(ceCompletePortal(GalaxyPtr(),CurTurn()))
+                        03 ^{
+                            01=ShipDeleteCustomShipInfo(0,CurInfo());
+                            02=unknown ceActiveArm=ImportedFunction('CESecondMapAdapter','CEAdapterActiveArm');
+                            03=unknown ceArmPendingArrival=ImportedFunction('CESecondMapAdapter','CEAdapterArmPendingArrival');
+                            04=ceArmPendingArrival(ceActiveArm());
+                            05=FormChange('GameLoad');
+                        }
                     }
                 }
                 OnActCodeTypes=t_OnStep

@@ -350,6 +350,20 @@ static HHOOK g_ce_keyboard_hook = NULL;
 static volatile LONG g_ce_f8_down = 0;
 static volatile LONG g_ce_cheat_triggered = 0;
 static uint32_t g_ce_cheat_progress = 0u;
+/* A complete second galaxy cannot be constructed safely after a game has
+   already started: TThreadCreateNewGame.Execute replaces the player, every
+   global world table and the current TGalaxy as one indivisible operation.
+   It can, however, run a second time while the engine is already inside its
+   native new-game worker.  The first complete world is written to a normal
+   save, the second complete world is generated and written to another, and
+   the first is loaded back before the worker returns.  These fields belong
+   to that startup-only transaction; no live TGalaxy pointer is retained. */
+static volatile LONG g_ce_dual_newgame_hook_installed = 0;
+static volatile LONG g_ce_dual_newgame_running = 0;
+static volatile LONG g_ce_dual_newgame_status = 0;
+static void *g_ce_dual_newgame_trampoline = NULL;
+static uint32_t g_ce_first_arm_save_path = 0u;
+static uint32_t g_ce_second_home_save_path = 0u;
 
 /* Steam build 20648864 / Rangers.exe 2.1.2500.0 only. */
 enum {
@@ -540,7 +554,35 @@ enum {
        part identified by disassembly, not a proof that nothing else is
        disturbed. */
     CE_RVA_LOADING_FLAG_CELL = 0x00482d5cu,
-    CE_RVA_NEWGAME_COUNTER_CELL = 0x00482724u
+    CE_RVA_NEWGAME_COUNTER_CELL = 0x00482724u,
+    /* Whole-save lifecycle, not just TGalaxy serialization.  Proven from
+       all direct callers in Rangers.exe:
+         0x006008f8: SaveGame(eax=full filename, edx=display title) -> AL;
+         0x00601150: LoadGame(eax=full filename) -> AL.
+       The load wrapper is exactly what TThreadGameLoad.Execute calls at
+       0x0053c98a.  The save wrapper serializes every global object before
+       handing immutable memory buffers to its writer thread. */
+    CE_RVA_SAVE_GAME = 0x002008f8u,
+    CE_RVA_LOAD_GAME = 0x00201150u,
+    /* TGameFolders.GetTurnSavePath(Self, out UnicodeString), called by the
+       game's own turn-save path immediately before CE_RVA_SAVE_GAME.  It
+       gives us the user's real Documents\SpaceRangersHD\Save directory
+       without embedding a machine-specific absolute path. */
+    CE_RVA_SAVE_MANAGER_CELL = 0x004826d4u,
+    CE_RVA_GET_TURN_SAVE_PATH = 0x0039ffdcu,
+    /* TThreadGameLoad.Execute reads:
+         edx = [base + CE_RVA_GAME_LOAD_PATH_CELL]; eax = [edx]
+       and passes that UnicodeString to LoadGame.  Setting this immortal
+       string before RScript calls FormChange('GameLoad') gives us the
+       game's own loading form, worker and progress animation. */
+    CE_RVA_GAME_LOAD_PATH_CELL = 0x00482880u,
+    /* The whole-save wrapper finishes serialization synchronously but
+       delegates disk I/O to this persistent writer object.  The next native
+       save waits on it using these same two methods; we do the same before
+       consuming either sidecar through LoadGame. */
+    CE_RVA_SAVE_WRITER_OBJECT = 0x0047b6bcu,
+    CE_RVA_THREAD_IS_RUNNING = 0x003f8bb4u,
+    CE_RVA_THREAD_WAIT_FOR = 0x003f8bf4u
 };
 
 uint32_t CE_CALL CEAdapterAbiVersion(void) {
@@ -1085,6 +1127,22 @@ static uint32_t ce_call_delphi_method_dword(
         "movl %%eax, %0"
         : "=r"(result)
         : "r"(dword_argument), "r"(self), "r"(function_address)
+        : "eax", "ecx", "edx", "memory"
+    );
+    return result;
+}
+
+static uint32_t ce_call_delphi_eax_edx(
+    uint32_t eax_argument, uint32_t edx_argument, uintptr_t function_address
+) {
+    uint32_t result;
+    __asm__ volatile(
+        "movl %1, %%edx\n\t"
+        "movl %2, %%eax\n\t"
+        "call *%3\n\t"
+        "movl %%eax, %0"
+        : "=r"(result)
+        : "r"(edx_argument), "r"(eax_argument), "r"(function_address)
         : "eax", "ecx", "edx", "memory"
     );
     return result;
@@ -2591,6 +2649,338 @@ static uint32_t ce_make_immortal_unicode(const wchar_t *text) {
     return (uint32_t)(uintptr_t)(block + 8u);
 }
 
+static int ce_make_dual_newgame_paths(uintptr_t module_base) {
+    uint32_t manager_slot;
+    uint32_t manager;
+    uint32_t turn_save_path = 0u;
+    const wchar_t *turn_save_text;
+    uint32_t path_bytes;
+    size_t path_chars;
+    size_t separator = (size_t)-1;
+    size_t index;
+    wchar_t first_path[1024];
+    wchar_t second_path[1024];
+    static const wchar_t first_name[] = L"CE_Eltan_FirstArm.sav";
+    static const wchar_t second_name[] = L"CE_Eltan_SecondHome.sav";
+
+    if (!ce_region_has_access(
+            (const void *)(module_base + CE_RVA_SAVE_MANAGER_CELL), 4u, 0)) return 0;
+    manager_slot = *(const uint32_t *)(module_base + CE_RVA_SAVE_MANAGER_CELL);
+    if (!ce_region_has_access((const void *)(uintptr_t)manager_slot, 4u, 0)) return 0;
+    manager = *(const uint32_t *)(uintptr_t)manager_slot;
+    if (manager == 0u || !ce_region_has_access((const void *)(uintptr_t)manager, 4u, 0)) {
+        return 0;
+    }
+
+    ce_call_delphi_eax_edx(
+        manager, (uint32_t)(uintptr_t)&turn_save_path,
+        module_base + CE_RVA_GET_TURN_SAVE_PATH);
+    if (turn_save_path < 8u ||
+        !ce_region_has_access((const void *)(uintptr_t)(turn_save_path - 4u), 4u, 0)) {
+        return 0;
+    }
+    path_bytes = *(const uint32_t *)(uintptr_t)(turn_save_path - 4u);
+    if ((path_bytes & 1u) != 0u || path_bytes == 0u ||
+        path_bytes > (uint32_t)((1024u - 1u) * sizeof(wchar_t)) ||
+        !ce_region_has_access((const void *)(uintptr_t)turn_save_path, path_bytes, 0)) {
+        return 0;
+    }
+    path_chars = (size_t)path_bytes / sizeof(wchar_t);
+    turn_save_text = (const wchar_t *)(uintptr_t)turn_save_path;
+    for (index = 0u; index < path_chars; ++index) {
+        if (turn_save_text[index] == L'\\' || turn_save_text[index] == L'/') {
+            separator = index;
+        }
+    }
+    if (separator == (size_t)-1 ||
+        separator + 1u + wcslen(first_name) >= 1024u ||
+        separator + 1u + wcslen(second_name) >= 1024u) {
+        return 0;
+    }
+
+    memcpy(first_path, turn_save_text, (separator + 1u) * sizeof(wchar_t));
+    memcpy(second_path, turn_save_text, (separator + 1u) * sizeof(wchar_t));
+    wcscpy(first_path + separator + 1u, first_name);
+    wcscpy(second_path + separator + 1u, second_name);
+    g_ce_first_arm_save_path = ce_make_immortal_unicode(first_path);
+    g_ce_second_home_save_path = ce_make_immortal_unicode(second_path);
+    return g_ce_first_arm_save_path != 0u && g_ce_second_home_save_path != 0u;
+}
+
+static int ce_wait_for_save_writer(uintptr_t module_base) {
+    uint32_t writer;
+    uint32_t running;
+    if (!ce_region_has_access(
+            (const void *)(module_base + CE_RVA_SAVE_WRITER_OBJECT), 4u, 0)) return 0;
+    writer = *(const uint32_t *)(module_base + CE_RVA_SAVE_WRITER_OBJECT);
+    if (writer == 0u || !ce_region_has_access((const void *)(uintptr_t)writer, 4u, 0)) {
+        return 0;
+    }
+    running = ce_call_delphi_eax_edx(
+        writer, 0u, module_base + CE_RVA_THREAD_IS_RUNNING) & 0xffu;
+    if (running != 0u) {
+        ce_call_delphi_eax_edx(
+            writer, 0xffffffffu, module_base + CE_RVA_THREAD_WAIT_FOR);
+    }
+    return 1;
+}
+
+static int ce_save_complete_game(
+    uintptr_t module_base, uint32_t filename, const wchar_t *title
+) {
+    uint32_t title_string;
+    uint32_t result;
+    if (filename == 0u) return 0;
+    title_string = ce_make_immortal_unicode(title);
+    if (title_string == 0u) return 0;
+    result = ce_call_delphi_eax_edx(
+        filename, title_string, module_base + CE_RVA_SAVE_GAME) & 0xffu;
+    if (result == 0u) return 0;
+    return ce_wait_for_save_writer(module_base);
+}
+
+static int ce_load_complete_game(uintptr_t module_base, uint32_t filename) {
+    if (filename == 0u) return 0;
+    return (ce_call_delphi_eax_edx(
+        filename, 0u, module_base + CE_RVA_LOAD_GAME) & 0xffu) != 0u;
+}
+
+static int ce_set_native_game_load_path(uintptr_t module_base, uint32_t filename) {
+    uint32_t path_slot;
+    if (filename == 0u ||
+        !ce_region_has_access(
+            (const void *)(module_base + CE_RVA_GAME_LOAD_PATH_CELL), 4u, 0)) {
+        return 0;
+    }
+    path_slot = *(const uint32_t *)(module_base + CE_RVA_GAME_LOAD_PATH_CELL);
+    if (!ce_region_has_access((void *)(uintptr_t)path_slot, 4u, 1)) return 0;
+    /* filename is an immortal Delphi UnicodeString (refcount -1), so direct
+       assignment is valid across the asynchronous GameLoad form.  Do not
+       release the previous field here: the form owns its normal lifecycle,
+       while our string deliberately remains valid for the process. */
+    *(uint32_t *)(uintptr_t)path_slot = filename;
+    return 1;
+}
+
+/* Runs in the engine's own TThreadCreateNewGame worker.  This is the one
+   context in which invoking the complete new-game builder a second time is
+   valid: the UI is already showing native loading, day simulation has not
+   started, and replacement of every global object is expected.  Restoring
+   the first arm uses the engine's full LoadGame lifecycle, never a raw
+   pointer swap or a hand-picked list of globals. */
+__attribute__((used)) static void CE_CALL ce_dual_newgame_execute(uint32_t self) {
+    static uint32_t second_thread[CE_NEWGAME_THREAD_INSTANCE_SIZE / 4u];
+    uintptr_t module_base = (uintptr_t)GetModuleHandleW(NULL);
+    uint32_t *galaxy_slot;
+    uint32_t first_galaxy;
+    uint32_t second_galaxy;
+    uint32_t restored_galaxy;
+    uint32_t sectors;
+    uint32_t systems;
+    unsigned char original_thread[CE_NEWGAME_THREAD_INSTANCE_SIZE];
+    uint32_t class_ref;
+    int first_saved = 0;
+    int second_saved = 0;
+    int restored = 0;
+    char report[320];
+    int report_size;
+
+    if (g_ce_dual_newgame_trampoline == NULL) return;
+    if (InterlockedCompareExchange(&g_ce_dual_newgame_running, 1, 0) != 0) {
+        ce_call_delphi_method(self, (uintptr_t)g_ce_dual_newgame_trampoline);
+        return;
+    }
+    InterlockedExchange(&g_ce_dual_newgame_status, 1);
+
+    memset(original_thread, 0, sizeof(original_thread));
+    class_ref = (uint32_t)(module_base + CE_RVA_NEWGAME_THREAD_CLASS);
+    if (self != 0u &&
+        ce_region_has_access((const void *)(uintptr_t)self,
+            CE_NEWGAME_THREAD_INSTANCE_SIZE, 0)) {
+        class_ref = *(const uint32_t *)(uintptr_t)self;
+        /* The eight bytes at +0x2d are only the race-presence block copied
+           into TGalaxy.  The remainder of the derived thread instance also
+           contains the selected player race/difficulty and other new-game
+           choices.  The earlier mid-session experiment copied only those
+           eight bytes and demonstrably produced a Maloc player for a human
+           setup.  Preserve the complete 0x4c instance instead; Execute runs
+           synchronously on the same real worker, so its inherited thread
+           handles still refer to the correct active thread. */
+        memcpy(original_thread, (const void *)(uintptr_t)self,
+            sizeof(original_thread));
+    }
+
+    ce_write_progress("dual-newgame:first:before-execute");
+    ce_call_delphi_method(self, (uintptr_t)g_ce_dual_newgame_trampoline);
+    ce_write_progress("dual-newgame:first:after-execute");
+
+    if (!ce_region_has_access(
+            (const void *)(module_base + CE_RVA_GALAXY_IMPORT_CELL), 4u, 0)) {
+        InterlockedExchange(&g_ce_dual_newgame_status, 3);
+        goto done;
+    }
+    galaxy_slot = *(uint32_t **)(module_base + CE_RVA_GALAXY_IMPORT_CELL);
+    if (!ce_region_has_access(galaxy_slot, 4u, 0)) {
+        InterlockedExchange(&g_ce_dual_newgame_status, 3);
+        goto done;
+    }
+    first_galaxy = *galaxy_slot;
+    if (first_galaxy == 0u || !ce_make_dual_newgame_paths(module_base)) {
+        ce_write_progress("dual-newgame:abort:no-first-or-path");
+        InterlockedExchange(&g_ce_dual_newgame_status, 3);
+        goto done;
+    }
+
+    ce_write_progress("dual-newgame:first:before-save");
+    first_saved = ce_save_complete_game(
+        module_base, g_ce_first_arm_save_path, L"Дети Эльтан: Первый рукав");
+    ce_write_progress(first_saved
+        ? "dual-newgame:first:saved" : "dual-newgame:abort:first-save-failed");
+    if (!first_saved) {
+        InterlockedExchange(&g_ce_dual_newgame_status, 3);
+        goto done;
+    }
+
+    memset(second_thread, 0, sizeof(second_thread));
+    memcpy(second_thread, original_thread, sizeof(second_thread));
+    second_thread[0] = class_ref;
+    ce_write_progress("dual-newgame:second:before-execute");
+    ce_call_delphi_method(
+        (uint32_t)(uintptr_t)second_thread,
+        (uintptr_t)g_ce_dual_newgame_trampoline);
+    ce_write_progress("dual-newgame:second:after-execute");
+    second_galaxy = *galaxy_slot;
+    sectors = ce_read_list_count(second_galaxy, 0x164u);
+    systems = ce_read_list_count(second_galaxy, 0x2cu);
+    if (second_galaxy == 0u || second_galaxy == first_galaxy || systems == 0u) {
+        ce_write_progress("dual-newgame:second:invalid");
+        InterlockedExchange(&g_ce_dual_newgame_status, 4);
+        goto restore_first;
+    }
+
+    /* Make the persisted world visibly independent immediately.  Sector
+       labels and story population remain later content passes, but system
+       identities already belong to Second Home in the sidecar itself. */
+    CEAdapterRenameSecondGalaxySystems(second_galaxy);
+    report_size = snprintf(report, sizeof(report),
+        "{\"status\":\"dual-newgame-second-built\",\"galaxy\":%lu,"
+        "\"sectors\":%lu,\"systems\":%lu}\r\n",
+        (unsigned long)second_galaxy, (unsigned long)sectors,
+        (unsigned long)systems);
+    if (report_size > 0) ce_write_text_marker(
+        "dual-newgame.jsonl", report, (size_t)report_size);
+
+    ce_write_progress("dual-newgame:second:before-save");
+    second_saved = ce_save_complete_game(
+        module_base, g_ce_second_home_save_path, L"Дети Эльтан: Второй Дом");
+    ce_write_progress(second_saved
+        ? "dual-newgame:second:saved" : "dual-newgame:second-save-failed");
+    if (!second_saved) InterlockedExchange(&g_ce_dual_newgame_status, 4);
+
+restore_first:
+    ce_write_progress("dual-newgame:first:before-restore");
+    restored = ce_load_complete_game(module_base, g_ce_first_arm_save_path);
+    restored_galaxy = ce_region_has_access(galaxy_slot, 4u, 0) ? *galaxy_slot : 0u;
+    ce_write_progress(restored
+        ? "dual-newgame:first:restored" : "dual-newgame:first:restore-failed");
+    if (restored && second_saved && restored_galaxy != 0u) {
+        InterlockedExchange(&g_ce_old_galaxy_ptr, 0);
+        InterlockedExchange(&g_ce_second_galaxy_ptr, 0);
+        InterlockedExchange(&g_ce_second_snapshot_loaded, 0);
+        InterlockedExchange(&g_ce_active_arm, 0);
+        InterlockedExchange(&g_ce_dual_newgame_status, 2);
+    } else if (!restored) {
+        InterlockedExchange(&g_ce_dual_newgame_status, 5);
+    }
+    report_size = snprintf(report, sizeof(report),
+        "{\"status\":\"dual-newgame-finished\",\"first_saved\":%d,"
+        "\"second_saved\":%d,\"restored\":%d,\"restored_galaxy\":%lu}\r\n",
+        first_saved, second_saved, restored, (unsigned long)restored_galaxy);
+    if (report_size > 0) ce_write_text_marker(
+        "dual-newgame.jsonl", report, (size_t)report_size);
+
+done:
+    InterlockedExchange(&g_ce_dual_newgame_running, 0);
+}
+
+#if defined(__i386__)
+__attribute__((naked)) static void ce_dual_newgame_execute_hook(void) {
+    __asm__ volatile(
+        "pushl %eax\n\t"
+        "call _ce_dual_newgame_execute\n\t"
+        "addl $4, %esp\n\t"
+        "ret\n\t"
+    );
+}
+#endif
+
+static int ce_install_dual_newgame_hook(void) {
+#if defined(__i386__)
+    static const unsigned char execute_signature[8] = {
+        0x55, 0x8b, 0xec, 0xb9, 0x6e, 0x00, 0x00, 0x00
+    };
+    uintptr_t module_base = (uintptr_t)GetModuleHandleW(NULL);
+    IMAGE_DOS_HEADER *dos;
+    IMAGE_NT_HEADERS32 *nt;
+    unsigned char *target;
+    unsigned char *trampoline;
+    unsigned char patch[8];
+    int32_t relative;
+    DWORD old_protect;
+    DWORD ignored_protect;
+    LONG hook_state;
+
+    hook_state = InterlockedCompareExchange(
+        &g_ce_dual_newgame_hook_installed, -1, 0);
+    if (hook_state == 1) return 1;
+    if (hook_state != 0 || module_base == 0u) return 0;
+    dos = (IMAGE_DOS_HEADER *)module_base;
+    if (!ce_region_has_access(dos, sizeof(*dos), 0) ||
+        dos->e_magic != IMAGE_DOS_SIGNATURE) goto fail;
+    nt = (IMAGE_NT_HEADERS32 *)(module_base + (uintptr_t)dos->e_lfanew);
+    if (!ce_region_has_access(nt, sizeof(*nt), 0) ||
+        nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP ||
+        nt->OptionalHeader.SizeOfImage != CE_RANGERS_IMAGE_SIZE) goto fail;
+
+    target = (unsigned char *)(module_base + CE_RVA_NEWGAME_THREAD_EXECUTE);
+    if (!ce_region_has_access(target, sizeof(execute_signature), 0) ||
+        memcmp(target, execute_signature, sizeof(execute_signature)) != 0) goto fail;
+    trampoline = (unsigned char *)VirtualAlloc(
+        NULL, 13u, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (trampoline == NULL) goto fail;
+    memcpy(trampoline, target, 8u);
+    trampoline[8] = 0xe9;
+    relative = (int32_t)((target + 8u) - (trampoline + 13u));
+    memcpy(trampoline + 9u, &relative, sizeof(relative));
+    FlushInstructionCache(GetCurrentProcess(), trampoline, 13u);
+
+    patch[0] = 0xe9;
+    relative = (int32_t)(
+        (unsigned char *)(uintptr_t)ce_dual_newgame_execute_hook - (target + 5u));
+    memcpy(patch + 1u, &relative, sizeof(relative));
+    memset(patch + 5u, 0x90, sizeof(patch) - 5u);
+    if (!VirtualProtect(target, sizeof(patch), PAGE_EXECUTE_READWRITE, &old_protect)) {
+        VirtualFree(trampoline, 0, MEM_RELEASE);
+        goto fail;
+    }
+    g_ce_dual_newgame_trampoline = trampoline;
+    memcpy(target, patch, sizeof(patch));
+    FlushInstructionCache(GetCurrentProcess(), target, sizeof(patch));
+    VirtualProtect(target, sizeof(patch), old_protect, &ignored_protect);
+    InterlockedExchange(&g_ce_dual_newgame_hook_installed, 1);
+    ce_write_progress("dual-newgame:hook-installed");
+    return 1;
+
+fail:
+    InterlockedExchange(&g_ce_dual_newgame_hook_installed, 0);
+    ce_write_progress("dual-newgame:hook-install-failed");
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 /* Idempotent per object_ptr (linear scan against what is already captured,
    same style as ce_capture_live_arm's own once-per-galaxy guard). Allocates
    its backing array lazily on first use, capped at CE_LIVE_NAMED_CAPACITY --
@@ -3373,14 +3763,6 @@ __attribute__((used)) static void ce_apply_live_arm(int second_home) {
         "live-arm-switch.jsonl", report, (size_t)report_size);
 }
 
-static BOOL CALLBACK ce_invalidate_process_window(HWND hwnd, LPARAM unused) {
-    DWORD pid = 0;
-    (void)unused;
-    GetWindowThreadProcessId(hwnd, &pid);
-    if (pid == GetCurrentProcessId()) InvalidateRect(hwnd, NULL, TRUE);
-    return TRUE;
-}
-
 /* F8 is a vanilla quick-save key.  Consume it and forward an otherwise unused
    F24 key to the script UI, so opening the inter-arm portal never also opens
    the vanilla "quick save is absent" dialog. */
@@ -3446,6 +3828,10 @@ static LRESULT CALLBACK ce_portal_keyboard_proc(int code, WPARAM wparam, LPARAM 
 static DWORD WINAPI ce_hook_thread_proc(LPVOID unused) {
     MSG msg;
     (void)unused;
+    /* Install before the player can start a party.  Unlike all live-arm
+       experiments this detour only runs inside the engine's own native
+       new-game worker, never from a Turn/NextDay callback. */
+    ce_install_dual_newgame_hook();
     /* A thread has no message queue until it calls a USER32 function that
        needs one; force its creation before installing the hook. */
     PeekMessage(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE);
@@ -4234,26 +4620,27 @@ uint32_t CE_CALL CEAdapterConsumePendingShipSweep(void) {
     return value < 0 ? 2u : (uint32_t)value;
 }
 
-/* Used to also require g_ce_live_cons/g_ce_live_sectors to be populated --
-   fields only ever written by the archived cosmetic system's
-   CEAdapterInstallLiveArmSwitch/CEAdapterSetSystemSector path, which the
-   real-second-TGalaxy approach never calls. That made this always report
-   "not ready", permanently stuck showing CE.Transit.AnchorNotReady no
-   matter what. The real swap (CEAdapterCreateBareSecondGalaxyForLoad /
-   CEAdapterEnterReadySecondGalaxy / CEAdapterReturnToOldGalaxy, all called
-   from CEAdapterCompleteRegisteredPortal below) needs none of that
-   bookkeeping -- the only real precondition is "not already mid-transit". */
+/* The artifact is enabled only for a party that actually passed through the
+   dual-newgame transaction.  Old saves have no independent destination
+   sidecar; silently falling back to the archived pointer swap would show a
+   renamed clone and can corrupt global references, so it is deliberately
+   rejected instead. */
 uint32_t CE_CALL CEAdapterPortalReady(uint32_t galaxy_ptr) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;
     uint32_t class_ref;
-    uint32_t ready = ce_resolve_engine_galaxy(galaxy_ptr, &module_base, &galaxy_slot, &class_ref) &&
+    uint32_t ready = ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &class_ref) &&
+        InterlockedCompareExchange(&g_ce_dual_newgame_status, 0, 0) == 2 &&
+        g_ce_first_arm_save_path != 0u && g_ce_second_home_save_path != 0u &&
         InterlockedCompareExchange(&g_ce_portal_status, 0, 0) == 0 ? 1u : 0u;
-    char diagnostic[128];
+    char diagnostic[192];
     int diagnostic_size = snprintf(diagnostic, sizeof(diagnostic),
-        "{\"status\":\"portal-ready-check\",\"ready\":%s,\"portal_status\":%ld}\r\n",
+        "{\"status\":\"portal-ready-check\",\"ready\":%s,\"portal_status\":%ld,"
+        "\"dual_newgame_status\":%ld}\r\n",
         ready ? "true" : "false",
-        (long)InterlockedCompareExchange(&g_ce_portal_status, 0, 0));
+        (long)InterlockedCompareExchange(&g_ce_portal_status, 0, 0),
+        (long)InterlockedCompareExchange(&g_ce_dual_newgame_status, 0, 0));
     if (diagnostic_size > 0) ce_write_text_marker(
         "live-arm-switch.jsonl", diagnostic, (size_t)diagnostic_size);
     return ready;
@@ -4321,10 +4708,37 @@ uint32_t CE_CALL CEAdapterConsumeCheatTrigger(void) {
 }
 
 uint32_t CE_CALL CEAdapterRegisterPortal(uint32_t galaxy_ptr, uint32_t hole_id) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t class_ref;
+    uint32_t active_arm;
+    uint32_t source_path;
+    int saved;
     char report[192];
     int report_size;
     if (hole_id == 0u || !CEAdapterPortalReady(galaxy_ptr) ||
             InterlockedCompareExchange(&g_ce_portal_status, 1, 0) != 0) return 0;
+    if (!ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &class_ref)) {
+        InterlockedExchange(&g_ce_portal_status, 0);
+        return 0;
+    }
+    active_arm = (uint32_t)InterlockedCompareExchange(&g_ce_active_arm, 0, 0);
+    source_path = active_arm == 0u
+        ? g_ce_first_arm_save_path : g_ce_second_home_save_path;
+    /* Registration runs from the artifact's OnUseCode, before the player
+       flies into the hole and outside NextDay's fragile Turn stack.  Save
+       the complete active world here so returning later preserves its
+       economy and the traveler's latest source-arm state. */
+    saved = ce_save_complete_game(
+        module_base, source_path,
+        active_arm == 0u ? L"Дети Эльтан: Первый рукав" : L"Дети Эльтан: Второй Дом");
+    if (!saved) {
+        InterlockedExchange(&g_ce_portal_status, 0);
+        ce_write_text_marker("dual-newgame.jsonl",
+            "{\"status\":\"portal-source-save-failed\"}\r\n", 40u);
+        return 0;
+    }
     InterlockedExchange(&g_ce_portal_galaxy_ptr, (LONG)galaxy_ptr);
     InterlockedExchange(&g_ce_portal_hole_id, (LONG)hole_id);
     report_size = snprintf(report, sizeof(report),
@@ -4351,29 +4765,22 @@ uint32_t CE_CALL CEAdapterEnterRegisteredPortal(uint32_t galaxy_ptr, uint32_t ho
     return 1;
 }
 
-/* No sleep and no custom overlay window here anymore: this used to show a
-   topmost "Резонансный переход" window and Sleep(700)+Sleep(450) (over a
-   second of blocking) around the actual rename. That window sat on top of
-   the game's own native loading screen and the sleeps blocked whatever
-   thread the native loader needed, which reproduced a real hang at ~15%
-   loading when entering the hole. The real swap below is likewise a fast,
-   pure in-memory operation (no I/O, no window) -- it needs no artificial
-   pause or visual cover, so it just runs immediately.
-
-   This used to call ce_apply_live_arm -- the archived cosmetic system's
-   in-place rename, which never actually changes which TGalaxy is active.
-   Flying through a portal now drives the SAME real clone-and-swap the
-   Ctrl+Shift+1 test hotkey uses (CEAdapterCreateBareSecondGalaxyForLoad /
-   CEAdapterLoadSnapshotIntoSecondGalaxy / CEAdapterEnterReadySecondGalaxy
-   on the way in, CEAdapterReturnToOldGalaxy on the way back), so the
-   artifact/black-hole flow in CE_InterarmTransit.Lang.txt actually
-   switches galaxies instead of just relabelling the current one. */
+/* Called only after ShipInHole() has flipped back to false, so the native
+   entry animation has finished.  This function does NOT load or delete
+   anything on the Turn stack.  It selects the destination sidecar in the
+   exact global field TThreadGameLoad.Execute reads; RScript then exits to
+   FormChange('GameLoad'), giving the transition the game's own full-screen
+   progress animation and worker lifecycle. */
 uint32_t CE_CALL CEAdapterCompleteRegisteredPortal(uint32_t galaxy_ptr, uint32_t turn) {
-    enum { CE_SECOND_HOME_TEST_SEED = 1128616787u };
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t class_ref;
+    uint32_t target_path;
     char report[192];
     int report_size;
     int entering;
     uint32_t ok;
+    (void)turn;
     if ((uint32_t)InterlockedCompareExchange(&g_ce_portal_galaxy_ptr, 0, 0) != galaxy_ptr ||
             InterlockedCompareExchange(&g_ce_portal_status, 3, 2) != 2) return 0;
     if (InterlockedCompareExchange(&g_ce_live_switch_lock, 1, 0) != 0) {
@@ -4381,52 +4788,22 @@ uint32_t CE_CALL CEAdapterCompleteRegisteredPortal(uint32_t galaxy_ptr, uint32_t
         return 0;
     }
     entering = InterlockedCompareExchange(&g_ce_active_arm, 0, 0) == 0;
-    if (entering) {
-        CEAdapterCreateBareSecondGalaxyForLoad(galaxy_ptr, CE_SECOND_HOME_TEST_SEED);
-        CEAdapterLoadSnapshotIntoSecondGalaxy(galaxy_ptr);
-        ok = CEAdapterEnterReadySecondGalaxy(galaxy_ptr, turn);
-        if (ok) {
-            /* galaxy_ptr here is still the OLD galaxy (this function's own
-               parameter, captured before the swap above) -- EnterReady
-               already flipped the engine's *own* active-galaxy slot to the
-               second galaxy, but that doesn't retroactively change this
-               local copy. Renaming with the stale pointer would silently
-               rename the OLD galaxy's own systems instead of the one the
-               player is now actually looking at (and, worse, permanently
-               mislabel the old arm's systems for the rest of the process,
-               visible again on the very next return) -- confirmed exactly
-               by a live test: sectors renamed correctly (that path re-scans
-               whichever galaxy is actually live in process memory) but
-               systems did not, then reappeared renamed on the OLD arm
-               after returning. Use the real second-galaxy pointer instead. */
-            CEAdapterRenameSecondGalaxySystems(
-                (uint32_t)InterlockedCompareExchange(&g_ce_second_galaxy_ptr, 0, 0));
-            CEAdapterRequestSectorLabelSpawn(1);
-        }
-    } else {
-        ok = CEAdapterReturnToOldGalaxy(galaxy_ptr, turn);
-        if (ok) CEAdapterRequestSectorLabelSpawn(0);
+    target_path = entering
+        ? g_ce_second_home_save_path : g_ce_first_arm_save_path;
+    ok = ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &class_ref) &&
+        ce_set_native_game_load_path(module_base, target_path);
+    if (ok) {
+        InterlockedExchange(&g_ce_active_arm, entering ? 1 : 0);
+        CEAdapterRequestSectorLabelSpawn(entering ? 1u : 0u);
     }
-    /* Restored: removing this did NOT stop the crash (confirmed live --
-       the exact same silent disappearance happened again, on ENTER this
-       time, with this call already gone), so it was never the cause.
-       Meanwhile removing it broke something real: the starmap view stayed
-       frozen on the pre-swap picture (no ship, wrong galaxy's stars)
-       instead of refreshing, matching this call's original purpose of
-       nudging the native paint handler after data it doesn't automatically
-       recheck changes underneath it. */
-    EnumWindows(ce_invalidate_process_window, 0);
     InterlockedExchange(&g_ce_portal_hole_id, 0);
     InterlockedExchange(&g_ce_portal_galaxy_ptr, 0);
-    /* On failure, leave status at 2 (awaiting-exit) instead of completing --
-       the same "try again next tick" shape already used above for lock
-       contention, since the ship is still physically inside the hole from
-       the engine's own point of view either way. */
     InterlockedExchange(&g_ce_portal_status, ok ? 0 : 2);
     InterlockedExchange(&g_ce_live_switch_lock, 0);
     report_size = snprintf(report, sizeof(report),
         "{\"status\":\"%s\",\"arm\":\"%s\"}\r\n",
-        ok ? "portal-complete" : "portal-complete-swap-failed",
+        ok ? "portal-load-prepared" : "portal-load-prepare-failed",
         InterlockedCompareExchange(&g_ce_active_arm, 0, 0) == 0
             ? "OLD_ARM" : "SECOND_HOME");
     if (report_size > 0) ce_write_text_marker(

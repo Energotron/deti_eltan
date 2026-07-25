@@ -216,6 +216,7 @@
             "    unknown ceArmPendingArrival = ImportedFunction('CESecondMapAdapter','CEAdapterArmPendingArrival');",
             "    ceArmPendingArrival(ceActiveArm());",
             "    ceLogCheckpoint(101);",
+            "    FormChange('GameLoad');",
             "  }",
             "}",
             "unknown ceConsumePendingArrival = ImportedFunction('CESecondMapAdapter','CEAdapterConsumePendingArrival');",
