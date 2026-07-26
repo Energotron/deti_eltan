@@ -4267,7 +4267,13 @@ uint32_t CE_CALL CEAdapterConsumeOriginDestinationIndex(void) {
    of also re-touching this delay. */
 uint32_t CE_CALL CEAdapterArmPendingArrival(uint32_t entering) {
     InterlockedExchange(&g_ce_pending_arrival_direction, entering != 0u ? 1 : 0);
-    InterlockedExchange(&g_ce_pending_arrival_ticks, 90);
+    /* Was 90, inherited from the raw pointer-swap era where the engine
+       needed time to settle. The transition now goes through the engine's
+       own LoadGame, and the traveller lands DOCKED at the new game's
+       station, where Turn-code barely runs -- so a 90-tick countdown was
+       effectively waiting for 90 day-skips and the whole arrival block
+       (hole, greeting, stat transfer) never fired. */
+    InterlockedExchange(&g_ce_pending_arrival_ticks, 2);
     return 1u;
 }
 
