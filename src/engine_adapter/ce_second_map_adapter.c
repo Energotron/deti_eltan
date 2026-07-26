@@ -4273,7 +4273,14 @@ uint32_t CE_CALL CEAdapterArmPendingArrival(uint32_t entering) {
        station, where Turn-code barely runs -- so a 90-tick countdown was
        effectively waiting for 90 day-skips and the whole arrival block
        (hole, greeting, stat transfer) never fired. */
-    InterlockedExchange(&g_ce_pending_arrival_ticks, 2);
+    /* Zero, not a countdown. Measured: after the load the traveller stands
+       DOCKED at the target world's station, and Turn-code ticks once and
+       then waits for a day skip that never comes -- so even a 2-tick delay
+       parked the arrival forever. The delay existed for the raw
+       pointer-swap era, where the engine needed to settle before anything
+       touched the newly active galaxy; a completed LoadGame has already
+       settled, so the first Turn after it is the right moment. */
+    InterlockedExchange(&g_ce_pending_arrival_ticks, 0);
     return 1u;
 }
 
