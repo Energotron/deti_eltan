@@ -109,6 +109,8 @@ CE_EXPORT uint32_t CE_CALL CEAdapterStashPlayerValue(uint32_t slot, uint32_t val
 CE_EXPORT uint32_t CE_CALL CEAdapterFetchPlayerValue(uint32_t slot);
 CE_EXPORT uint32_t CE_CALL CEAdapterPlayerStashReady(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterClearPlayerStash(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterSavePlayerStash(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterLoadPlayerStash(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterRequestSectorLabelSpawn(uint32_t second_home);
 CE_EXPORT uint32_t CE_CALL CEAdapterArmGalaxySaveSnapshot(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterPollSecondHomeTransform(

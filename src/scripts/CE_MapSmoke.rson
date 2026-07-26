@@ -78,7 +78,7 @@
           "Pos.y": 80,
           "Parent": -1,
           "#": 6,
-          "Total.Lines": 227,
+          "Total.Lines": 229,
           "Code.Type": "Turn",
           "Code": [
             "unknown ceProbeRawPtr = ImportedFunction('CESecondMapAdapter','CEAdapterProbeRawGalaxyPointer');",
@@ -283,6 +283,8 @@
             "  unknown ceStashReady = ImportedFunction('CESecondMapAdapter','CEAdapterPlayerStashReady');",
             "  unknown ceFetch = ImportedFunction('CESecondMapAdapter','CEAdapterFetchPlayerValue');",
             "  unknown ceClearStash = ImportedFunction('CESecondMapAdapter','CEAdapterClearPlayerStash');",
+            "  unknown ceLoadStash = ImportedFunction('CESecondMapAdapter','CEAdapterLoadPlayerStash');",
+            "  if(!ceStashReady()) ceLoadStash();",
             "  if(ceStashReady()) {",
             "    ShipMoney(Player(),ceFetch(0));",
             "    ShipSkill(Player(),0,ceFetch(1));",

@@ -6728,6 +6728,76 @@ uint32_t CE_CALL CEAdapterClearPlayerStash(void) {
     return 1u;
 }
 
+/* DLL globals survive LoadGame but not a new process, and the transition may
+   yet move to launching the second arm as its own process -- which is the
+   one route that removes the engine-lifecycle failures entirely, since each
+   arm then loads through the engine's ordinary startup path instead of a
+   mid-game LoadGame. Persisting the traveller's state to disk works for both
+   routes, so it is worth having regardless of which one wins. Deliberately
+   plain: a magic word, a slot count, then the values. */
+enum { CE_PLAYER_STASH_MAGIC = 0x53454543u }; /* "CEES" */
+
+static const char *ce_player_stash_path(void) {
+    return "C:\\ce_debug\\ce_player_stash.bin";
+}
+
+uint32_t CE_CALL CEAdapterSavePlayerStash(void) {
+    uint32_t header[2];
+    uint32_t values[CE_PLAYER_STASH_SLOTS];
+    uint32_t index;
+    HANDLE file;
+    DWORD written = 0;
+    if (InterlockedCompareExchange(&g_ce_player_stash_ready, 0, 0) == 0) return 0u;
+    header[0] = CE_PLAYER_STASH_MAGIC;
+    header[1] = CE_PLAYER_STASH_SLOTS;
+    for (index = 0u; index < CE_PLAYER_STASH_SLOTS; ++index) {
+        values[index] = (uint32_t)InterlockedCompareExchange(
+            &g_ce_player_stash[index], 0, 0);
+    }
+    CreateDirectoryA("C:\\ce_debug", NULL);
+    file = CreateFileA(ce_player_stash_path(), GENERIC_WRITE, FILE_SHARE_READ,
+        NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 0u;
+    WriteFile(file, header, (DWORD)sizeof(header), &written, NULL);
+    WriteFile(file, values, (DWORD)sizeof(values), &written, NULL);
+    FlushFileBuffers(file);
+    CloseHandle(file);
+    ce_write_progress("player-stash:saved");
+    return 1u;
+}
+
+uint32_t CE_CALL CEAdapterLoadPlayerStash(void) {
+    uint32_t header[2];
+    uint32_t values[CE_PLAYER_STASH_SLOTS];
+    uint32_t index;
+    HANDLE file;
+    DWORD got = 0;
+    file = CreateFileA(ce_player_stash_path(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 0u;
+    if (!ReadFile(file, header, (DWORD)sizeof(header), &got, NULL) ||
+            got != sizeof(header) || header[0] != CE_PLAYER_STASH_MAGIC ||
+            header[1] != CE_PLAYER_STASH_SLOTS) {
+        CloseHandle(file);
+        ce_write_progress("player-stash:load-rejected");
+        return 0u;
+    }
+    if (!ReadFile(file, values, (DWORD)sizeof(values), &got, NULL) ||
+            got != sizeof(values)) {
+        CloseHandle(file);
+        ce_write_progress("player-stash:load-truncated");
+        return 0u;
+    }
+    CloseHandle(file);
+    for (index = 0u; index < CE_PLAYER_STASH_SLOTS; ++index) {
+        InterlockedExchange(&g_ce_player_stash[index], (LONG)values[index]);
+    }
+    InterlockedExchange(&g_ce_player_stash_ready, 1);
+    ce_write_progress("player-stash:loaded");
+    return 1u;
+}
+
 uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr) {
     static const unsigned char save_signature[] = {
         0x55, 0x8b, 0xec, 0x83, 0xc4, 0xa0, 0x33, 0xc9,

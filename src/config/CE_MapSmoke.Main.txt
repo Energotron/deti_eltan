@@ -254,6 +254,8 @@ Data ^{
             CEAdapterFetchPlayerValue=dword,CEAdapterFetchPlayerValue,dword
             CEAdapterPlayerStashReady=dword,CEAdapterPlayerStashReady
             CEAdapterClearPlayerStash=dword,CEAdapterClearPlayerStash
+            CEAdapterSavePlayerStash=dword,CEAdapterSavePlayerStash
+            CEAdapterLoadPlayerStash=dword,CEAdapterLoadPlayerStash
             CEAdapterBuildFreshSecondGalaxy=dword,CEAdapterBuildFreshSecondGalaxy,dword
             CEAdapterRequestSectorLabelSpawn=dword,CEAdapterRequestSectorLabelSpawn,dword
             CEAdapterSetRememberedShipStar=dword,CEAdapterSetRememberedShipStar,dword

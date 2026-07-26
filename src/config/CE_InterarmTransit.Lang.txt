@@ -29,17 +29,19 @@ UselessItems ~{
                     07=ceStash(5,ShipSkill(Player(),4));
                     08=ceStash(6,ShipSkill(Player(),5));
                     09=ceStash(7,ShipFreeExp(Player()));
-                    10=unknown ceCaptureFresh=ImportedFunction('CESecondMapAdapter','CEAdapterCaptureFreshSnapshot');
-                    11=ceCaptureFresh(GalaxyPtr());
-                    12=unknown ceOriginStar=ShipStar(Player());
-                    13=unknown ceOriginSector=StarToCon(ceOriginStar);
-                    14=unknown ceOriginX=CoordX(ceOriginStar);
-                    15=unknown ceOriginY=CoordY(ceOriginStar);
-                    16=unknown ceDestinationStar=ceOriginStar;
-                    17=unknown ceBestDistSq=-1;
-                    18=dword ceScanIndex=0;
-                    19=while(ceScanIndex<GalaxyStars())
-                    20 ^{
+                    10=unknown ceSaveStash=ImportedFunction('CESecondMapAdapter','CEAdapterSavePlayerStash');
+                    11=ceSaveStash();
+                    12=unknown ceCaptureFresh=ImportedFunction('CESecondMapAdapter','CEAdapterCaptureFreshSnapshot');
+                    13=ceCaptureFresh(GalaxyPtr());
+                    14=unknown ceOriginStar=ShipStar(Player());
+                    15=unknown ceOriginSector=StarToCon(ceOriginStar);
+                    16=unknown ceOriginX=CoordX(ceOriginStar);
+                    17=unknown ceOriginY=CoordY(ceOriginStar);
+                    18=unknown ceDestinationStar=ceOriginStar;
+                    19=unknown ceBestDistSq=-1;
+                    20=dword ceScanIndex=0;
+                    21=while(ceScanIndex<GalaxyStars())
+                    22 ^{
                         01=unknown ceCandidate=GalaxyStar(ceScanIndex);
                         02=if(StarToCon(ceCandidate)!=ceOriginSector)
                         03 ^{
@@ -54,12 +56,12 @@ UselessItems ~{
                         }
                         04=ceScanIndex=ceScanIndex+1;
                     }
-                    21=if(ceDestinationStar==ceOriginStar)
-                    22 ^{
+                    23=if(ceDestinationStar==ceOriginStar)
+                    24 ^{
                         01=MessageBox(CT('CE.Transit.NoDestination'));
                     }
-                    23=else
-                    24 ^{
+                    25=else
+                    26 ^{
                         01=dword ceHole=HoleCreate2(ceOriginStar,ceDestinationStar);
                         02=if(ceHole)
                         03 ^{
