@@ -3124,6 +3124,16 @@ static int ce_make_dual_newgame_paths(uintptr_t module_base) {
         g_ce_first_arm_save_path_ansi != 0u && g_ce_second_home_save_path_ansi != 0u;
 }
 
+/* True when the immortal UnicodeString path names a file that already
+   exists. Used to leave authored content alone. */
+static int ce_file_exists(uint32_t path) {
+    DWORD attributes;
+    if (path == 0u) return 0;
+    attributes = GetFileAttributesW((const wchar_t *)(uintptr_t)path);
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
 static int ce_wait_for_save_writer(uintptr_t module_base) {
     uint32_t writer;
     uint32_t running;
@@ -3274,6 +3284,20 @@ __attribute__((used)) static void CE_CALL ce_dual_newgame_execute(uint32_t self)
     if (!first_saved) {
         InterlockedExchange(&g_ce_dual_newgame_status, 3);
         goto done;
+    }
+
+    /* An authored Second Home must not be overwritten. Once the sidecar
+       exists on disk it is treated as prepared content -- built from a
+       normally-saved game and rewritten into Eltan naming by
+       tools/make_second_home.py -- and generation is skipped entirely.
+       That also retires the second Execute, which was the source of both
+       the wrong captain (it builds a whole new game, its own player
+       included) and the half-built interface those mid-generation saves
+       carried. Regenerating is then a matter of deleting the file. */
+    if (ce_file_exists(g_ce_second_home_save_path)) {
+        ce_write_progress("dual-newgame:second:prepared-file-kept");
+        InterlockedExchange(&g_ce_dual_newgame_status, 2);
+        goto restore_first;
     }
 
     /* Execute is a real TThread method, not a plain builder function.
@@ -6851,30 +6875,18 @@ __attribute__((used)) static void CE_CALL ce_post_nextday_null_body(void) {
 
 __attribute__((naked)) static void ce_post_nextday_guard_hook(void) {
     __asm__ volatile(
-        "testl %eax, %eax
-	"
-        "jz 1f
-	"
-        "pushl %ebp
-	"
-        "movl %esp, %ebp
-	"
-        "addl $-0x1c, %esp
-	"
-        "movl $0x00841bee, %ecx
-	"
-        "jmp *%ecx
-	"
-        "1:
-	"
-        "pushal
-	"
-        "call _ce_post_nextday_null_body
-	"
-        "popal
-	"
-        "ret
-	"
+        "testl %eax, %eax\n\t"
+        "jz 1f\n\t"
+        "pushl %ebp\n\t"
+        "movl %esp, %ebp\n\t"
+        "addl $-0x1c, %esp\n\t"
+        "movl $0x00841bee, %ecx\n\t"
+        "jmp *%ecx\n\t"
+        "1:\n\t"
+        "pushal\n\t"
+        "call _ce_post_nextday_null_body\n\t"
+        "popal\n\t"
+        "ret\n\t"
     );
 }
 
@@ -6951,8 +6963,7 @@ uint32_t CE_CALL CEAdapterSetSectorCount(uint32_t galaxy_ptr, uint32_t count) {
     FlushInstructionCache(GetCurrentProcess(), target, sizeof(count));
     VirtualProtect(target, sizeof(count), old_protect, &ignored_protect);
     size = snprintf(report, sizeof(report),
-        "{\"status\":\"sector-count-patched\",\"from\":%lu,\"to\":%lu}
-",
+        "{\"status\":\"sector-count-patched\",\"from\":%lu,\"to\":%lu}\r\n",
         (unsigned long)previous, (unsigned long)count);
     if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", report, (size_t)size);
     return 1u;
@@ -6982,8 +6993,7 @@ uint32_t CE_CALL CEAdapterSetGalaxyTurn(uint32_t galaxy_ptr, uint32_t turn) {
     if (turn <= previous) return 1u;
     *(uint32_t *)(uintptr_t)(galaxy_ptr + CE_GALAXY_TURN_FIELD) = turn;
     size = snprintf(report, sizeof(report),
-        "{\"status\":\"galaxy-turn-synced\",\"from\":%lu,\"to\":%lu}
-",
+        "{\"status\":\"galaxy-turn-synced\",\"from\":%lu,\"to\":%lu}\r\n",
         (unsigned long)previous, (unsigned long)turn);
     if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", report, (size_t)size);
     return 1u;
