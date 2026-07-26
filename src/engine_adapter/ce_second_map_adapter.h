@@ -104,6 +104,7 @@ CE_EXPORT uint32_t CE_CALL CEAdapterInstallDayProcessRecovery(uint32_t galaxy_pt
 CE_EXPORT uint32_t CE_CALL CEAdapterInstallNextDayLabel3Recovery(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterInstallDayCounterGuard(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterBuildFreshSecondGalaxy(uint32_t galaxy_ptr);
+CE_EXPORT uint32_t CE_CALL CEAdapterInstallLoadGameDiagnostics(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterRequestSectorLabelSpawn(uint32_t second_home);
 CE_EXPORT uint32_t CE_CALL CEAdapterArmGalaxySaveSnapshot(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterPollSecondHomeTransform(

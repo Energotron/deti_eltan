@@ -8,21 +8,23 @@ ShipInfo ^{
                 OnActCode ^{
                     00=[t_OnStep|0,1,2,3,4,5,6,7,8,9,10,11]
                     01=unknown cePortalStatus=ImportedFunction('CESecondMapAdapter','CEAdapterPortalStatus');
-                    02=if(ShipInHole(Player()) && Id(ShipOrderObj(Player()))==ShipCustomShipInfoData(0,CurInfo(),1))
+                    02=if(ShipInHole(Player()))
                     03 ^{
                         01=unknown ceEnterPortal=ImportedFunction('CESecondMapAdapter','CEAdapterEnterRegisteredPortal');
-                        02=ceEnterPortal(GalaxyPtr(),Id(ShipOrderObj(Player())));
+                        02=ceEnterPortal(GalaxyPtr(),0);
                     }
                     04=else if(!ShipInHole(Player()) && cePortalStatus()==2)
                     05 ^{
-                        01=unknown ceCompletePortal=ImportedFunction('CESecondMapAdapter','CEAdapterCompleteRegisteredPortal');
-                        02=if(ceCompletePortal(GalaxyPtr(),CurTurn()))
-                        03 ^{
+                        01=unknown ceActiveArmBeforeLoad=ImportedFunction('CESecondMapAdapter','CEAdapterActiveArm');
+                        02=dword ceTargetArm=0;
+                        03=if(ceActiveArmBeforeLoad()==0) ceTargetArm=1;
+                        04=unknown ceCompletePortal=ImportedFunction('CESecondMapAdapter','CEAdapterCompleteRegisteredPortal');
+                        05=if(ceCompletePortal(GalaxyPtr(),CurTurn()))
+                        06 ^{
                             01=ShipDeleteCustomShipInfo(0,CurInfo());
-                            02=unknown ceActiveArm=ImportedFunction('CESecondMapAdapter','CEAdapterActiveArm');
-                            03=unknown ceArmPendingArrival=ImportedFunction('CESecondMapAdapter','CEAdapterArmPendingArrival');
-                            04=ceArmPendingArrival(ceActiveArm());
-                            05=FormChange('GameLoad');
+                            02=unknown ceArmPendingArrival=ImportedFunction('CESecondMapAdapter','CEAdapterArmPendingArrival');
+                            03=ceArmPendingArrival(ceTargetArm);
+                            04=FormChange('GameLoad');
                         }
                     }
                 }

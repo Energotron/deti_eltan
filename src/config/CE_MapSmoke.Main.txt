@@ -20,7 +20,7 @@ ML ^{
                             0=unknown ceLogMapKey=ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');
                             0=ceLogMapKey(300);
                         }
-                        1=if(KEY==49 && KEYMOD==3)
+                        1=if((KEY==49 && KEYMOD==3) || (KEY==118 && KEYMOD==0))
                         1 ~{
                             0=unknown ceAnchor=0;
                             0=dword ceAnchorIdx=1;
@@ -65,7 +65,7 @@ ML ^{
                             0=unknown ceLogMapKey2=ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');
                             0=ceLogMapKey2(301);
                         }
-                        1=if(KEY==49 && KEYMOD==3)
+                        1=if((KEY==49 && KEYMOD==3) || (KEY==118 && KEYMOD==0))
                         1 ~{
                             0=unknown ceAnchor2=0;
                             0=dword ceAnchorIdx2=1;
@@ -110,7 +110,7 @@ ML ^{
                             0=unknown ceLogMapKey3=ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');
                             0=ceLogMapKey3(302);
                         }
-                        1=if(KEY==49 && KEYMOD==3)
+                        1=if((KEY==49 && KEYMOD==3) || (KEY==118 && KEYMOD==0))
                         1 ~{
                             0=unknown ceAnchor3=0;
                             0=dword ceAnchorIdx3=1;
@@ -155,12 +155,12 @@ ML ^{
                                 0=unknown ceOriginStar=ShipStar(Player());
                                 0=unknown ceDestinationStar=ceOriginStar;
                                 0=dword ceDestinationAttempts=0;
-                                0=while((ceDestinationStar==ceOriginStar || Dist(ceOriginStar,ceDestinationStar)<500 || !SectorVisible(StarToCon(ceDestinationStar))) && ceDestinationAttempts<64)
+                                0=while((ceDestinationStar==ceOriginStar || Dist(ceOriginStar,ceDestinationStar)<500) && ceDestinationAttempts<64)
                                 0 ~{
                                     0=ceDestinationStar=GalaxyStar(Rnd(0,GalaxyStars()-1));
                                     0=ceDestinationAttempts=ceDestinationAttempts+1;
                                 }
-                                0=if(ceDestinationStar!=ceOriginStar && SectorVisible(StarToCon(ceDestinationStar)))
+                                0=if(ceDestinationStar!=ceOriginStar)
                                 0 ~{
                                     0=dword ceHole=HoleCreate2(ceOriginStar,ceDestinationStar);
                                     0=HoleX1(ceHole,CoordX(Player())+350);
@@ -249,6 +249,7 @@ Data ^{
             CEAdapterInstallDayProcessRecovery=dword,CEAdapterInstallDayProcessRecovery,dword
             CEAdapterInstallNextDayLabel3Recovery=dword,CEAdapterInstallNextDayLabel3Recovery,dword
             CEAdapterInstallDayCounterGuard=dword,CEAdapterInstallDayCounterGuard,dword
+            CEAdapterInstallLoadGameDiagnostics=dword,CEAdapterInstallLoadGameDiagnostics,dword
             CEAdapterBuildFreshSecondGalaxy=dword,CEAdapterBuildFreshSecondGalaxy,dword
             CEAdapterRequestSectorLabelSpawn=dword,CEAdapterRequestSectorLabelSpawn,dword
             CEAdapterSetRememberedShipStar=dword,CEAdapterSetRememberedShipStar,dword

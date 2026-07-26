@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <limits.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +30,8 @@ static volatile LONG g_ce_fault_eip = 0;
 static volatile LONG g_ce_fault_access_type = -1;
 static volatile LONG g_ce_fault_access_address = 0;
 static HINSTANCE g_ce_adapter_instance = NULL;
+static int ce_region_has_access(const void *pointer, size_t bytes, int need_write);
+#define CE_DELPHI_EXCEPTION_CODE 0xeedfadeu
 /* For a software-raised Delphi exception (CE_DELPHI_EXCEPTION_CODE), the
    ExceptionRecord's own ExceptionAddress lands inside ntdll/kernel32 (the
    RaiseException plumbing), not at the actual `raise` call site in
@@ -40,6 +43,119 @@ static HINSTANCE g_ce_adapter_instance = NULL;
 #define CE_FAULT_STACK_CANDIDATES 12
 static volatile LONG g_ce_fault_stack[CE_FAULT_STACK_CANDIDATES];
 static volatile LONG g_ce_fault_stack_count = 0;
+static HANDLE g_ce_exception_trace_file = INVALID_HANDLE_VALUE;
+static volatile LONG g_ce_exception_trace_busy = 0;
+static volatile LONG g_ce_exception_trace_sequence = 0;
+
+#define CE_EXCEPTION_TRACE_STACK_WORDS 256
+typedef struct ce_exception_trace_record {
+    uint32_t magic;
+    uint32_t size;
+    uint32_t sequence;
+    uint32_t process_id;
+    uint32_t thread_id;
+    uint32_t tick_count;
+    uint32_t code;
+    uint32_t exception_address;
+    uint32_t eip;
+    uint32_t esp;
+    uint32_t ebp;
+    uint32_t parameter_count;
+    uint32_t parameters[15];
+    uint32_t stack_count;
+    uint32_t stack_words[CE_EXCEPTION_TRACE_STACK_WORDS];
+    uint32_t message_length;
+    unsigned char message[512];
+} ce_exception_trace_record;
+
+/* Optional first-chance exception recorder for failures that the Delphi
+   loading form catches and collapses into the uninformative `EAbort Err`.
+   The file handle is opened only when trace-game-exceptions.flag exists,
+   so release play pays no per-exception I/O cost.  This handler path uses
+   one fixed stack record and a pre-opened Win32 handle: no heap allocation,
+   Delphi calls or string formatting while the process is unwinding. */
+static void ce_trace_first_chance_exception(
+    EXCEPTION_POINTERS *info, DWORD code
+) {
+    ce_exception_trace_record record;
+    MEMORY_BASIC_INFORMATION region;
+    uintptr_t stack_end;
+    uint32_t index;
+    DWORD written = 0;
+    LONG parameter_count;
+
+    if (g_ce_exception_trace_file == INVALID_HANDLE_VALUE ||
+        InterlockedCompareExchange(&g_ce_exception_trace_busy, 1, 0) != 0) {
+        return;
+    }
+    ZeroMemory(&record, sizeof(record));
+    record.magic = 0x58454543u; /* "CEEX" */
+    record.size = sizeof(record);
+    record.sequence = (uint32_t)InterlockedIncrement(&g_ce_exception_trace_sequence);
+    record.process_id = GetCurrentProcessId();
+    record.thread_id = GetCurrentThreadId();
+    record.tick_count = GetTickCount();
+    record.code = code;
+    record.exception_address =
+        (uint32_t)(uintptr_t)info->ExceptionRecord->ExceptionAddress;
+    record.eip = (uint32_t)info->ContextRecord->Eip;
+    record.esp = (uint32_t)info->ContextRecord->Esp;
+    record.ebp = (uint32_t)info->ContextRecord->Ebp;
+    parameter_count = (LONG)info->ExceptionRecord->NumberParameters;
+    if (parameter_count < 0) parameter_count = 0;
+    if (parameter_count > 15) parameter_count = 15;
+    record.parameter_count = (uint32_t)parameter_count;
+    for (index = 0u; index < record.parameter_count; ++index) {
+        record.parameters[index] =
+            (uint32_t)info->ExceptionRecord->ExceptionInformation[index];
+    }
+    /* Delphi's Exception object is the second custom RaiseException
+       parameter.  Its first field after the VMT is FMessage (AnsiString in
+       this 32-bit build).  Capture it while the object is still alive; the
+       process exits immediately after GameLoad catches this exception, so
+       post-mortem memory inspection cannot recover the missing package
+       entry name. */
+    if (code == CE_DELPHI_EXCEPTION_CODE && record.parameter_count >= 2u) {
+        uint32_t exception_object = record.parameters[1];
+        uint32_t message_ptr = 0u;
+        if (ce_region_has_access(
+                (const void *)(uintptr_t)(exception_object + 4u), 4u, 0)) {
+            message_ptr = *(const uint32_t *)(uintptr_t)(exception_object + 4u);
+        }
+        if (message_ptr >= 4u &&
+            ce_region_has_access(
+                (const void *)(uintptr_t)(message_ptr - 4u), 4u, 0)) {
+            uint32_t message_length =
+                *(const uint32_t *)(uintptr_t)(message_ptr - 4u);
+            if (message_length > sizeof(record.message)) {
+                message_length = sizeof(record.message);
+            }
+            if (message_length != 0u &&
+                ce_region_has_access(
+                    (const void *)(uintptr_t)message_ptr, message_length, 0)) {
+                record.message_length = message_length;
+                memcpy(
+                    record.message, (const void *)(uintptr_t)message_ptr,
+                    message_length);
+            }
+        }
+    }
+    if (VirtualQuery(
+            (const void *)(uintptr_t)record.esp, &region, sizeof(region)) ==
+            sizeof(region) && region.State == MEM_COMMIT) {
+        stack_end = (uintptr_t)region.BaseAddress + region.RegionSize;
+        while (record.stack_count < CE_EXCEPTION_TRACE_STACK_WORDS &&
+               (uintptr_t)record.esp +
+                   (record.stack_count + 1u) * sizeof(uint32_t) <= stack_end) {
+            record.stack_words[record.stack_count] =
+                *(const uint32_t *)(uintptr_t)(
+                    record.esp + record.stack_count * sizeof(uint32_t));
+            ++record.stack_count;
+        }
+    }
+    WriteFile(g_ce_exception_trace_file, &record, sizeof(record), &written, NULL);
+    InterlockedExchange(&g_ce_exception_trace_busy, 0);
+}
 
 /* Delphi/Borland's own `raise` statement (e.g. the bounds-check helper
    inside TGalaxy.LoadFromStream's reader, VA 0x0082ef40, confirmed by
@@ -52,14 +168,17 @@ static volatile LONG g_ce_fault_stack_count = 0;
    the whole process outright instead of being recovered, since it tries
    to unwind through our foreign, non-Delphi call frame. Treat it as
    another recoverable condition, same as the hardware faults below. */
-#define CE_DELPHI_EXCEPTION_CODE 0xeedfadeu
-
 static LONG WINAPI ce_veh_handler(EXCEPTION_POINTERS *info) {
     DWORD code;
+    code = info->ExceptionRecord->ExceptionCode;
     if (InterlockedCompareExchange(&g_ce_guard_active, 0, 0) == 0) {
+        /* This path is reached only when the explicit trace flag exists.
+           Record every first-chance code: heap-corruption/fail-fast and
+           library-specific software exceptions were invisible when this
+           was limited to the small recovery whitelist below. */
+        ce_trace_first_chance_exception(info, code);
         return EXCEPTION_CONTINUE_SEARCH;
     }
-    code = info->ExceptionRecord->ExceptionCode;
     if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_ILLEGAL_INSTRUCTION ||
         code == EXCEPTION_PRIV_INSTRUCTION || code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
         code == EXCEPTION_STACK_OVERFLOW || code == CE_DELPHI_EXCEPTION_CODE) {
@@ -336,6 +455,10 @@ static volatile LONG g_ce_day_process_hook_installed = 0;
 static volatile LONG g_ce_nextday_label3_hook_installed = 0;
 static volatile LONG g_ce_nextday_label3_recovered_count = 0;
 static volatile LONG g_ce_day_counter_hook_installed = 0;
+static volatile LONG g_ce_loadgame_diag_installed = 0;
+/* Set while a portal-initiated LoadGame is outstanding; consumed by the
+   GameLoad form gate stub. See CE_RVA_LOADGAME_FORM_GATE_CALL. */
+static volatile LONG g_ce_portal_load_pending = 0;
 static volatile LONG g_ce_day_counter_recovered_count = 0;
 static volatile LONG g_ce_load_transform_armed = 0;
 static volatile LONG g_ce_load_transform_seed = 0;
@@ -362,8 +485,21 @@ static volatile LONG g_ce_dual_newgame_hook_installed = 0;
 static volatile LONG g_ce_dual_newgame_running = 0;
 static volatile LONG g_ce_dual_newgame_status = 0;
 static void *g_ce_dual_newgame_trampoline = NULL;
+static void *g_ce_package_file_open_trampoline = NULL;
+static volatile LONG g_ce_package_file_open_hook_installed = 0;
+static VOID (WINAPI *g_ce_exit_process_original)(UINT) = NULL;
+static VOID (WINAPI *g_ce_post_quit_message_original)(int) = NULL;
+static volatile LONG g_ce_process_exit_trace_installed = 0;
+static void *g_ce_unhandled_exception_trampoline = NULL;
+static volatile LONG g_ce_unhandled_exception_hook_installed = 0;
 static uint32_t g_ce_first_arm_save_path = 0u;
 static uint32_t g_ce_second_home_save_path = 0u;
+/* ANSI twins of the two paths above, for CE_RVA_GAME_LOAD_PATH_CELL only --
+   that slot is an AnsiString the engine widens itself; see
+   ce_make_immortal_ansi's comment. Direct SaveGame/LoadGame calls keep
+   using the UTF-16 versions. */
+static uint32_t g_ce_first_arm_save_path_ansi = 0u;
+static uint32_t g_ce_second_home_save_path_ansi = 0u;
 
 /* Steam build 20648864 / Rangers.exe 2.1.2500.0 only. */
 enum {
@@ -521,7 +657,23 @@ enum {
        work on top of it. */
     CE_RVA_NEWGAME_THREAD_CLASS = 0x001d36acu,
     CE_RVA_NEWGAME_THREAD_EXECUTE = 0x001d36d8u,
+    /* The stock new-game form constructs this class through the inherited
+       TThread constructor:
+         0x005e0c4c: mov dl,1
+         0x005e0c4e: mov eax,[0x005d3660]  ; TThreadCreateNewGame VMT
+         0x005e0c53: call 0x007f85e0
+       Passing CreateSuspended=true gives us a genuine Delphi TThread
+       instance whose base bookkeeping, handle and runtime identity are
+       valid.  Its Execute can then be called synchronously through our
+       original-code trampoline without ever resuming the spare OS thread. */
+    CE_RVA_TTHREAD_CONSTRUCTOR = 0x003f85e0u,
     CE_NEWGAME_THREAD_INSTANCE_SIZE = 0x4cu,
+    /* Parent TThread's VMT says its instance size is exactly 0x2c.  Only
+       bytes from this offset onward belong to TThreadCreateNewGame and are
+       safe to copy from the form-created worker into another real worker.
+       Copying bytes 0..0x2b would duplicate the base thread's handles and
+       synchronization state, which produced an invalid second save. */
+    CE_NEWGAME_THREAD_DERIVED_OFFSET = 0x2cu,
     /* Execute's own first loop reads 8 bytes from Self+0x2d..+0x34 and
        writes them to galaxy+0x50..+0x57 -- the same +0x50 block
        CEAdapterCreateAndEnterSecondGalaxy already copies from the live
@@ -564,6 +716,17 @@ enum {
        handing immutable memory buffers to its writer thread. */
     CE_RVA_SAVE_GAME = 0x002008f8u,
     CE_RVA_LOAD_GAME = 0x00201150u,
+    /* Every stock caller invokes this immediately before SaveGame.  It
+       creates the two 300x225 preview bitmaps exported through the cells at
+       0x882318 and 0x883018.  SaveGame merely checks those globals: when
+       called directly from TThreadCreateNewGame they are still nil, so it
+       emits two zero-length records.  The save menu can read the plain
+       heading, but LoadGame rejects the incomplete container.  Blank
+       initialized previews are sufficient during native new-game loading;
+       the normal UI-only 0x6a9670 render pass is intentionally omitted
+       because there is no live game form to capture yet.  SaveGame releases
+       both bitmaps through 0x4c5730 after it has handed them to the writer. */
+    CE_RVA_PREPARE_SAVE_PREVIEWS = 0x000c5684u,
     /* TGameFolders.GetTurnSavePath(Self, out UnicodeString), called by the
        game's own turn-save path immediately before CE_RVA_SAVE_GAME.  It
        gives us the user's real Documents\SpaceRangersHD\Save directory
@@ -582,7 +745,66 @@ enum {
        consuming either sidecar through LoadGame. */
     CE_RVA_SAVE_WRITER_OBJECT = 0x0047b6bcu,
     CE_RVA_THREAD_IS_RUNNING = 0x003f8bb4u,
-    CE_RVA_THREAD_WAIT_FOR = 0x003f8bf4u
+    CE_RVA_THREAD_WAIT_FOR = 0x003f8bf4u,
+    /* Higher-level package file opener used directly by the save loader at
+       VA 0x7a069f.  Unlike PACKAGE_ENTRY_LOOKUP, this method returns the
+       final yes/no answer after searching every registered package, so its
+       trace is small and identifies the exact file that makes LoadGame
+       collapse into EAbort("Err"). */
+    CE_RVA_PACKAGE_FILE_OPEN = 0x0042e244u,
+    /* Log-only diagnostics for the four ways LoadGame (CE_RVA_LOAD_GAME)
+       can fail.  Each is a `call System.@RaiseExcept` (0x00404e20) reached
+       from its own validation branch, with the message string identified by
+       disassembly:
+         0x00601256 -> "Cannot open file"            (package open returned 0)
+         0x0060129F -> "Bad pre-signature of file"   (header != 'RSG')
+         0x00601360 -> "Bad post-signature of file"  (marker != 'EZ')
+         0x00601474 -> "Compressed galaxy read fail" (decompressed size
+                        mismatch against the length stored in the header)
+       At every one of these the frame still belongs to LoadGame, so [ebp-4]
+       is its own filename argument -- the stubs read it, which answers "did
+       TThreadGameLoad even receive our sidecar path" at the same time as
+       "which validation rejected it".  These patches deliberately do NOT
+       swallow the exception: each stub logs and then jumps to the real
+       RaiseExcept, leaving engine behaviour byte-for-byte unchanged. */
+    /* The `call LoadGame` inside TThreadGameLoad.Execute (VA 0x0053c98a;
+       the very next instructions store its AL result into the thread
+       object's own +0x2c). Patching this specific call -- rather than
+       LoadGame's prologue -- lets a stub run the original and record
+       whether the portal's load actually succeeded, which is the one thing
+       the logs still could not distinguish: the process now leaves with
+       exit code 0 (a clean Delphi Halt, not a fault) right after the form
+       switch, so "load failed quietly" and "load succeeded but the engine
+       then had nowhere to go" look identical from outside. */
+    /* Byte inside TGalaxy that LoadGame consults before destroying the
+       currently active galaxy: `mov eax,[0x88263c]; mov eax,[eax];
+       cmp byte ptr [eax+0x1d1],0; jne <skip Free>` at VA 0x006011E6.
+       Setting it keeps a galaxy alive across a load that would otherwise
+       free it -- which is exactly what the second arm needs while the
+       first arm's save is being loaded back to recover its player. */
+    CE_GALAXY_KEEP_ALIVE_FLAG = 0x1d1u,
+    /* The GameLoad form's own gate, `call 0x007029A4` at VA 0x0053CF4D,
+       immediately followed by `test al,al; je 0x0053CFCF`.  When it answers
+       false the form skips the entire block that nominates the follow-up
+       form (the branch at VA 0x0053CFA2 hands "StarMap" to 0x007F9B0C), so
+       nothing is queued, the message loop simply runs out and Delphi halts
+       with exit code 0 -- observed exactly: LoadGame logged ok=1 and the
+       process still ended silently, with no fault and no event-log entry.
+       Disassembly of the predicate shows it demands [self+0x24] != 0,
+       [self+0x1c] == 0, [self+0x20] == 0 and byte [self+0x459] == 0, i.e.
+       state that holds for a load started from the main menu but not for
+       one started mid-flight from Turn code.  The stub forwards to the
+       original and only overrides the answer while this mod's own portal
+       load is outstanding, so ordinary menu loads keep the stock gate. */
+    CE_RVA_LOADGAME_FORM_GATE_CALL = 0x0013cf4du,
+    CE_RVA_LOADGAME_CALL_IN_THREAD = 0x0013c98au,
+    CE_RVA_LOADGAME_RAISE_CANNOT_OPEN = 0x00201256u,
+    CE_RVA_LOADGAME_RAISE_BAD_PRE_SIG = 0x0020129fu,
+    CE_RVA_LOADGAME_RAISE_BAD_POST_SIG = 0x00201360u,
+    CE_RVA_LOADGAME_RAISE_GALAXY_READ = 0x00201474u,
+    CE_RVA_EXIT_PROCESS_IAT = 0x0048dbd0u,
+    CE_RVA_POST_QUIT_MESSAGE_IAT = 0x0048dcfcu,
+    CE_RVA_DELPHI_UNHANDLED_EXCEPTION = 0x00004f84u
 };
 
 uint32_t CE_CALL CEAdapterAbiVersion(void) {
@@ -1342,6 +1564,64 @@ static uint32_t ce_read_list_count(uint32_t owner, uint32_t field_offset) {
     list = *(const uint32_t *)(uintptr_t)(owner + field_offset);
     if (!ce_region_has_access((const void *)(uintptr_t)list, 12u, 0)) return 0;
     return *(const uint32_t *)(uintptr_t)(list + 8u);
+}
+
+static uint32_t ce_topology_hash_mix_u32(uint32_t hash, uint32_t value) {
+    uint32_t byte_index;
+    for (byte_index = 0u; byte_index < 4u; ++byte_index) {
+        hash ^= (value >> (byte_index * 8u)) & 0xffu;
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+/* A full native builder can produce the same counts for two genuinely
+   different maps, so "20 sectors / 73 systems" is not sufficient proof of
+   Second Home.  Hash only pointer-independent topology: list sizes and the
+   generated X/Y bit patterns of every system in native list order.  Object
+   addresses, names, owners and other mutable campaign state are deliberately
+   excluded, making the value useful both before serialization and after a
+   later load.  Zero means the topology could not be read safely. */
+static uint32_t ce_galaxy_topology_hash(uint32_t galaxy) {
+    uint32_t sector_count;
+    uint32_t system_list;
+    uint32_t system_array;
+    uint32_t system_count;
+    uint32_t system_index;
+    uint32_t hash = 2166136261u;
+
+    if (galaxy == 0u ||
+        !ce_region_has_access(
+            (const void *)(uintptr_t)(galaxy + 0x2cu), 4u, 0)) return 0u;
+    sector_count = ce_read_list_count(galaxy, 0x164u);
+    system_list = *(const uint32_t *)(uintptr_t)(galaxy + 0x2cu);
+    if (!ce_region_has_access(
+            (const void *)(uintptr_t)system_list, 12u, 0)) return 0u;
+    system_array = *(const uint32_t *)(uintptr_t)(system_list + 4u);
+    system_count = *(const uint32_t *)(uintptr_t)(system_list + 8u);
+    if (sector_count == 0u || sector_count > 64u ||
+        system_count == 0u || system_count > 512u ||
+        !ce_region_has_access(
+            (const void *)(uintptr_t)system_array, system_count * 4u, 0)) {
+        return 0u;
+    }
+
+    hash = ce_topology_hash_mix_u32(hash, sector_count);
+    hash = ce_topology_hash_mix_u32(hash, system_count);
+    for (system_index = 0u; system_index < system_count; ++system_index) {
+        uint32_t system = *(const uint32_t *)(uintptr_t)(
+            system_array + system_index * 4u);
+        uint32_t x_bits;
+        uint32_t y_bits;
+        if (!ce_region_has_access(
+                (const void *)(uintptr_t)system, 0x1cu, 0)) return 0u;
+        memcpy(&x_bits, (const void *)(uintptr_t)(system + 0x14u), 4u);
+        memcpy(&y_bits, (const void *)(uintptr_t)(system + 0x18u), 4u);
+        hash = ce_topology_hash_mix_u32(hash, system_index);
+        hash = ce_topology_hash_mix_u32(hash, x_bits);
+        hash = ce_topology_hash_mix_u32(hash, y_bits);
+    }
+    return hash != 0u ? hash : 1u;
 }
 
 /* See CE_RVA_NEWGAME_THREAD_CLASS's comment: builds Second Home by calling
@@ -2649,6 +2929,63 @@ static uint32_t ce_make_immortal_unicode(const wchar_t *text) {
     return (uint32_t)(uintptr_t)(block + 8u);
 }
 
+/* Same immortal-refcount idea, but Delphi AnsiString layout: refcount at
+   -8, length in BYTES (= chars, 1 byte each) at -4, then the data and a
+   NUL. Needed because CE_RVA_GAME_LOAD_PATH_CELL is an ANSISTRING slot:
+   TThreadGameLoad.Execute widens it with @WStrFromLStr before calling
+   LoadGame (VA 0x0053c97a -> 0x00405f00, which reads the length at
+   [src-4] and converts the buffer through MultiByteToWideChar at
+   0x004055cc -- confirmed by disassembly). Storing a UTF-16 string there
+   made the engine widen the already-wide bytes a second time, producing a
+   path with a NUL wchar interleaved after every character -- caught live
+   by the LoadGame diagnostics as reason=cannot-open-file with exactly that
+   doubled pattern in the logged filename, while direct LoadGame calls
+   (which skip the cell and its conversion) kept working. Conversion uses
+   CP_ACP to match what MultiByteToWideChar will do on the way back. */
+static uint32_t ce_make_immortal_ansi(const wchar_t *text) {
+    int narrow_bytes = WideCharToMultiByte(
+        CP_ACP, 0, text, -1, NULL, 0, NULL, NULL);
+    unsigned char *block;
+    if (narrow_bytes <= 1) return 0;
+    block = (unsigned char *)HeapAlloc(
+        GetProcessHeap(), HEAP_ZERO_MEMORY, 8u + (size_t)narrow_bytes);
+    if (block == NULL) return 0;
+    *(int32_t *)(void *)block = -1;
+    *(uint32_t *)(void *)(block + 4u) = (uint32_t)(narrow_bytes - 1);
+    if (WideCharToMultiByte(CP_ACP, 0, text, -1,
+            (char *)(block + 8u), narrow_bytes, NULL, NULL) != narrow_bytes) {
+        HeapFree(GetProcessHeap(), 0, block);
+        return 0;
+    }
+    return (uint32_t)(uintptr_t)(block + 8u);
+}
+
+/* Galaxy object names are owned WideString/BSTR fields, not borrowed
+   call arguments.  They are released with SysFreeString when the object is
+   destroyed, so the HeapAlloc-backed immortal strings used for transient
+   engine calls are not valid here.  Allocate through OleAut32 and let the
+   normal object destructor own the returned BSTR. */
+static uint32_t ce_make_owned_widestring(const wchar_t *text) {
+    typedef wchar_t *(WINAPI *ce_sys_alloc_string_len_fn)(
+        const wchar_t *source, unsigned int length);
+    static ce_sys_alloc_string_len_fn allocate_string = NULL;
+    HMODULE oleaut32;
+    size_t length;
+
+    if (text == NULL) return 0u;
+    if (allocate_string == NULL) {
+        oleaut32 = GetModuleHandleW(L"oleaut32.dll");
+        if (oleaut32 == NULL) oleaut32 = LoadLibraryW(L"oleaut32.dll");
+        if (oleaut32 == NULL) return 0u;
+        allocate_string = (ce_sys_alloc_string_len_fn)(
+            void *)GetProcAddress(oleaut32, "SysAllocStringLen");
+        if (allocate_string == NULL) return 0u;
+    }
+    length = wcslen(text);
+    if (length > UINT_MAX) return 0u;
+    return (uint32_t)(uintptr_t)allocate_string(text, (unsigned int)length);
+}
+
 static int ce_make_dual_newgame_paths(uintptr_t module_base) {
     uint32_t manager_slot;
     uint32_t manager;
@@ -2704,7 +3041,10 @@ static int ce_make_dual_newgame_paths(uintptr_t module_base) {
     wcscpy(second_path + separator + 1u, second_name);
     g_ce_first_arm_save_path = ce_make_immortal_unicode(first_path);
     g_ce_second_home_save_path = ce_make_immortal_unicode(second_path);
-    return g_ce_first_arm_save_path != 0u && g_ce_second_home_save_path != 0u;
+    g_ce_first_arm_save_path_ansi = ce_make_immortal_ansi(first_path);
+    g_ce_second_home_save_path_ansi = ce_make_immortal_ansi(second_path);
+    return g_ce_first_arm_save_path != 0u && g_ce_second_home_save_path != 0u &&
+        g_ce_first_arm_save_path_ansi != 0u && g_ce_second_home_save_path_ansi != 0u;
 }
 
 static int ce_wait_for_save_writer(uintptr_t module_base) {
@@ -2733,6 +3073,7 @@ static int ce_save_complete_game(
     if (filename == 0u) return 0;
     title_string = ce_make_immortal_unicode(title);
     if (title_string == 0u) return 0;
+    ce_call_delphi_method(0u, module_base + CE_RVA_PREPARE_SAVE_PREVIEWS);
     result = ce_call_delphi_eax_edx(
         filename, title_string, module_base + CE_RVA_SAVE_GAME) & 0xffu;
     if (result == 0u) return 0;
@@ -2769,18 +3110,22 @@ static int ce_set_native_game_load_path(uintptr_t module_base, uint32_t filename
    the first arm uses the engine's full LoadGame lifecycle, never a raw
    pointer swap or a hand-picked list of globals. */
 __attribute__((used)) static void CE_CALL ce_dual_newgame_execute(uint32_t self) {
-    static uint32_t second_thread[CE_NEWGAME_THREAD_INSTANCE_SIZE / 4u];
     uintptr_t module_base = (uintptr_t)GetModuleHandleW(NULL);
     uint32_t *galaxy_slot;
+    uint32_t second_thread;
     uint32_t first_galaxy;
     uint32_t second_galaxy;
     uint32_t restored_galaxy;
     uint32_t sectors;
     uint32_t systems;
+    uint32_t first_topology_hash;
+    uint32_t second_topology_hash;
+    uint32_t validated_topology_hash = 0u;
     unsigned char original_thread[CE_NEWGAME_THREAD_INSTANCE_SIZE];
-    uint32_t class_ref;
     int first_saved = 0;
     int second_saved = 0;
+    int second_loaded = 0;
+    int second_normalized = 0;
     int restored = 0;
     char report[320];
     int report_size;
@@ -2793,11 +3138,9 @@ __attribute__((used)) static void CE_CALL ce_dual_newgame_execute(uint32_t self)
     InterlockedExchange(&g_ce_dual_newgame_status, 1);
 
     memset(original_thread, 0, sizeof(original_thread));
-    class_ref = (uint32_t)(module_base + CE_RVA_NEWGAME_THREAD_CLASS);
     if (self != 0u &&
         ce_region_has_access((const void *)(uintptr_t)self,
             CE_NEWGAME_THREAD_INSTANCE_SIZE, 0)) {
-        class_ref = *(const uint32_t *)(uintptr_t)self;
         /* The eight bytes at +0x2d are only the race-presence block copied
            into TGalaxy.  The remainder of the derived thread instance also
            contains the selected player race/difficulty and other new-game
@@ -2830,6 +3173,21 @@ __attribute__((used)) static void CE_CALL ce_dual_newgame_execute(uint32_t self)
         InterlockedExchange(&g_ce_dual_newgame_status, 3);
         goto done;
     }
+    first_topology_hash = ce_galaxy_topology_hash(first_galaxy);
+    report_size = snprintf(report, sizeof(report),
+        "{\"status\":\"dual-newgame-first-built\",\"galaxy\":%lu,"
+        "\"sectors\":%lu,\"systems\":%lu,\"topology_hash\":%lu}\r\n",
+        (unsigned long)first_galaxy,
+        (unsigned long)ce_read_list_count(first_galaxy, 0x164u),
+        (unsigned long)ce_read_list_count(first_galaxy, 0x2cu),
+        (unsigned long)first_topology_hash);
+    if (report_size > 0) ce_write_text_marker(
+        "dual-newgame.jsonl", report, (size_t)report_size);
+    if (first_topology_hash == 0u) {
+        ce_write_progress("dual-newgame:abort:first-topology-unreadable");
+        InterlockedExchange(&g_ce_dual_newgame_status, 3);
+        goto done;
+    }
 
     ce_write_progress("dual-newgame:first:before-save");
     first_saved = ce_save_complete_game(
@@ -2841,41 +3199,149 @@ __attribute__((used)) static void CE_CALL ce_dual_newgame_execute(uint32_t self)
         goto done;
     }
 
-    memset(second_thread, 0, sizeof(second_thread));
-    memcpy(second_thread, original_thread, sizeof(second_thread));
-    second_thread[0] = class_ref;
+    /* Execute is a real TThread method, not a plain builder function.
+       Neither a byte-copied fake object nor re-entering Execute on the
+       already-completed worker is valid.  Construct the same class exactly
+       as the stock new-game form does, suspended, then copy only the
+       derived TThreadCreateNewGame fields.  The base TThread portion stays
+       owned by this new object and therefore has a valid handle, thread ID,
+       event and runtime identity.  The spare worker intentionally remains
+       suspended for the rest of this short loading process; destroying a
+       suspended Delphi TThread from inside another worker is riskier than
+       leaking this single process-lifetime object. */
+    second_thread = ce_call_delphi_constructor(
+        (uint32_t)(module_base + CE_RVA_NEWGAME_THREAD_CLASS),
+        module_base + CE_RVA_TTHREAD_CONSTRUCTOR);
+    if (second_thread == 0u ||
+        !ce_region_has_access((void *)(uintptr_t)second_thread,
+            CE_NEWGAME_THREAD_INSTANCE_SIZE, 1)) {
+        ce_write_progress("dual-newgame:second:thread-create-failed");
+        InterlockedExchange(&g_ce_dual_newgame_status, 4);
+        goto restore_first;
+    }
+    memcpy(
+        (void *)(uintptr_t)(second_thread + CE_NEWGAME_THREAD_DERIVED_OFFSET),
+        original_thread + CE_NEWGAME_THREAD_DERIVED_OFFSET,
+        CE_NEWGAME_THREAD_INSTANCE_SIZE - CE_NEWGAME_THREAD_DERIVED_OFFSET);
     ce_write_progress("dual-newgame:second:before-execute");
-    ce_call_delphi_method(
-        (uint32_t)(uintptr_t)second_thread,
-        (uintptr_t)g_ce_dual_newgame_trampoline);
+    ce_call_delphi_method(second_thread, (uintptr_t)g_ce_dual_newgame_trampoline);
     ce_write_progress("dual-newgame:second:after-execute");
     second_galaxy = *galaxy_slot;
     sectors = ce_read_list_count(second_galaxy, 0x164u);
     systems = ce_read_list_count(second_galaxy, 0x2cu);
+    second_topology_hash = ce_galaxy_topology_hash(second_galaxy);
     if (second_galaxy == 0u || second_galaxy == first_galaxy || systems == 0u) {
         ce_write_progress("dual-newgame:second:invalid");
         InterlockedExchange(&g_ce_dual_newgame_status, 4);
         goto restore_first;
     }
+    if (second_topology_hash == 0u ||
+        second_topology_hash == first_topology_hash) {
+        ce_write_progress(second_topology_hash == 0u
+            ? "dual-newgame:second:topology-unreadable"
+            : "dual-newgame:second:topology-duplicate");
+        InterlockedExchange(&g_ce_dual_newgame_status, 4);
+        goto restore_first;
+    }
 
-    /* Make the persisted world visibly independent immediately.  Sector
-       labels and story population remain later content passes, but system
-       identities already belong to Second Home in the sidecar itself. */
-    CEAdapterRenameSecondGalaxySystems(second_galaxy);
+    /* Keep the serialized system identifiers produced by the native
+       builder.  TCon.Name participates in cross-object save references, so
+       rewriting only that field makes the sidecar readable in the save
+       menu but crashes during a full load.  Second Home's display names are
+       applied only after its valid native sidecar has loaded. */
     report_size = snprintf(report, sizeof(report),
         "{\"status\":\"dual-newgame-second-built\",\"galaxy\":%lu,"
-        "\"sectors\":%lu,\"systems\":%lu}\r\n",
+        "\"sectors\":%lu,\"systems\":%lu,\"topology_hash\":%lu,"
+        "\"first_topology_hash\":%lu,\"topology_distinct\":true}\r\n",
         (unsigned long)second_galaxy, (unsigned long)sectors,
-        (unsigned long)systems);
+        (unsigned long)systems, (unsigned long)second_topology_hash,
+        (unsigned long)first_topology_hash);
     if (report_size > 0) ce_write_text_marker(
         "dual-newgame.jsonl", report, (size_t)report_size);
 
+    /* Each Execute builds a COMPLETE new game, player included -- proven
+       live when calling it mid-session swapped a human player's ship for a
+       freshly rolled Maloc one.  Saving straight after the second Execute
+       therefore produced a sidecar holding that second game's OWN player:
+       flying the portal loaded a stranger's party rather than the same
+       captain in another arm, and left the post-load state inconsistent
+       enough that the loading form's own gate (VA 0x007029A4) refused to
+       nominate a follow-up form, ending the process cleanly with exit code
+       0 -- the "silent crash" that produced no fault and no event-log
+       entry.  Give Second Home the FIRST arm's player instead: park the
+       freshly built galaxy behind the engine's own keep-alive flag, load
+       the first arm back (restoring its player), then point the galaxy cell
+       at the second arm and save that combination. */
+    /* REVERTED, kept as the record of a disproved approach.  Each Execute
+       builds a COMPLETE new game, player included, so the second sidecar
+       holds that second game's own player rather than the traveller's --
+       the user's own hypothesis, and correct.  The obvious repair, "load
+       the first arm back to recover its player, then point the galaxy cell
+       at the second arm and save that pair", does NOT work: SaveGame then
+       died with `List index out of bounds (-1)` (raise site VA 0x0041622b,
+       captured live by the first-chance trace) and returned false, so no
+       sidecar was written at all and the portal could never arm.
+
+       The -1 is a "not found in list" result used as an index, and it
+       proves the mismatch is not merely the player's own star reference: a
+       save is one coherent object graph -- galaxy, every ship, quests and
+       player all cross-referencing each other -- so substituting the galaxy
+       underneath a state loaded from the other arm breaks references all
+       over that graph, not in one repairable place.  Carrying a captain
+       between arms therefore has to copy the traveller's attributes into
+       the destination world, not swap a world under a party. */
     ce_write_progress("dual-newgame:second:before-save");
     second_saved = ce_save_complete_game(
         module_base, g_ce_second_home_save_path, L"Дети Эльтан: Второй Дом");
     ce_write_progress(second_saved
         ? "dual-newgame:second:saved" : "dual-newgame:second-save-failed");
     if (!second_saved) InterlockedExchange(&g_ce_dual_newgame_status, 4);
+    if (second_saved) {
+        /* A successful SaveGame call only proves that the asynchronous
+           writer accepted the buffers.  It does not prove that the complete
+           state produced by a second new-game builder in the same process is
+           independently loadable.  Validate it now, while the stock loading
+           screen is already active and before the player can enter the
+           world.  Re-saving the successfully reconstructed state also
+           removes any process-local registry residue left by running two
+           builders back-to-back. */
+        ce_write_progress("dual-newgame:second:before-validation-load");
+        second_loaded = ce_load_complete_game(
+            module_base, g_ce_second_home_save_path);
+        ce_write_progress(second_loaded
+            ? "dual-newgame:second:validation-loaded"
+            : "dual-newgame:second:validation-load-failed");
+        if (second_loaded && ce_region_has_access(galaxy_slot, 4u, 0)) {
+            validated_topology_hash =
+                ce_galaxy_topology_hash(*galaxy_slot);
+        }
+        if (second_loaded &&
+            validated_topology_hash == second_topology_hash) {
+            ce_write_progress("dual-newgame:second:before-normalize-save");
+            second_normalized = ce_save_complete_game(
+                module_base, g_ce_second_home_save_path,
+                L"Дети Эльтан: Второй Дом");
+            ce_write_progress(second_normalized
+                ? "dual-newgame:second:normalized"
+                : "dual-newgame:second:normalize-save-failed");
+        } else if (second_loaded) {
+            ce_write_progress(
+                "dual-newgame:second:validation-topology-mismatch");
+        }
+        if (!second_normalized) {
+            InterlockedExchange(&g_ce_dual_newgame_status, 4);
+        }
+        report_size = snprintf(report, sizeof(report),
+            "{\"status\":\"dual-newgame-second-validation\","
+            "\"loaded\":%d,\"normalized\":%d,"
+            "\"expected_topology_hash\":%lu,"
+            "\"loaded_topology_hash\":%lu}\r\n",
+            second_loaded, second_normalized,
+            (unsigned long)second_topology_hash,
+            (unsigned long)validated_topology_hash);
+        if (report_size > 0) ce_write_text_marker(
+            "dual-newgame.jsonl", report, (size_t)report_size);
+    }
 
 restore_first:
     ce_write_progress("dual-newgame:first:before-restore");
@@ -2883,7 +3349,7 @@ restore_first:
     restored_galaxy = ce_region_has_access(galaxy_slot, 4u, 0) ? *galaxy_slot : 0u;
     ce_write_progress(restored
         ? "dual-newgame:first:restored" : "dual-newgame:first:restore-failed");
-    if (restored && second_saved && restored_galaxy != 0u) {
+    if (restored && second_normalized && restored_galaxy != 0u) {
         InterlockedExchange(&g_ce_old_galaxy_ptr, 0);
         InterlockedExchange(&g_ce_second_galaxy_ptr, 0);
         InterlockedExchange(&g_ce_second_snapshot_loaded, 0);
@@ -2894,8 +3360,11 @@ restore_first:
     }
     report_size = snprintf(report, sizeof(report),
         "{\"status\":\"dual-newgame-finished\",\"first_saved\":%d,"
-        "\"second_saved\":%d,\"restored\":%d,\"restored_galaxy\":%lu}\r\n",
-        first_saved, second_saved, restored, (unsigned long)restored_galaxy);
+        "\"second_saved\":%d,\"second_loaded\":%d,"
+        "\"second_normalized\":%d,\"restored\":%d,"
+        "\"restored_galaxy\":%lu}\r\n",
+        first_saved, second_saved, second_loaded, second_normalized,
+        restored, (unsigned long)restored_galaxy);
     if (report_size > 0) ce_write_text_marker(
         "dual-newgame.jsonl", report, (size_t)report_size);
 
@@ -2975,6 +3444,409 @@ static int ce_install_dual_newgame_hook(void) {
 fail:
     InterlockedExchange(&g_ce_dual_newgame_hook_installed, 0);
     ce_write_progress("dual-newgame:hook-install-failed");
+    return 0;
+#else
+    return 0;
+#endif
+}
+
+static size_t ce_ansistring_to_hex(
+    uint32_t string_ptr, char *output, size_t output_capacity
+) {
+    uint32_t byte_length;
+    uint32_t index;
+    size_t used = 0u;
+    if (output_capacity != 0u) output[0] = '\0';
+    if (string_ptr < 4u || output_capacity < 3u ||
+        !ce_region_has_access(
+            (const void *)(uintptr_t)(string_ptr - 4u), 4u, 0)) return 0u;
+    byte_length = *(const uint32_t *)(uintptr_t)(string_ptr - 4u);
+    if (byte_length > 160u) byte_length = 160u;
+    if (byte_length != 0u &&
+        !ce_region_has_access(
+            (const void *)(uintptr_t)string_ptr, byte_length, 0)) return 0u;
+    for (index = 0u; index < byte_length && used + 2u < output_capacity; ++index) {
+        int written = snprintf(
+            output + used, output_capacity - used, "%02x",
+            (unsigned)*(const unsigned char *)(uintptr_t)(string_ptr + index));
+        if (written != 2) break;
+        used += 2u;
+    }
+    return used;
+}
+
+__attribute__((used)) static void CE_CALL ce_log_package_file_open_result(
+    const uint32_t *saved_arguments, uint32_t result
+) {
+    uint32_t object;
+    uint32_t path_ptr = 0u;
+    uint32_t entry_index = 0xffffffffu;
+    uint32_t reference_count = 0u;
+    char path_hex[321];
+    char report[760];
+    int report_size;
+
+    if (saved_arguments == NULL) return;
+    object = saved_arguments[0];
+    if (ce_region_has_access(
+            (const void *)(uintptr_t)(object + 0x0cu), 4u, 0)) {
+        entry_index = *(const uint32_t *)(uintptr_t)(object + 0x04u);
+        reference_count = *(const uint32_t *)(uintptr_t)(object + 0x08u);
+        path_ptr = *(const uint32_t *)(uintptr_t)(object + 0x0cu);
+    }
+    ce_ansistring_to_hex(path_ptr, path_hex, sizeof(path_hex));
+    report_size = snprintf(
+        report, sizeof(report),
+        "{\"status\":\"package-file-open\",\"pid\":%lu,\"tid\":%lu,"
+        "\"object\":%lu,\"flag\":%lu,\"result\":%lu,"
+        "\"entry_index\":%lu,\"reference_count\":%lu,"
+        "\"path_ptr\":%lu,\"path_hex\":\"%s\"}\r\n",
+        (unsigned long)GetCurrentProcessId(),
+        (unsigned long)GetCurrentThreadId(),
+        (unsigned long)object,
+        (unsigned long)(saved_arguments[1] & 0xffu),
+        (unsigned long)(result & 0xffu),
+        (unsigned long)entry_index,
+        (unsigned long)reference_count,
+        (unsigned long)path_ptr, path_hex);
+    if (report_size > 0) ce_write_text_marker(
+        "package-file-opens.jsonl", report, (size_t)report_size);
+}
+
+#if defined(__i386__)
+__attribute__((naked)) static void ce_package_file_open_hook(void) {
+    __asm__ volatile(
+        "pushl %ecx\n\t"
+        "pushl %edx\n\t"
+        "pushl %eax\n\t"
+        "call *_g_ce_package_file_open_trampoline\n\t"
+        "pushl %eax\n\t"
+        "leal 4(%esp), %ecx\n\t"
+        "pushl %eax\n\t"
+        "pushl %ecx\n\t"
+        "call _ce_log_package_file_open_result\n\t"
+        "addl $8, %esp\n\t"
+        "popl %eax\n\t"
+        "addl $12, %esp\n\t"
+        "ret\n\t"
+    );
+}
+#endif
+
+static int ce_install_package_file_open_trace_hook(void) {
+#if defined(__i386__)
+    static const unsigned char signature[11] = {
+        0x55, 0x8b, 0xec, 0x83, 0xc4, 0xf4, 0x33, 0xc9,
+        0x89, 0x4d, 0xf4
+    };
+    uintptr_t module_base = (uintptr_t)GetModuleHandleW(NULL);
+    unsigned char *target;
+    unsigned char *trampoline;
+    unsigned char patch[11];
+    int32_t relative;
+    DWORD old_protect;
+    DWORD ignored_protect;
+    LONG hook_state;
+
+    hook_state = InterlockedCompareExchange(
+        &g_ce_package_file_open_hook_installed, -1, 0);
+    if (hook_state == 1) return 1;
+    if (hook_state != 0 || module_base == 0u) return 0;
+    target = (unsigned char *)(module_base + CE_RVA_PACKAGE_FILE_OPEN);
+    if (!ce_region_has_access(target, sizeof(signature), 0) ||
+        memcmp(target, signature, sizeof(signature)) != 0) goto fail;
+    trampoline = (unsigned char *)VirtualAlloc(
+        NULL, 16u, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (trampoline == NULL) goto fail;
+    memcpy(trampoline, target, 11u);
+    trampoline[11] = 0xe9;
+    relative = (int32_t)((target + 11u) - (trampoline + 16u));
+    memcpy(trampoline + 12u, &relative, sizeof(relative));
+    FlushInstructionCache(GetCurrentProcess(), trampoline, 16u);
+    memset(patch, 0x90, sizeof(patch));
+    patch[0] = 0xe9;
+    relative = (int32_t)(
+        (unsigned char *)(uintptr_t)ce_package_file_open_hook - (target + 5u));
+    memcpy(patch + 1u, &relative, sizeof(relative));
+    if (!VirtualProtect(
+            target, sizeof(patch), PAGE_EXECUTE_READWRITE, &old_protect)) {
+        VirtualFree(trampoline, 0, MEM_RELEASE);
+        goto fail;
+    }
+    g_ce_package_file_open_trampoline = trampoline;
+    memcpy(target, patch, sizeof(patch));
+    FlushInstructionCache(GetCurrentProcess(), target, sizeof(patch));
+    VirtualProtect(target, sizeof(patch), old_protect, &ignored_protect);
+    InterlockedExchange(&g_ce_package_file_open_hook_installed, 1);
+    return 1;
+
+fail:
+    InterlockedExchange(&g_ce_package_file_open_hook_installed, 0);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
+static void ce_log_process_exit_request(
+    const char *kind, uint32_t value, const uint32_t *stack_pointer
+) {
+    MEMORY_BASIC_INFORMATION region;
+    uintptr_t stack_end = 0u;
+    char report[1800];
+    size_t used;
+    uint32_t index;
+    int written;
+
+    if (stack_pointer != NULL &&
+        VirtualQuery(stack_pointer, &region, sizeof(region)) == sizeof(region) &&
+        region.State == MEM_COMMIT) {
+        stack_end = (uintptr_t)region.BaseAddress + region.RegionSize;
+    }
+    written = snprintf(
+        report, sizeof(report),
+        "{\"status\":\"%s\",\"pid\":%lu,\"tid\":%lu,\"value\":%lu,"
+        "\"game_stack\":[",
+        kind,
+        (unsigned long)GetCurrentProcessId(),
+        (unsigned long)GetCurrentThreadId(),
+        (unsigned long)value);
+    if (written <= 0 || (size_t)written >= sizeof(report)) return;
+    used = (size_t)written;
+    for (index = 0u; index < 256u && stack_pointer != NULL &&
+         (uintptr_t)(stack_pointer + index + 1u) <= stack_end; ++index) {
+        uint32_t address = stack_pointer[index];
+        if (address < 0x00401000u || address >= 0x00875000u) continue;
+        written = snprintf(
+            report + used, sizeof(report) - used,
+            "%s{\"index\":%lu,\"address\":%lu}",
+            used != (size_t)snprintf(
+                NULL, 0,
+                "{\"status\":\"%s\",\"pid\":%lu,\"tid\":%lu,\"value\":%lu,"
+                "\"game_stack\":[",
+                kind,
+                (unsigned long)GetCurrentProcessId(),
+                (unsigned long)GetCurrentThreadId(),
+                (unsigned long)value) ? "," : "",
+            (unsigned long)index, (unsigned long)address);
+        if (written <= 0 || (size_t)written >= sizeof(report) - used) break;
+        used += (size_t)written;
+    }
+    if (used + 4u >= sizeof(report)) return;
+    memcpy(report + used, "]}\r\n", 4u);
+    ce_write_text_marker("process-exits.jsonl", report, used + 4u);
+}
+
+__attribute__((used)) static void CE_CALL ce_log_exit_process_stack(
+    const uint32_t *stack_pointer, uint32_t exit_code
+) {
+    ce_log_process_exit_request("ExitProcess", exit_code, stack_pointer);
+}
+
+__attribute__((used)) static void CE_CALL ce_log_post_quit_message_stack(
+    const uint32_t *stack_pointer, uint32_t exit_code
+) {
+    ce_log_process_exit_request("PostQuitMessage", exit_code, stack_pointer);
+}
+
+#if defined(__i386__)
+__attribute__((naked)) static void ce_exit_process_trace_hook(void) {
+    __asm__ volatile(
+        "movl %esp, %eax\n\t"
+        "pushl 4(%esp)\n\t"
+        "pushl %eax\n\t"
+        "call _ce_log_exit_process_stack\n\t"
+        "addl $8, %esp\n\t"
+        "jmp *_g_ce_exit_process_original\n\t"
+    );
+}
+
+__attribute__((naked)) static void ce_post_quit_message_trace_hook(void) {
+    __asm__ volatile(
+        "movl %esp, %eax\n\t"
+        "pushl 4(%esp)\n\t"
+        "pushl %eax\n\t"
+        "call _ce_log_post_quit_message_stack\n\t"
+        "addl $8, %esp\n\t"
+        "jmp *_g_ce_post_quit_message_original\n\t"
+    );
+}
+#endif
+
+static int ce_install_process_exit_trace_hooks(void) {
+    uintptr_t module_base = (uintptr_t)GetModuleHandleW(NULL);
+    void **exit_process_cell;
+    void **post_quit_message_cell;
+    DWORD old_protect;
+    DWORD ignored_protect;
+    LONG hook_state;
+
+    hook_state = InterlockedCompareExchange(
+        &g_ce_process_exit_trace_installed, -1, 0);
+    if (hook_state == 1) return 1;
+    if (hook_state != 0 || module_base == 0u) return 0;
+    exit_process_cell =
+        (void **)(module_base + CE_RVA_EXIT_PROCESS_IAT);
+    post_quit_message_cell =
+        (void **)(module_base + CE_RVA_POST_QUIT_MESSAGE_IAT);
+    if (!ce_region_has_access(exit_process_cell, sizeof(void *), 0) ||
+        !ce_region_has_access(post_quit_message_cell, sizeof(void *), 0)) {
+        goto fail;
+    }
+    g_ce_exit_process_original =
+        (VOID (WINAPI *)(UINT))*exit_process_cell;
+    g_ce_post_quit_message_original =
+        (VOID (WINAPI *)(int))*post_quit_message_cell;
+    if (g_ce_exit_process_original == NULL ||
+        g_ce_post_quit_message_original == NULL) goto fail;
+    if (!VirtualProtect(
+            exit_process_cell, sizeof(void *), PAGE_READWRITE,
+            &old_protect)) goto fail;
+    *exit_process_cell = (void *)(uintptr_t)ce_exit_process_trace_hook;
+    VirtualProtect(
+        exit_process_cell, sizeof(void *), old_protect, &ignored_protect);
+    if (!VirtualProtect(
+            post_quit_message_cell, sizeof(void *), PAGE_READWRITE,
+            &old_protect)) goto fail;
+    *post_quit_message_cell =
+        (void *)(uintptr_t)ce_post_quit_message_trace_hook;
+    VirtualProtect(
+        post_quit_message_cell, sizeof(void *), old_protect,
+        &ignored_protect);
+    InterlockedExchange(&g_ce_process_exit_trace_installed, 1);
+    return 1;
+
+fail:
+    InterlockedExchange(&g_ce_process_exit_trace_installed, 0);
+    return 0;
+}
+
+__attribute__((used)) static void CE_CALL ce_log_unhandled_exception(
+    const uint32_t *stack_pointer, const EXCEPTION_RECORD *record
+) {
+    MEMORY_BASIC_INFORMATION region;
+    uintptr_t stack_end = 0u;
+    char report[2200];
+    size_t used;
+    uint32_t index;
+    uint32_t parameter_count;
+    int written;
+    int first = 1;
+
+    if (record == NULL || !ce_region_has_access(
+            record, sizeof(EXCEPTION_RECORD), 0)) return;
+    if (stack_pointer != NULL &&
+        VirtualQuery(stack_pointer, &region, sizeof(region)) == sizeof(region) &&
+        region.State == MEM_COMMIT) {
+        stack_end = (uintptr_t)region.BaseAddress + region.RegionSize;
+    }
+    parameter_count = record->NumberParameters;
+    if (parameter_count > EXCEPTION_MAXIMUM_PARAMETERS) {
+        parameter_count = EXCEPTION_MAXIMUM_PARAMETERS;
+    }
+    written = snprintf(
+        report, sizeof(report),
+        "{\"status\":\"delphi-unhandled\",\"pid\":%lu,\"tid\":%lu,"
+        "\"code\":%lu,\"flags\":%lu,\"address\":%lu,\"parameters\":[",
+        (unsigned long)GetCurrentProcessId(),
+        (unsigned long)GetCurrentThreadId(),
+        (unsigned long)record->ExceptionCode,
+        (unsigned long)record->ExceptionFlags,
+        (unsigned long)(uintptr_t)record->ExceptionAddress);
+    if (written <= 0 || (size_t)written >= sizeof(report)) return;
+    used = (size_t)written;
+    for (index = 0u; index < parameter_count; ++index) {
+        written = snprintf(
+            report + used, sizeof(report) - used,
+            "%s%lu", index == 0u ? "" : ",",
+            (unsigned long)record->ExceptionInformation[index]);
+        if (written <= 0 || (size_t)written >= sizeof(report) - used) return;
+        used += (size_t)written;
+    }
+    written = snprintf(report + used, sizeof(report) - used, "],\"game_stack\":[");
+    if (written <= 0 || (size_t)written >= sizeof(report) - used) return;
+    used += (size_t)written;
+    for (index = 0u; index < 384u && stack_pointer != NULL &&
+         (uintptr_t)(stack_pointer + index + 1u) <= stack_end; ++index) {
+        uint32_t address = stack_pointer[index];
+        if (address < 0x00401000u || address >= 0x00875000u) continue;
+        written = snprintf(
+            report + used, sizeof(report) - used,
+            "%s{\"index\":%lu,\"address\":%lu}",
+            first ? "" : ",", (unsigned long)index, (unsigned long)address);
+        if (written <= 0 || (size_t)written >= sizeof(report) - used) break;
+        used += (size_t)written;
+        first = 0;
+    }
+    if (used + 4u >= sizeof(report)) return;
+    memcpy(report + used, "]}\r\n", 4u);
+    ce_write_text_marker("unhandled-exceptions.jsonl", report, used + 4u);
+}
+
+#if defined(__i386__)
+__attribute__((naked)) static void ce_unhandled_exception_trace_hook(void) {
+    __asm__ volatile(
+        "movl %esp, %eax\n\t"
+        "pushl 4(%esp)\n\t"
+        "pushl %eax\n\t"
+        "call _ce_log_unhandled_exception\n\t"
+        "addl $8, %esp\n\t"
+        "jmp *_g_ce_unhandled_exception_trampoline\n\t"
+    );
+}
+#endif
+
+static int ce_install_unhandled_exception_trace_hook(void) {
+#if defined(__i386__)
+    static const unsigned char signature[11] = {
+        0x8b, 0x44, 0x24, 0x04, 0xf7, 0x40, 0x04, 0x06,
+        0x00, 0x00, 0x00
+    };
+    uintptr_t module_base = (uintptr_t)GetModuleHandleW(NULL);
+    unsigned char *target;
+    unsigned char *trampoline;
+    unsigned char patch[11];
+    int32_t relative;
+    DWORD old_protect;
+    DWORD ignored_protect;
+    LONG hook_state;
+
+    hook_state = InterlockedCompareExchange(
+        &g_ce_unhandled_exception_hook_installed, -1, 0);
+    if (hook_state == 1) return 1;
+    if (hook_state != 0 || module_base == 0u) return 0;
+    target = (unsigned char *)(
+        module_base + CE_RVA_DELPHI_UNHANDLED_EXCEPTION);
+    if (!ce_region_has_access(target, sizeof(signature), 0) ||
+        memcmp(target, signature, sizeof(signature)) != 0) goto fail;
+    trampoline = (unsigned char *)VirtualAlloc(
+        NULL, 16u, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (trampoline == NULL) goto fail;
+    memcpy(trampoline, target, 11u);
+    trampoline[11] = 0xe9;
+    relative = (int32_t)((target + 11u) - (trampoline + 16u));
+    memcpy(trampoline + 12u, &relative, sizeof(relative));
+    FlushInstructionCache(GetCurrentProcess(), trampoline, 16u);
+    memset(patch, 0x90, sizeof(patch));
+    patch[0] = 0xe9;
+    relative = (int32_t)(
+        (unsigned char *)(uintptr_t)ce_unhandled_exception_trace_hook -
+        (target + 5u));
+    memcpy(patch + 1u, &relative, sizeof(relative));
+    if (!VirtualProtect(
+            target, sizeof(patch), PAGE_EXECUTE_READWRITE, &old_protect)) {
+        VirtualFree(trampoline, 0, MEM_RELEASE);
+        goto fail;
+    }
+    g_ce_unhandled_exception_trampoline = trampoline;
+    memcpy(target, patch, sizeof(patch));
+    FlushInstructionCache(GetCurrentProcess(), target, sizeof(patch));
+    VirtualProtect(target, sizeof(patch), old_protect, &ignored_protect);
+    InterlockedExchange(&g_ce_unhandled_exception_hook_installed, 1);
+    return 1;
+
+fail:
+    InterlockedExchange(&g_ce_unhandled_exception_hook_installed, 0);
     return 0;
 #else
     return 0;
@@ -3366,6 +4238,10 @@ uint32_t CE_CALL CEAdapterConsumePendingArrival(void) {
     LONG direction = InterlockedCompareExchange(&g_ce_pending_arrival_direction, 0, 0);
     LONG remaining;
     if (direction < 0) return 0u;
+    /* This poll is reached from the target save's live Turn graph.  Publish
+       the target arm here, after LoadGame, never while the target Galaxy is
+       still being reconstructed. */
+    InterlockedExchange(&g_ce_active_arm, direction == 1 ? 1 : 0);
     remaining = InterlockedCompareExchange(&g_ce_pending_arrival_ticks, 0, 0);
     if (remaining > 0) {
         InterlockedExchange(&g_ce_pending_arrival_ticks, remaining - 1);
@@ -3828,6 +4704,20 @@ static LRESULT CALLBACK ce_portal_keyboard_proc(int code, WPARAM wparam, LPARAM 
 static DWORD WINAPI ce_hook_thread_proc(LPVOID unused) {
     MSG msg;
     (void)unused;
+    if (GetFileAttributesA("C:\\ce_debug\\trace-game-exceptions.flag") !=
+            INVALID_FILE_ATTRIBUTES) {
+        CreateDirectoryA("C:\\ce_debug", NULL);
+        g_ce_exception_trace_file = CreateFileA(
+            "C:\\ce_debug\\game-exceptions.bin", FILE_APPEND_DATA,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL, NULL);
+        if (g_ce_exception_trace_file != INVALID_HANDLE_VALUE) {
+            ce_ensure_veh_installed();
+            ce_install_package_file_open_trace_hook();
+            ce_install_process_exit_trace_hooks();
+            ce_install_unhandled_exception_trace_hook();
+        }
+    }
     /* Install before the player can start a party.  Unlike all live-arm
        experiments this detour only runs inside the engine's own native
        new-game worker, never from a Turn/NextDay callback. */
@@ -4753,8 +5643,16 @@ uint32_t CE_CALL CEAdapterRegisterPortal(uint32_t galaxy_ptr, uint32_t hole_id) 
 uint32_t CE_CALL CEAdapterEnterRegisteredPortal(uint32_t galaxy_ptr, uint32_t hole_id) {
     char report[192];
     int report_size;
+    uint32_t registered_hole_id =
+        (uint32_t)InterlockedCompareExchange(&g_ce_portal_hole_id, 0, 0);
+    /* ShipOrderObj() is not stable at the instant the player crosses a hole:
+       the engine may clear the movement order or return the player object.
+       A zero ID therefore means "the portal registered by this adapter".
+       The galaxy pointer and armed-state checks below still prevent unrelated
+       black holes from triggering an inter-arm transition. */
+    if (hole_id == 0u) hole_id = registered_hole_id;
     if (hole_id == 0u ||
-            (uint32_t)InterlockedCompareExchange(&g_ce_portal_hole_id, 0, 0) != hole_id ||
+            registered_hole_id != hole_id ||
             (uint32_t)InterlockedCompareExchange(&g_ce_portal_galaxy_ptr, 0, 0) != galaxy_ptr ||
             InterlockedCompareExchange(&g_ce_portal_status, 2, 1) != 1) return 0;
     report_size = snprintf(report, sizeof(report),
@@ -4788,13 +5686,25 @@ uint32_t CE_CALL CEAdapterCompleteRegisteredPortal(uint32_t galaxy_ptr, uint32_t
         return 0;
     }
     entering = InterlockedCompareExchange(&g_ce_active_arm, 0, 0) == 0;
+    /* ANSI variant on purpose: the game-load path cell is an AnsiString the
+       engine widens itself -- see ce_make_immortal_ansi's comment. */
     target_path = entering
-        ? g_ce_second_home_save_path : g_ce_first_arm_save_path;
+        ? g_ce_second_home_save_path_ansi : g_ce_first_arm_save_path_ansi;
     ok = ce_resolve_engine_galaxy(
             galaxy_ptr, &module_base, &galaxy_slot, &class_ref) &&
         ce_set_native_game_load_path(module_base, target_path);
     if (ok) {
-        InterlockedExchange(&g_ce_active_arm, entering ? 1 : 0);
+        /* The validation LoadGame performed during new-party creation
+           succeeds with OLD_ARM active.  The portal path previously exposed
+           SECOND_HOME before TThreadGameLoad had even started, allowing
+           load-time imports to observe and mutate a half-built target.
+           CEAdapterConsumePendingArrival commits the remembered direction on
+           the first Turn that runs after a successful load. */
+        InterlockedExchange(&g_ce_active_arm, 0);
+        /* Tell the GameLoad form's gate stub that the load it is about to
+           run belongs to this mod, so it nominates StarMap afterwards
+           instead of leaving the engine with no follow-up form. */
+        InterlockedExchange(&g_ce_portal_load_pending, 1);
         CEAdapterRequestSectorLabelSpawn(entering ? 1u : 0u);
     }
     InterlockedExchange(&g_ce_portal_hole_id, 0);
@@ -5300,7 +6210,7 @@ uint32_t CE_CALL CEAdapterRenameSecondGalaxySystems(uint32_t second_galaxy_ptr) 
         uint32_t object = *(const uint32_t *)(uintptr_t)(con_array + index * 4u);
         uint32_t new_name;
         if (!ce_region_has_access((const void *)(uintptr_t)object, 0x14u, 1)) continue;
-        new_name = ce_make_immortal_unicode(g_ce_second_system_names[index % pool_size]);
+        new_name = ce_make_owned_widestring(g_ce_second_system_names[index % pool_size]);
         if (new_name == 0u) continue;
         *(uint32_t *)(uintptr_t)(object + 0x10u) = new_name;
         ++renamed;
@@ -5553,6 +6463,207 @@ uint32_t CE_CALL CEAdapterInstallDayCounterGuard(uint32_t galaxy_ptr) {
 }
 #else
 uint32_t CE_CALL CEAdapterInstallDayCounterGuard(uint32_t galaxy_ptr) {
+    (void)galaxy_ptr;
+    return 0;
+}
+#endif
+
+/* See CE_RVA_LOADGAME_RAISE_CANNOT_OPEN's comment. Records which LoadGame
+   validation rejected the save, plus the filename LoadGame itself was given
+   (read out of its own still-live frame), then falls through to the real
+   raise so the engine's behaviour is unchanged. */
+__attribute__((used)) static void CE_CALL ce_loadgame_diag_body(
+    uint32_t reason, uint32_t filename
+) {
+    static const char *const reasons[5] = {
+        "unknown", "cannot-open-file", "bad-pre-signature",
+        "bad-post-signature", "compressed-galaxy-read-fail"
+    };
+    char payload[640];
+    char name[256];
+    size_t used = 0u;
+    int size;
+    name[0] = '\0';
+    if (filename >= 0x10000u &&
+            ce_region_has_access((const void *)(uintptr_t)(filename - 4u), 4u, 0)) {
+        uint32_t bytes = *(const uint32_t *)(uintptr_t)(filename - 4u);
+        if ((bytes & 1u) == 0u && bytes != 0u && bytes < 4096u &&
+                ce_region_has_access((const void *)(uintptr_t)filename, bytes, 0)) {
+            const wchar_t *text = (const wchar_t *)(uintptr_t)filename;
+            size_t count = (size_t)bytes / sizeof(wchar_t);
+            size_t index;
+            /* Escaped ASCII only: the path is Unicode and this log is read
+               as plain text, so anything non-ASCII becomes \uXXXX rather
+               than mojibake that would have to be decoded again later. */
+            for (index = 0u; index < count && used + 8u < sizeof(name); ++index) {
+                wchar_t ch = text[index];
+                if (ch == L'\\') { name[used++] = '/'; }
+                else if (ch >= 0x20 && ch < 0x7f) { name[used++] = (char)ch; }
+                else {
+                    int written = snprintf(name + used, sizeof(name) - used,
+                        "\\u%04x", (unsigned)ch);
+                    if (written > 0) used += (size_t)written;
+                }
+            }
+            name[used] = '\0';
+        }
+    }
+    size = snprintf(payload, sizeof(payload),
+        "{\"status\":\"loadgame-failed\",\"reason\":\"%s\",\"file\":\"%s\"}\r\n",
+        reasons[reason < 5u ? reason : 0u], name);
+    if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", payload, (size_t)size);
+}
+
+#if defined(__i386__)
+/* EBP still belongs to LoadGame here, so [ebp-4] is its filename argument.
+   The absolute RaiseExcept address is safe to hardcode for the same reason
+   the day-counter guard does it: ce_resolve_engine_galaxy has already
+   confirmed the pinned build, whose image base is always 0x00400000. */
+#define CE_LOADGAME_DIAG_STUB(name, id)                    \
+    __attribute__((naked)) static void name(void) {        \
+        __asm__ volatile(                                  \
+            "pushal\n\t"                                   \
+            "pushfl\n\t"                                   \
+            "movl -4(%%ebp), %%eax\n\t"                    \
+            "pushl %%eax\n\t"                              \
+            "pushl $" #id "\n\t"                           \
+            "call _ce_loadgame_diag_body\n\t"              \
+            "addl $8, %%esp\n\t"                           \
+            "popfl\n\t"                                    \
+            "popal\n\t"                                    \
+            "movl $0x00404e20, %%eax\n\t"                  \
+            "jmp *%%eax\n\t"                               \
+            ::: "memory");                                 \
+    }
+
+CE_LOADGAME_DIAG_STUB(ce_loadgame_diag_cannot_open, 1)
+CE_LOADGAME_DIAG_STUB(ce_loadgame_diag_bad_pre_sig, 2)
+CE_LOADGAME_DIAG_STUB(ce_loadgame_diag_bad_post_sig, 3)
+CE_LOADGAME_DIAG_STUB(ce_loadgame_diag_galaxy_read, 4)
+
+/* Records LoadGame's own boolean result plus the galaxy pointer the engine
+   is left holding, so a silent clean exit can be attributed to either the
+   load itself failing or to whatever runs after a successful one. */
+__attribute__((used)) static void CE_CALL ce_loadgame_result_body(uint32_t result) {
+    uintptr_t module_base = (uintptr_t)GetModuleHandleW(NULL);
+    uint32_t galaxy = 0u;
+    char payload[160];
+    int size;
+    if (ce_region_has_access(
+            (const void *)(module_base + CE_RVA_GALAXY_IMPORT_CELL), 4u, 0)) {
+        uint32_t cell = *(const uint32_t *)(module_base + CE_RVA_GALAXY_IMPORT_CELL);
+        if (ce_region_has_access((const void *)(uintptr_t)cell, 4u, 0)) {
+            galaxy = *(const uint32_t *)(uintptr_t)cell;
+        }
+    }
+    size = snprintf(payload, sizeof(payload),
+        "{\"status\":\"loadgame-result\",\"ok\":%lu,\"galaxy\":%lu,\"tick\":%lu}\r\n",
+        (unsigned long)(result & 0xffu), (unsigned long)galaxy,
+        (unsigned long)GetTickCount());
+    if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", payload, (size_t)size);
+}
+
+/* See CE_RVA_LOADGAME_FORM_GATE_CALL. Returns the value the GameLoad form
+   should act on: the engine's own answer normally, forced true exactly once
+   for a portal-initiated load so the form proceeds to nominate StarMap
+   instead of leaving the message loop with nothing to run. */
+__attribute__((used)) static uint32_t CE_CALL ce_loadgame_form_gate_body(
+    uint32_t original
+) {
+    uint32_t forced = original & 0xffu;
+    LONG pending = InterlockedExchange(&g_ce_portal_load_pending, 0);
+    char payload[144];
+    int size;
+    if (pending != 0) forced = 1u;
+    size = snprintf(payload, sizeof(payload),
+        "{\"status\":\"loadgame-form-gate\",\"engine\":%lu,\"portal_pending\":%ld,"
+        "\"result\":%lu}\r\n",
+        (unsigned long)(original & 0xffu), (long)pending, (unsigned long)forced);
+    if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", payload, (size_t)size);
+    return forced;
+}
+
+__attribute__((naked)) static void ce_loadgame_form_gate_hook(void) {
+    __asm__ volatile(
+        "movl $0x007029a4, %ecx\n\t"
+        "call *%ecx\n\t"
+        "movzbl %al, %eax\n\t"
+        "pushl %eax\n\t"
+        "call _ce_loadgame_form_gate_body\n\t"
+        "addl $4, %esp\n\t"
+        "ret\n\t"
+    );
+}
+
+/* EAX already holds LoadGame's filename argument when this replaces the
+   original call, so the stub just forwards it, keeps the returned AL, and
+   logs around it. ECX/EDX are free: LoadGame takes a single register
+   argument. */
+__attribute__((naked)) static void ce_loadgame_result_hook(void) {
+    __asm__ volatile(
+        "movl $0x00601150, %ecx\n\t"
+        "call *%ecx\n\t"
+        "pushl %eax\n\t"
+        "movzbl %al, %eax\n\t"
+        "pushl %eax\n\t"
+        "call _ce_loadgame_result_body\n\t"
+        "addl $4, %esp\n\t"
+        "popl %eax\n\t"
+        "ret\n\t"
+    );
+}
+
+static int ce_patch_loadgame_call(
+    uintptr_t module_base, uintptr_t target_rva, void (*hook)(void)
+) {
+    unsigned char *target = (unsigned char *)(module_base + target_rva);
+    unsigned char patch[5];
+    DWORD old_protect;
+    DWORD ignored_protect;
+    int32_t relative;
+    if (target[0] != 0xe8) return 0;
+    patch[0] = 0xe8;
+    relative = (int32_t)((unsigned char *)(uintptr_t)hook - (target + 5u));
+    memcpy(patch + 1u, &relative, sizeof(relative));
+    if (!VirtualProtect(target, sizeof(patch), PAGE_EXECUTE_READWRITE, &old_protect)) {
+        return 0;
+    }
+    memcpy(target, patch, sizeof(patch));
+    FlushInstructionCache(GetCurrentProcess(), target, sizeof(patch));
+    VirtualProtect(target, sizeof(patch), old_protect, &ignored_protect);
+    return 1;
+}
+
+uint32_t CE_CALL CEAdapterInstallLoadGameDiagnostics(uint32_t galaxy_ptr) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    int installed = 0;
+    LONG state = InterlockedCompareExchange(&g_ce_loadgame_diag_installed, -1, 0);
+    if (state == 1) return 1u;
+    if (state != 0) return 0u;
+    if (!ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        InterlockedExchange(&g_ce_loadgame_diag_installed, 0);
+        return 0;
+    }
+    installed += ce_patch_loadgame_call(module_base,
+        CE_RVA_LOADGAME_RAISE_CANNOT_OPEN, ce_loadgame_diag_cannot_open);
+    installed += ce_patch_loadgame_call(module_base,
+        CE_RVA_LOADGAME_RAISE_BAD_PRE_SIG, ce_loadgame_diag_bad_pre_sig);
+    installed += ce_patch_loadgame_call(module_base,
+        CE_RVA_LOADGAME_RAISE_BAD_POST_SIG, ce_loadgame_diag_bad_post_sig);
+    installed += ce_patch_loadgame_call(module_base,
+        CE_RVA_LOADGAME_RAISE_GALAXY_READ, ce_loadgame_diag_galaxy_read);
+    installed += ce_patch_loadgame_call(module_base,
+        CE_RVA_LOADGAME_CALL_IN_THREAD, ce_loadgame_result_hook);
+    installed += ce_patch_loadgame_call(module_base,
+        CE_RVA_LOADGAME_FORM_GATE_CALL, ce_loadgame_form_gate_hook);
+    InterlockedExchange(&g_ce_loadgame_diag_installed, installed == 6 ? 1 : 0);
+    return installed == 6 ? 1u : 0u;
+}
+#else
+uint32_t CE_CALL CEAdapterInstallLoadGameDiagnostics(uint32_t galaxy_ptr) {
     (void)galaxy_ptr;
     return 0;
 }

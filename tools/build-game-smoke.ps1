@@ -41,6 +41,8 @@ Copy-Item -LiteralPath $sourceAnchorIcon `
 
 & (Join-Path $PSScriptRoot "build-engine-adapter.ps1") -OutputRoot $dataRoot
 if ($LASTEXITCODE -ne 0) { throw "Engine adapter build failed" }
+& (Join-Path $PSScriptRoot "build-early-launcher.ps1") -OutputRoot $OutputRoot
+if ($LASTEXITCODE -ne 0) { throw "Early launcher build failed" }
 
 $rscriptBefore = @(Get-Process RScript -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
 $buildStarted = Get-Date
