@@ -831,6 +831,25 @@ enum {
        arrives with nothing to work on. Same family as the guard already
        installed at VA 0x0072FB43. The trampoline returns early on a null
        self and otherwise reproduces the original prologue verbatim. */
+    /* The sector count, and the answer to a very long hunt. TGalaxy's own
+       constructor hardcodes it: at VA 0x008394CB it does
+           mov dword ptr [eax+0x160], 0x14        ; 20 sectors
+       and immediately builds the constellation TList into [eax+0x164]:
+           mov eax,[0x871184]; call 0x0040457C; mov [edx+0x164], eax
+       The sector-creation loop inside GenerateStars (VA 0x0084FFB7) then
+       takes its bound straight from [self+0x160] and constructs that many
+       TConstellation objects. So the limit is one four-byte immediate.
+
+       This is why no config key for it exists and why adding
+       Constellations.Name entries past 20 changed nothing: the names are a
+       pool, the count is compiled in. Field semantics confirmed against the
+       ranger-tools headers (game-objects/TGalaxy.h: "_160 -- связано с
+       количеством секторов", "+0x164 constellations").
+
+       Must be patched BEFORE a galaxy is constructed, i.e. before new-game
+       generation -- which is what the early launcher exists for. Patching
+       later has no effect on an already-built galaxy. */
+    CE_RVA_SECTOR_COUNT_IMMEDIATE = 0x004394d1u,
     CE_RVA_POST_NEXTDAY_PASS = 0x00441be8u,
     CE_RVA_FORM_NEXT_CELL = 0x00482fd0u,
     CE_FORM_INDEX_STARMAP = 16u,
@@ -6893,6 +6912,44 @@ uint32_t CE_CALL CEAdapterInstallPostNextDayGuard(uint32_t galaxy_ptr) {
     return 0u;
 }
 #endif
+
+/* See CE_RVA_SECTOR_COUNT_IMMEDIATE. Rewrites the compiled-in sector count
+   so the next galaxy the engine builds gets more constellations. Refuses
+   counts the name pool cannot cover -- Constellations.Name currently ends at
+   44, and unnamed sectors are worse than fewer sectors. */
+uint32_t CE_CALL CEAdapterSetSectorCount(uint32_t galaxy_ptr, uint32_t count) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    unsigned char *target;
+    DWORD old_protect, ignored_protect;
+    uint32_t previous;
+    char report[128];
+    int size;
+
+    if (count < 1u || count > 44u) return 0u;
+    if (!ce_resolve_engine_galaxy(galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        return 0u;
+    }
+    target = (unsigned char *)(module_base + CE_RVA_SECTOR_COUNT_IMMEDIATE);
+    memcpy(&previous, target, sizeof(previous));
+    if (previous == count) return 1u;
+    /* Only ever rewrite what still looks like the stock value or a value this
+       function itself wrote; anything else means the site moved. */
+    if (previous < 1u || previous > 44u) return 0u;
+    if (!VirtualProtect(target, sizeof(count), PAGE_EXECUTE_READWRITE, &old_protect)) {
+        return 0u;
+    }
+    memcpy(target, &count, sizeof(count));
+    FlushInstructionCache(GetCurrentProcess(), target, sizeof(count));
+    VirtualProtect(target, sizeof(count), old_protect, &ignored_protect);
+    size = snprintf(report, sizeof(report),
+        "{\"status\":\"sector-count-patched\",\"from\":%lu,\"to\":%lu}
+",
+        (unsigned long)previous, (unsigned long)count);
+    if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", report, (size_t)size);
+    return 1u;
+}
 
 uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr) {
     static const unsigned char save_signature[] = {
