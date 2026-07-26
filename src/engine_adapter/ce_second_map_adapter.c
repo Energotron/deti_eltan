@@ -468,16 +468,24 @@ static volatile LONG g_ce_portal_load_pending = 0;
    LoadGame, which replaces every engine-side object. Captured in the old
    arm from the artifact's OnUseCode (a safe context, outside the Turn
    stack) and re-applied once the arrival block runs in Second Home. */
-#define CE_PLAYER_STASH_SLOTS 16u
+#define CE_PLAYER_STASH_SLOTS 32u
 static volatile LONG g_ce_player_stash[CE_PLAYER_STASH_SLOTS];
 static volatile LONG g_ce_player_stash_ready = 0;
 /* The traveller's hold and fittings. Equipment turned out to be describable
    entirely in numbers -- ItemType, ItemSize, ItemLevel and ItemOwner read it,
    CreateEquipment / CreateHull / CreateArt rebuild it -- so no string plumbing
-   is needed and the existing integer machinery covers it. Four fields per
-   item, capped at a hold larger than any real ship carries. */
+   is needed and the existing integer machinery covers it.
+
+   Four fields described the item; they did not describe where it was. Rebuilt
+   gear all landed in the hold while the destination captain's own factory kit
+   stayed bolted into the slots, so the traveller arrived with two of
+   everything and nothing fitted. The fifth field is the slot ItemIsInUse()
+   reports (0 for the hold), which is what lets the arrival side put each
+   piece back where it was. The last three carry the condition the item was
+   in -- wear, akrin, micromodule -- so a battered upgraded weapon does not
+   quietly become a factory-fresh one. */
 #define CE_ITEM_STASH_MAX 96u
-#define CE_ITEM_STASH_FIELDS 4u
+#define CE_ITEM_STASH_FIELDS 8u
 static volatile LONG g_ce_item_stash[CE_ITEM_STASH_MAX][CE_ITEM_STASH_FIELDS];
 static volatile LONG g_ce_item_stash_count = 0;
 static volatile LONG g_ce_day_counter_recovered_count = 0;
@@ -6820,25 +6828,44 @@ uint32_t CE_CALL CEAdapterClearPlayerStash(void) {
    arm then loads through the engine's ordinary startup path instead of a
    mid-game LoadGame. Persisting the traveller's state to disk works for both
    routes, so it is worth having regardless of which one wins. Deliberately
-   plain: a magic word, a slot count, then the values. */
-enum { CE_PLAYER_STASH_MAGIC = 0x53454543u }; /* "CEES" */
+   plain: a magic word, the two array shapes, then the values and the items.
+   The shapes are in the header so a file written by an older build is
+   rejected outright rather than read as garbage -- the item record grew from
+   four fields to eight, and a silent misread would rebuild the traveller's
+   gear from shifted numbers. */
+enum { CE_PLAYER_STASH_MAGIC = 0x32534543u }; /* "CES2" */
 
 static const char *ce_player_stash_path(void) {
     return "C:\\ce_debug\\ce_player_stash.bin";
 }
 
 uint32_t CE_CALL CEAdapterSavePlayerStash(void) {
-    uint32_t header[2];
+    uint32_t header[4];
     uint32_t values[CE_PLAYER_STASH_SLOTS];
+    uint32_t items[CE_ITEM_STASH_MAX * CE_ITEM_STASH_FIELDS];
     uint32_t index;
+    uint32_t field;
+    LONG item_count;
     HANDLE file;
     DWORD written = 0;
     if (InterlockedCompareExchange(&g_ce_player_stash_ready, 0, 0) == 0) return 0u;
+    item_count = InterlockedCompareExchange(&g_ce_item_stash_count, 0, 0);
+    if (item_count < 0) item_count = 0;
+    if ((uint32_t)item_count > CE_ITEM_STASH_MAX) item_count = (LONG)CE_ITEM_STASH_MAX;
     header[0] = CE_PLAYER_STASH_MAGIC;
     header[1] = CE_PLAYER_STASH_SLOTS;
+    header[2] = CE_ITEM_STASH_FIELDS;
+    header[3] = (uint32_t)item_count;
     for (index = 0u; index < CE_PLAYER_STASH_SLOTS; ++index) {
         values[index] = (uint32_t)InterlockedCompareExchange(
             &g_ce_player_stash[index], 0, 0);
+    }
+    for (index = 0u; index < (uint32_t)item_count; ++index) {
+        for (field = 0u; field < CE_ITEM_STASH_FIELDS; ++field) {
+            items[index * CE_ITEM_STASH_FIELDS + field] =
+                (uint32_t)InterlockedCompareExchange(
+                    &g_ce_item_stash[index][field], 0, 0);
+        }
     }
     CreateDirectoryA("C:\\ce_debug", NULL);
     file = CreateFileA(ce_player_stash_path(), GENERIC_WRITE, FILE_SHARE_READ,
@@ -6846,6 +6873,11 @@ uint32_t CE_CALL CEAdapterSavePlayerStash(void) {
     if (file == INVALID_HANDLE_VALUE) return 0u;
     WriteFile(file, header, (DWORD)sizeof(header), &written, NULL);
     WriteFile(file, values, (DWORD)sizeof(values), &written, NULL);
+    if (item_count > 0) {
+        WriteFile(file, items,
+            (DWORD)((uint32_t)item_count * CE_ITEM_STASH_FIELDS * sizeof(uint32_t)),
+            &written, NULL);
+    }
     FlushFileBuffers(file);
     CloseHandle(file);
     ce_write_progress("player-stash:saved");
@@ -6853,9 +6885,12 @@ uint32_t CE_CALL CEAdapterSavePlayerStash(void) {
 }
 
 uint32_t CE_CALL CEAdapterLoadPlayerStash(void) {
-    uint32_t header[2];
+    uint32_t header[4];
     uint32_t values[CE_PLAYER_STASH_SLOTS];
+    uint32_t items[CE_ITEM_STASH_MAX * CE_ITEM_STASH_FIELDS];
     uint32_t index;
+    uint32_t field;
+    uint32_t item_bytes;
     HANDLE file;
     DWORD got = 0;
     file = CreateFileA(ce_player_stash_path(), GENERIC_READ,
@@ -6864,7 +6899,9 @@ uint32_t CE_CALL CEAdapterLoadPlayerStash(void) {
     if (file == INVALID_HANDLE_VALUE) return 0u;
     if (!ReadFile(file, header, (DWORD)sizeof(header), &got, NULL) ||
             got != sizeof(header) || header[0] != CE_PLAYER_STASH_MAGIC ||
-            header[1] != CE_PLAYER_STASH_SLOTS) {
+            header[1] != CE_PLAYER_STASH_SLOTS ||
+            header[2] != CE_ITEM_STASH_FIELDS ||
+            header[3] > CE_ITEM_STASH_MAX) {
         CloseHandle(file);
         ce_write_progress("player-stash:load-rejected");
         return 0u;
@@ -6875,10 +6912,25 @@ uint32_t CE_CALL CEAdapterLoadPlayerStash(void) {
         ce_write_progress("player-stash:load-truncated");
         return 0u;
     }
+    item_bytes = header[3] * CE_ITEM_STASH_FIELDS * (uint32_t)sizeof(uint32_t);
+    if (item_bytes > 0u &&
+            (!ReadFile(file, items, (DWORD)item_bytes, &got, NULL) ||
+             got != item_bytes)) {
+        CloseHandle(file);
+        ce_write_progress("player-stash:load-items-truncated");
+        return 0u;
+    }
     CloseHandle(file);
     for (index = 0u; index < CE_PLAYER_STASH_SLOTS; ++index) {
         InterlockedExchange(&g_ce_player_stash[index], (LONG)values[index]);
     }
+    for (index = 0u; index < header[3]; ++index) {
+        for (field = 0u; field < CE_ITEM_STASH_FIELDS; ++field) {
+            InterlockedExchange(&g_ce_item_stash[index][field],
+                (LONG)items[index * CE_ITEM_STASH_FIELDS + field]);
+        }
+    }
+    InterlockedExchange(&g_ce_item_stash_count, (LONG)header[3]);
     InterlockedExchange(&g_ce_player_stash_ready, 1);
     ce_write_progress("player-stash:loaded");
     return 1u;
@@ -7025,7 +7077,8 @@ uint32_t CE_CALL CEAdapterStashItemsBegin(void) {
 }
 
 uint32_t CE_CALL CEAdapterStashItem(
-    uint32_t type, uint32_t size, uint32_t level, uint32_t owner
+    uint32_t type, uint32_t size, uint32_t level, uint32_t owner,
+    uint32_t slot, uint32_t wear, uint32_t special, uint32_t module
 ) {
     LONG index = InterlockedCompareExchange(&g_ce_item_stash_count, 0, 0);
     if (index < 0 || (uint32_t)index >= CE_ITEM_STASH_MAX) return 0u;
@@ -7033,6 +7086,10 @@ uint32_t CE_CALL CEAdapterStashItem(
     InterlockedExchange(&g_ce_item_stash[index][1], (LONG)size);
     InterlockedExchange(&g_ce_item_stash[index][2], (LONG)level);
     InterlockedExchange(&g_ce_item_stash[index][3], (LONG)owner);
+    InterlockedExchange(&g_ce_item_stash[index][4], (LONG)slot);
+    InterlockedExchange(&g_ce_item_stash[index][5], (LONG)wear);
+    InterlockedExchange(&g_ce_item_stash[index][6], (LONG)special);
+    InterlockedExchange(&g_ce_item_stash[index][7], (LONG)module);
     InterlockedExchange(&g_ce_item_stash_count, index + 1);
     return 1u;
 }
