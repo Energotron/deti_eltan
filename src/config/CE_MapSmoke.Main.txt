@@ -250,6 +250,10 @@ Data ^{
             CEAdapterInstallNextDayLabel3Recovery=dword,CEAdapterInstallNextDayLabel3Recovery,dword
             CEAdapterInstallDayCounterGuard=dword,CEAdapterInstallDayCounterGuard,dword
             CEAdapterInstallLoadGameDiagnostics=dword,CEAdapterInstallLoadGameDiagnostics,dword
+            CEAdapterStashPlayerValue=dword,CEAdapterStashPlayerValue,dword,dword
+            CEAdapterFetchPlayerValue=dword,CEAdapterFetchPlayerValue,dword
+            CEAdapterPlayerStashReady=dword,CEAdapterPlayerStashReady
+            CEAdapterClearPlayerStash=dword,CEAdapterClearPlayerStash
             CEAdapterBuildFreshSecondGalaxy=dword,CEAdapterBuildFreshSecondGalaxy,dword
             CEAdapterRequestSectorLabelSpawn=dword,CEAdapterRequestSectorLabelSpawn,dword
             CEAdapterSetRememberedShipStar=dword,CEAdapterSetRememberedShipStar,dword

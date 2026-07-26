@@ -459,6 +459,17 @@ static volatile LONG g_ce_loadgame_diag_installed = 0;
 /* Set while a portal-initiated LoadGame is outstanding; consumed by the
    GameLoad form gate stub. See CE_RVA_LOADGAME_FORM_GATE_CALL. */
 static volatile LONG g_ce_portal_load_pending = 0;
+/* Traveller's own stats, carried across the transition. Second Home is a
+   genuine new game, so it ships with ITS OWN captain -- confirmed in play:
+   equipment collected in the home arm is simply absent afterwards, because
+   the arriving pilot is that new game's starting character rather than the
+   traveller. These live in the DLL precisely because DLL globals survive
+   LoadGame, which replaces every engine-side object. Captured in the old
+   arm from the artifact's OnUseCode (a safe context, outside the Turn
+   stack) and re-applied once the arrival block runs in Second Home. */
+#define CE_PLAYER_STASH_SLOTS 16u
+static volatile LONG g_ce_player_stash[CE_PLAYER_STASH_SLOTS];
+static volatile LONG g_ce_player_stash_ready = 0;
 static volatile LONG g_ce_day_counter_recovered_count = 0;
 static volatile LONG g_ce_load_transform_armed = 0;
 static volatile LONG g_ce_load_transform_seed = 0;
@@ -6687,6 +6698,29 @@ uint32_t CE_CALL CEAdapterInstallLoadGameDiagnostics(uint32_t galaxy_ptr) {
     return 0;
 }
 #endif
+
+/* See g_ce_player_stash. Slot layout is owned by the RScript side; the
+   adapter only keeps the numbers alive across LoadGame. */
+uint32_t CE_CALL CEAdapterStashPlayerValue(uint32_t slot, uint32_t value) {
+    if (slot >= CE_PLAYER_STASH_SLOTS) return 0u;
+    InterlockedExchange(&g_ce_player_stash[slot], (LONG)value);
+    InterlockedExchange(&g_ce_player_stash_ready, 1);
+    return 1u;
+}
+
+uint32_t CE_CALL CEAdapterFetchPlayerValue(uint32_t slot) {
+    if (slot >= CE_PLAYER_STASH_SLOTS) return 0u;
+    return (uint32_t)InterlockedCompareExchange(&g_ce_player_stash[slot], 0, 0);
+}
+
+uint32_t CE_CALL CEAdapterPlayerStashReady(void) {
+    return (uint32_t)InterlockedCompareExchange(&g_ce_player_stash_ready, 0, 0);
+}
+
+uint32_t CE_CALL CEAdapterClearPlayerStash(void) {
+    InterlockedExchange(&g_ce_player_stash_ready, 0);
+    return 1u;
+}
 
 uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr) {
     static const unsigned char save_signature[] = {
