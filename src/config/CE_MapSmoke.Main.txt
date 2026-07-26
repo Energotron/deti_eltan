@@ -251,6 +251,7 @@ Data ^{
             CEAdapterInstallDayCounterGuard=dword,CEAdapterInstallDayCounterGuard,dword
             CEAdapterInstallPostNextDayGuard=dword,CEAdapterInstallPostNextDayGuard,dword
             CEAdapterSetSectorCount=dword,CEAdapterSetSectorCount,dword,dword
+            CEAdapterSetGalaxyTurn=dword,CEAdapterSetGalaxyTurn,dword,dword
             CEAdapterInstallLoadGameDiagnostics=dword,CEAdapterInstallLoadGameDiagnostics,dword
             CEAdapterStashPlayerValue=dword,CEAdapterStashPlayerValue,dword,dword
             CEAdapterFetchPlayerValue=dword,CEAdapterFetchPlayerValue,dword

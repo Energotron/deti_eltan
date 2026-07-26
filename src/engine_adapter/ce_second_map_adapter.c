@@ -849,6 +849,13 @@ enum {
        Must be patched BEFORE a galaxy is constructed, i.e. before new-game
        generation -- which is what the early launcher exists for. Patching
        later has no effect on an already-built galaxy. */
+    /* TGalaxy.turn, per the ranger-tools header (game-objects/TGalaxy.h:
+       "int turn; ///< текущий ход" at +0x4C). A loaded save brings its own
+       date with it, so a traveller who leaves on turn 500 lands on whatever
+       turn the target world was saved at. Writing this after the load keeps
+       both arms on the same date, which is what a corridor between them
+       implies. */
+    CE_GALAXY_TURN_FIELD = 0x4cu,
     CE_RVA_SECTOR_COUNT_IMMEDIATE = 0x004394d1u,
     CE_RVA_POST_NEXTDAY_PASS = 0x00441be8u,
     CE_RVA_FORM_NEXT_CELL = 0x00482fd0u,
@@ -6947,6 +6954,37 @@ uint32_t CE_CALL CEAdapterSetSectorCount(uint32_t galaxy_ptr, uint32_t count) {
         "{\"status\":\"sector-count-patched\",\"from\":%lu,\"to\":%lu}
 ",
         (unsigned long)previous, (unsigned long)count);
+    if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", report, (size_t)size);
+    return 1u;
+}
+
+/* See CE_GALAXY_TURN_FIELD. Only accepts values in a sane range and only
+   moves the date forward: a save is allowed to catch up with the traveller,
+   never to be rewound, since rewinding would make already-processed days
+   happen twice. */
+uint32_t CE_CALL CEAdapterSetGalaxyTurn(uint32_t galaxy_ptr, uint32_t turn) {
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    uint32_t previous;
+    char report[144];
+    int size;
+
+    if (turn == 0u || turn > 1000000u) return 0u;
+    if (!ce_resolve_engine_galaxy(galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        return 0u;
+    }
+    if (!ce_region_has_access(
+            (void *)(uintptr_t)(galaxy_ptr + CE_GALAXY_TURN_FIELD), 4u, 1)) {
+        return 0u;
+    }
+    previous = *(const uint32_t *)(uintptr_t)(galaxy_ptr + CE_GALAXY_TURN_FIELD);
+    if (turn <= previous) return 1u;
+    *(uint32_t *)(uintptr_t)(galaxy_ptr + CE_GALAXY_TURN_FIELD) = turn;
+    size = snprintf(report, sizeof(report),
+        "{\"status\":\"galaxy-turn-synced\",\"from\":%lu,\"to\":%lu}
+",
+        (unsigned long)previous, (unsigned long)turn);
     if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", report, (size_t)size);
     return 1u;
 }

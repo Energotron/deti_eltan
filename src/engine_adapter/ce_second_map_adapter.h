@@ -105,6 +105,7 @@ CE_EXPORT uint32_t CE_CALL CEAdapterInstallNextDayLabel3Recovery(uint32_t galaxy
 CE_EXPORT uint32_t CE_CALL CEAdapterInstallDayCounterGuard(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterInstallPostNextDayGuard(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterSetSectorCount(uint32_t galaxy_ptr, uint32_t count);
+CE_EXPORT uint32_t CE_CALL CEAdapterSetGalaxyTurn(uint32_t galaxy_ptr, uint32_t turn);
 CE_EXPORT uint32_t CE_CALL CEAdapterBuildFreshSecondGalaxy(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterInstallLoadGameDiagnostics(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterStashPlayerValue(uint32_t slot, uint32_t value);

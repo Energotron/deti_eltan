@@ -78,7 +78,7 @@
           "Pos.y": 80,
           "Parent": -1,
           "#": 6,
-          "Total.Lines": 231,
+          "Total.Lines": 233,
           "Code.Type": "Turn",
           "Code": [
             "unknown ceProbeRawPtr = ImportedFunction('CESecondMapAdapter','CEAdapterProbeRawGalaxyPointer');",
@@ -296,6 +296,8 @@
             "    ShipSkill(Player(),4,ceFetch(5));",
             "    ShipSkill(Player(),5,ceFetch(6));",
             "    ShipFreeExp(Player(),ceFetch(7));",
+            "    unknown ceSyncTurn = ImportedFunction('CESecondMapAdapter','CEAdapterSetGalaxyTurn');",
+            "    ceSyncTurn(GalaxyPtr(),ceFetch(8));",
             "    ceClearStash();",
             "  }",
             "  Ether(6,'CE_SecondHomeGreeting',CT('CE.Transit.SecondHomeGreeting'));",
