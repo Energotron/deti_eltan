@@ -63,9 +63,16 @@ if (-not (Test-Path -LiteralPath $outputMain) -or (Get-Item -LiteralPath $output
 }
 
 $combinedLang = Join-Path ([IO.Path]::GetTempPath()) ("ce-map-smoke-lang-" + [guid]::NewGuid().ToString("N") + ".txt")
-$langBytes = [IO.File]::ReadAllBytes($sourceLang)
-$portalBytes = [Text.Encoding]::ASCII.GetBytes("`r`n" + [IO.File]::ReadAllText($sourcePortalLang, [Text.Encoding]::ASCII))
 $windows1251 = [Text.Encoding]::GetEncoding(1251)
+# Read as UTF-8 and re-encode, exactly like $sourceTransitLang below. This
+# file used to be copied through as raw bytes, which shipped its UTF-8 text
+# straight into BlockParEditor -- the engine reads Lang as CP1251, so every
+# Cyrillic name arrived mojibake ("РРССРРЁ" in place of a star name). It only
+# became visible once this file started contributing names the map actually
+# draws; the sector names above had the same defect but were never rendered.
+$langText = [IO.File]::ReadAllText($sourceLang, (New-Object Text.UTF8Encoding($false, $true)))
+$langBytes = $windows1251.GetBytes($langText)
+$portalBytes = [Text.Encoding]::ASCII.GetBytes("`r`n" + [IO.File]::ReadAllText($sourcePortalLang, [Text.Encoding]::ASCII))
 $transitText = [IO.File]::ReadAllText($sourceTransitLang, (New-Object Text.UTF8Encoding($false, $true)))
 $transitBytes = $windows1251.GetBytes("`r`n" + $transitText)
 $combinedBytes = New-Object byte[] ($langBytes.Length + $portalBytes.Length + $transitBytes.Length)
