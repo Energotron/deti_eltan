@@ -4341,7 +4341,16 @@ uint32_t CE_CALL CEAdapterArmPendingArrival(uint32_t entering) {
        pointer-swap era, where the engine needed to settle before anything
        touched the newly active galaxy; a completed LoadGame has already
        settled, so the first Turn after it is the right moment. */
-    InterlockedExchange(&g_ce_pending_arrival_ticks, 0);
+    /* One, not zero. Arming and polling both happen inside the SAME Turn
+       invocation -- CEAdapterCompleteRegisteredPortal runs near the top of
+       the turn code and CEAdapterConsumePendingArrival a few lines below --
+       so a zero countdown fired the arrival immediately, while the old arm
+       was still live and FormChange('GameLoad') had not taken effect yet.
+       Everything then landed in the world that was about to be discarded:
+       the captain's money and skills were written to the departing player
+       and the arrival hole was opened in the departing galaxy. One tick
+       lets the load happen first, and Turn-code runs again right after it. */
+    InterlockedExchange(&g_ce_pending_arrival_ticks, 1);
     return 1u;
 }
 
