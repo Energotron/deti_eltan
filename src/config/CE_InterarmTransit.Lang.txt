@@ -30,19 +30,29 @@ UselessItems ~{
                     08=ceStash(6,ShipSkill(Player(),5));
                     09=ceStash(7,ShipFreeExp(Player()));
                     10=ceStash(8,CurTurn());
-                    11=unknown ceSaveStash=ImportedFunction('CESecondMapAdapter','CEAdapterSavePlayerStash');
-                    12=ceSaveStash();
-                    13=unknown ceCaptureFresh=ImportedFunction('CESecondMapAdapter','CEAdapterCaptureFreshSnapshot');
-                    14=ceCaptureFresh(GalaxyPtr());
-                    15=unknown ceOriginStar=ShipStar(Player());
-                    16=unknown ceOriginSector=StarToCon(ceOriginStar);
-                    17=unknown ceOriginX=CoordX(ceOriginStar);
-                    18=unknown ceOriginY=CoordY(ceOriginStar);
-                    19=unknown ceDestinationStar=ceOriginStar;
-                    20=unknown ceBestDistSq=-1;
-                    21=dword ceScanIndex=0;
-                    22=while(ceScanIndex<GalaxyStars())
-                    23 ^{
+                    11=unknown ceItemsBegin=ImportedFunction('CESecondMapAdapter','CEAdapterStashItemsBegin');
+                    12=unknown ceStashItem=ImportedFunction('CESecondMapAdapter','CEAdapterStashItem');
+                    13=ceItemsBegin();
+                    14=dword ceItemIdx=1;
+                    15=while(ceItemIdx<=ShipItems(Player()))
+                    16 ^{
+                        01=unknown ceItem=ShipItems(Player(),ceItemIdx);
+                        02=if(ceItem) ceStashItem(ItemType(ceItem),ItemSize(ceItem),ItemLevel(ceItem),ItemOwner(ceItem));
+                        03=ceItemIdx=ceItemIdx+1;
+                    }
+                    17=unknown ceSaveStash=ImportedFunction('CESecondMapAdapter','CEAdapterSavePlayerStash');
+                    18=ceSaveStash();
+                    19=unknown ceCaptureFresh=ImportedFunction('CESecondMapAdapter','CEAdapterCaptureFreshSnapshot');
+                    20=ceCaptureFresh(GalaxyPtr());
+                    21=unknown ceOriginStar=ShipStar(Player());
+                    22=unknown ceOriginSector=StarToCon(ceOriginStar);
+                    23=unknown ceOriginX=CoordX(ceOriginStar);
+                    24=unknown ceOriginY=CoordY(ceOriginStar);
+                    25=unknown ceDestinationStar=ceOriginStar;
+                    26=unknown ceBestDistSq=-1;
+                    27=dword ceScanIndex=0;
+                    28=while(ceScanIndex<GalaxyStars())
+                    29 ^{
                         01=unknown ceCandidate=GalaxyStar(ceScanIndex);
                         02=if(StarToCon(ceCandidate)!=ceOriginSector)
                         03 ^{
@@ -57,12 +67,12 @@ UselessItems ~{
                         }
                         04=ceScanIndex=ceScanIndex+1;
                     }
-                    24=if(ceDestinationStar==ceOriginStar)
-                    25 ^{
+                    30=if(ceDestinationStar==ceOriginStar)
+                    31 ^{
                         01=MessageBox(CT('CE.Transit.NoDestination'));
                     }
-                    26=else
-                    27 ^{
+                    32=else
+                    33 ^{
                         01=dword ceHole=HoleCreate2(ceOriginStar,ceDestinationStar);
                         02=if(ceHole)
                         03 ^{

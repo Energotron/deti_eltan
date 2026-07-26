@@ -471,6 +471,15 @@ static volatile LONG g_ce_portal_load_pending = 0;
 #define CE_PLAYER_STASH_SLOTS 16u
 static volatile LONG g_ce_player_stash[CE_PLAYER_STASH_SLOTS];
 static volatile LONG g_ce_player_stash_ready = 0;
+/* The traveller's hold and fittings. Equipment turned out to be describable
+   entirely in numbers -- ItemType, ItemSize, ItemLevel and ItemOwner read it,
+   CreateEquipment / CreateHull / CreateArt rebuild it -- so no string plumbing
+   is needed and the existing integer machinery covers it. Four fields per
+   item, capped at a hold larger than any real ship carries. */
+#define CE_ITEM_STASH_MAX 96u
+#define CE_ITEM_STASH_FIELDS 4u
+static volatile LONG g_ce_item_stash[CE_ITEM_STASH_MAX][CE_ITEM_STASH_FIELDS];
+static volatile LONG g_ce_item_stash_count = 0;
 static volatile LONG g_ce_day_counter_recovered_count = 0;
 static volatile LONG g_ce_load_transform_armed = 0;
 static volatile LONG g_ce_load_transform_seed = 0;
@@ -7006,6 +7015,35 @@ uint32_t CE_CALL CEAdapterSetGalaxyTurn(uint32_t galaxy_ptr, uint32_t turn) {
         (unsigned long)previous, (unsigned long)turn);
     if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", report, (size_t)size);
     return 1u;
+}
+
+/* See g_ce_item_stash. Begin clears the list so a second transit does not
+   inherit the previous one's cargo. */
+uint32_t CE_CALL CEAdapterStashItemsBegin(void) {
+    InterlockedExchange(&g_ce_item_stash_count, 0);
+    return 1u;
+}
+
+uint32_t CE_CALL CEAdapterStashItem(
+    uint32_t type, uint32_t size, uint32_t level, uint32_t owner
+) {
+    LONG index = InterlockedCompareExchange(&g_ce_item_stash_count, 0, 0);
+    if (index < 0 || (uint32_t)index >= CE_ITEM_STASH_MAX) return 0u;
+    InterlockedExchange(&g_ce_item_stash[index][0], (LONG)type);
+    InterlockedExchange(&g_ce_item_stash[index][1], (LONG)size);
+    InterlockedExchange(&g_ce_item_stash[index][2], (LONG)level);
+    InterlockedExchange(&g_ce_item_stash[index][3], (LONG)owner);
+    InterlockedExchange(&g_ce_item_stash_count, index + 1);
+    return 1u;
+}
+
+uint32_t CE_CALL CEAdapterStashedItemCount(void) {
+    return (uint32_t)InterlockedCompareExchange(&g_ce_item_stash_count, 0, 0);
+}
+
+uint32_t CE_CALL CEAdapterStashedItemField(uint32_t index, uint32_t field) {
+    if (index >= CE_ITEM_STASH_MAX || field >= CE_ITEM_STASH_FIELDS) return 0u;
+    return (uint32_t)InterlockedCompareExchange(&g_ce_item_stash[index][field], 0, 0);
 }
 
 uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr) {

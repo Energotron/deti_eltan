@@ -114,6 +114,10 @@ CE_EXPORT uint32_t CE_CALL CEAdapterPlayerStashReady(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterClearPlayerStash(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterSavePlayerStash(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterLoadPlayerStash(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterStashItemsBegin(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterStashItem(uint32_t type, uint32_t size, uint32_t level, uint32_t owner);
+CE_EXPORT uint32_t CE_CALL CEAdapterStashedItemCount(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterStashedItemField(uint32_t index, uint32_t field);
 CE_EXPORT uint32_t CE_CALL CEAdapterRequestSectorLabelSpawn(uint32_t second_home);
 CE_EXPORT uint32_t CE_CALL CEAdapterArmGalaxySaveSnapshot(uint32_t galaxy_ptr);
 CE_EXPORT uint32_t CE_CALL CEAdapterPollSecondHomeTransform(
