@@ -26,3 +26,7 @@ htmlcov/
 .vscode/
 Thumbs.db
 Desktop.ini
+
+# Third-party reverse-engineering toolkits (extracted from user-supplied archives)
+/references/ranger-tools/
+/references/OpenSR-rework/
