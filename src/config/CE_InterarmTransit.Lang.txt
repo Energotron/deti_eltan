@@ -48,12 +48,14 @@ UselessItems ~{
                             01=dword ceIT=ItemType(ceItem);
                             02=dword ceSpec=0;
                             03=dword ceMod=0;
-                            04=if(ceIT>=t_Hull && ceIT<=67)
-                            05 ^{
+                            04=dword ceHullClass=0;
+                            05=if(ceIT>=t_Hull && ceIT<=67)
+                            06 ^{
                                 01=ceSpec=EqSpecial(ceItem)+1;
                                 02=ceMod=EqModule(ceItem)+1;
                             }
-                            06=ceStashItem(ceIT,ItemSize(ceItem),ItemLevel(ceItem),ItemOwner(ceItem),ItemIsInUse(ceItem,Player()),ItemDurability(ceItem)+1,ceSpec,ceMod);
+                            07=if(ceIT==t_Hull) ceHullClass=HullType(ceItem);
+                            08=ceStashItem(ceIT,ItemSize(ceItem),ItemLevel(ceItem),ItemOwner(ceItem),ItemIsInUse(ceItem,Player()),ItemDurability(ceItem)+1,ceSpec,ceMod,ceHullClass);
                         }
                         04=ceItemIdx=ceItemIdx+1;
                     }
@@ -61,7 +63,7 @@ UselessItems ~{
                     21=while(ceArtIdx<ShipArts(Player()))
                     22 ^{
                         01=unknown ceArt=ShipArts(Player(),ceArtIdx);
-                        02=if(ceArt) ceStashItem(ItemType(ceArt),ItemSize(ceArt),ItemLevel(ceArt),ItemOwner(ceArt),ItemIsInUse(ceArt,Player()),ItemDurability(ceArt)+1,0,0);
+                        02=if(ceArt) ceStashItem(ItemType(ceArt),ItemSize(ceArt),ItemLevel(ceArt),ItemOwner(ceArt),ItemIsInUse(ceArt,Player()),ItemDurability(ceArt)+1,0,0,0);
                         03=ceArtIdx=ceArtIdx+1;
                     }
                     23=unknown ceSaveStash=ImportedFunction('CESecondMapAdapter','CEAdapterSavePlayerStash');

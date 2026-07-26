@@ -277,7 +277,7 @@ Data ^{
             CEAdapterSavePlayerStash=dword,CEAdapterSavePlayerStash
             CEAdapterLoadPlayerStash=dword,CEAdapterLoadPlayerStash
             CEAdapterStashItemsBegin=dword,CEAdapterStashItemsBegin
-            CEAdapterStashItem=dword,CEAdapterStashItem,dword,dword,dword,dword,dword,dword,dword,dword
+            CEAdapterStashItem=dword,CEAdapterStashItem,dword,dword,dword,dword,dword,dword,dword,dword,dword
             CEAdapterStashedItemCount=dword,CEAdapterStashedItemCount
             CEAdapterStashedItemField=dword,CEAdapterStashedItemField,dword,dword
             CEAdapterBuildFreshSecondGalaxy=dword,CEAdapterBuildFreshSecondGalaxy,dword

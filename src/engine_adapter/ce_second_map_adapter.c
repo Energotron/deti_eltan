@@ -483,9 +483,15 @@ static volatile LONG g_ce_player_stash_ready = 0;
    reports (0 for the hold), which is what lets the arrival side put each
    piece back where it was. The last three carry the condition the item was
    in -- wear, akrin, micromodule -- so a battered upgraded weapon does not
-   quietly become a factory-fresh one. */
+   quietly become a factory-fresh one.
+
+   The ninth field is the hull class (ranger / military / pirate), which is a
+   separate axis from the item type: every hull reports ItemType 42, and what
+   tells them apart is HullType(). Feeding 42 to CreateHull() where it expects
+   that class walked the engine off the end of its hull table and took the
+   process with it. */
 #define CE_ITEM_STASH_MAX 96u
-#define CE_ITEM_STASH_FIELDS 8u
+#define CE_ITEM_STASH_FIELDS 9u
 static volatile LONG g_ce_item_stash[CE_ITEM_STASH_MAX][CE_ITEM_STASH_FIELDS];
 static volatile LONG g_ce_item_stash_count = 0;
 static volatile LONG g_ce_day_counter_recovered_count = 0;
@@ -7078,7 +7084,8 @@ uint32_t CE_CALL CEAdapterStashItemsBegin(void) {
 
 uint32_t CE_CALL CEAdapterStashItem(
     uint32_t type, uint32_t size, uint32_t level, uint32_t owner,
-    uint32_t slot, uint32_t wear, uint32_t special, uint32_t module
+    uint32_t slot, uint32_t wear, uint32_t special, uint32_t module,
+    uint32_t hull_class
 ) {
     LONG index = InterlockedCompareExchange(&g_ce_item_stash_count, 0, 0);
     if (index < 0 || (uint32_t)index >= CE_ITEM_STASH_MAX) return 0u;
@@ -7090,6 +7097,7 @@ uint32_t CE_CALL CEAdapterStashItem(
     InterlockedExchange(&g_ce_item_stash[index][5], (LONG)wear);
     InterlockedExchange(&g_ce_item_stash[index][6], (LONG)special);
     InterlockedExchange(&g_ce_item_stash[index][7], (LONG)module);
+    InterlockedExchange(&g_ce_item_stash[index][8], (LONG)hull_class);
     InterlockedExchange(&g_ce_item_stash_count, index + 1);
     return 1u;
 }
