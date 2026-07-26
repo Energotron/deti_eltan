@@ -783,6 +783,35 @@ enum {
        free it -- which is exactly what the second arm needs while the
        first arm's save is being loaded back to recover its player. */
     CE_GALAXY_KEEP_ALIVE_FLAG = 0x1d1u,
+    /* GFormNext: the engine's "which form runs next" selector, a single
+       BYTE reached through the pointer cell at VA 0x00882FD0. Found inside
+       the engine's own FormChange script function (VA 0x0065AF5C), which
+       ends its name search with exactly:
+           mov eax, [0x882fd0]
+           mov dl,  [ebp-9]        ; index of the matched form
+           mov byte ptr [eax], dl
+       The index is the form's slot in the GForm table divided by 4; the
+       table itself is built at VA 0x00803A00.. where each form registers
+       its name (`mov [eax+<slot>], edx` right before the name is assigned
+       via 0x004CFFA8). StarMap sits at slot 0x40, hence index 16.
+
+       This is what the portal transition was missing. A load started from
+       the main menu leaves the engine with a form queued; one started
+       mid-flight does not, so after LoadGame returned success the message
+       loop simply ran out and Delphi halted with ExitCode 0 -- confirmed
+       at the exit itself: the recorded ExitProcess return address 0x004053C5
+       sits in Halt0, right after `mov eax,[0x878000]` (Delphi's ExitCode
+       global) and its push/call, i.e. a normal program end rather than a
+       fault, which is why Windows never logged a crash.
+
+       An earlier attempt patched VA 0x0053CF4D instead, on the theory that
+       a gate there suppressed the follow-up form. That was wrong twice
+       over: the hook never fired once in a live transit, and the function
+       it belongs to turned out to select background MUSIC, not forms --
+       the names it passes to 0x007F9B0C are 'Base', 'Music', 'Destroyer',
+       'Nation.PiratePlanetMain'. That patch is removed. */
+    CE_RVA_FORM_NEXT_CELL = 0x00482fd0u,
+    CE_FORM_INDEX_STARMAP = 16u,
     /* The GameLoad form's own gate, `call 0x007029A4` at VA 0x0053CF4D,
        immediately followed by `test al,al; je 0x0053CFCF`.  When it answers
        false the form skips the entire block that nominates the follow-up
@@ -6547,7 +6576,10 @@ CE_LOADGAME_DIAG_STUB(ce_loadgame_diag_galaxy_read, 4)
 __attribute__((used)) static void CE_CALL ce_loadgame_result_body(uint32_t result) {
     uintptr_t module_base = (uintptr_t)GetModuleHandleW(NULL);
     uint32_t galaxy = 0u;
-    char payload[160];
+    LONG pending;
+    int queued = 0;
+    unsigned char previous_form = 0xffu;
+    char payload[224];
     int size;
     if (ce_region_has_access(
             (const void *)(module_base + CE_RVA_GALAXY_IMPORT_CELL), 4u, 0)) {
@@ -6556,43 +6588,29 @@ __attribute__((used)) static void CE_CALL ce_loadgame_result_body(uint32_t resul
             galaxy = *(const uint32_t *)(uintptr_t)cell;
         }
     }
+    /* See CE_RVA_FORM_NEXT_CELL: a load the player started from inside the
+       game leaves nothing queued, so the engine ends its message loop and
+       halts cleanly. Queue StarMap ourselves, but only for this mod's own
+       portal load -- a normal menu load already queues its own follow-up
+       and must not be touched. */
+    pending = InterlockedExchange(&g_ce_portal_load_pending, 0);
+    if ((result & 0xffu) != 0u && pending != 0 &&
+            ce_region_has_access(
+                (const void *)(module_base + CE_RVA_FORM_NEXT_CELL), 4u, 0)) {
+        uint32_t slot = *(const uint32_t *)(module_base + CE_RVA_FORM_NEXT_CELL);
+        if (ce_region_has_access((void *)(uintptr_t)slot, 1u, 1)) {
+            previous_form = *(const unsigned char *)(uintptr_t)slot;
+            *(unsigned char *)(uintptr_t)slot = (unsigned char)CE_FORM_INDEX_STARMAP;
+            queued = 1;
+        }
+    }
     size = snprintf(payload, sizeof(payload),
-        "{\"status\":\"loadgame-result\",\"ok\":%lu,\"galaxy\":%lu,\"tick\":%lu}\r\n",
-        (unsigned long)(result & 0xffu), (unsigned long)galaxy,
-        (unsigned long)GetTickCount());
+        "{\"status\":\"loadgame-result\",\"ok\":%lu,\"galaxy\":%lu,"
+        "\"portal_pending\":%ld,\"queued_starmap\":%d,\"previous_form\":%d,"
+        "\"tick\":%lu}\r\n",
+        (unsigned long)(result & 0xffu), (unsigned long)galaxy, (long)pending,
+        queued, (int)(signed char)previous_form, (unsigned long)GetTickCount());
     if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", payload, (size_t)size);
-}
-
-/* See CE_RVA_LOADGAME_FORM_GATE_CALL. Returns the value the GameLoad form
-   should act on: the engine's own answer normally, forced true exactly once
-   for a portal-initiated load so the form proceeds to nominate StarMap
-   instead of leaving the message loop with nothing to run. */
-__attribute__((used)) static uint32_t CE_CALL ce_loadgame_form_gate_body(
-    uint32_t original
-) {
-    uint32_t forced = original & 0xffu;
-    LONG pending = InterlockedExchange(&g_ce_portal_load_pending, 0);
-    char payload[144];
-    int size;
-    if (pending != 0) forced = 1u;
-    size = snprintf(payload, sizeof(payload),
-        "{\"status\":\"loadgame-form-gate\",\"engine\":%lu,\"portal_pending\":%ld,"
-        "\"result\":%lu}\r\n",
-        (unsigned long)(original & 0xffu), (long)pending, (unsigned long)forced);
-    if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", payload, (size_t)size);
-    return forced;
-}
-
-__attribute__((naked)) static void ce_loadgame_form_gate_hook(void) {
-    __asm__ volatile(
-        "movl $0x007029a4, %ecx\n\t"
-        "call *%ecx\n\t"
-        "movzbl %al, %eax\n\t"
-        "pushl %eax\n\t"
-        "call _ce_loadgame_form_gate_body\n\t"
-        "addl $4, %esp\n\t"
-        "ret\n\t"
-    );
 }
 
 /* EAX already holds LoadGame's filename argument when this replaces the
@@ -6657,10 +6675,11 @@ uint32_t CE_CALL CEAdapterInstallLoadGameDiagnostics(uint32_t galaxy_ptr) {
         CE_RVA_LOADGAME_RAISE_GALAXY_READ, ce_loadgame_diag_galaxy_read);
     installed += ce_patch_loadgame_call(module_base,
         CE_RVA_LOADGAME_CALL_IN_THREAD, ce_loadgame_result_hook);
-    installed += ce_patch_loadgame_call(module_base,
-        CE_RVA_LOADGAME_FORM_GATE_CALL, ce_loadgame_form_gate_hook);
-    InterlockedExchange(&g_ce_loadgame_diag_installed, installed == 6 ? 1 : 0);
-    return installed == 6 ? 1u : 0u;
+    /* The form-gate patch that used to go here is gone: it never fired in a
+       live transit, and its host function turned out to pick music, not
+       forms. Queueing GFormNext from the result hook replaces it. */
+    InterlockedExchange(&g_ce_loadgame_diag_installed, installed == 5 ? 1 : 0);
+    return installed == 5 ? 1u : 0u;
 }
 #else
 uint32_t CE_CALL CEAdapterInstallLoadGameDiagnostics(uint32_t galaxy_ptr) {
