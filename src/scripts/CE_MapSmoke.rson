@@ -78,7 +78,7 @@
           "Pos.y": 80,
           "Parent": -1,
           "#": 6,
-          "Total.Lines": 229,
+          "Total.Lines": 231,
           "Code.Type": "Turn",
           "Code": [
             "unknown ceProbeRawPtr = ImportedFunction('CESecondMapAdapter','CEAdapterProbeRawGalaxyPointer');",
@@ -122,6 +122,8 @@
             "ceInstallNextDayLabel3Recovery(GalaxyPtr());",
             "unknown ceInstallDayCounterGuard = ImportedFunction('CESecondMapAdapter','CEAdapterInstallDayCounterGuard');",
             "ceInstallDayCounterGuard(GalaxyPtr());",
+            "unknown ceInstallPostNextDayGuard = ImportedFunction('CESecondMapAdapter','CEAdapterInstallPostNextDayGuard');",
+            "ceInstallPostNextDayGuard(GalaxyPtr());",
             "unknown ceInstallLoadDiag = ImportedFunction('CESecondMapAdapter','CEAdapterInstallLoadGameDiagnostics');",
             "ceInstallLoadDiag(GalaxyPtr());",
             "unknown ceLogCheckpoint2 = ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');",

@@ -249,6 +249,7 @@ Data ^{
             CEAdapterInstallDayProcessRecovery=dword,CEAdapterInstallDayProcessRecovery,dword
             CEAdapterInstallNextDayLabel3Recovery=dword,CEAdapterInstallNextDayLabel3Recovery,dword
             CEAdapterInstallDayCounterGuard=dword,CEAdapterInstallDayCounterGuard,dword
+            CEAdapterInstallPostNextDayGuard=dword,CEAdapterInstallPostNextDayGuard,dword
             CEAdapterInstallLoadGameDiagnostics=dword,CEAdapterInstallLoadGameDiagnostics,dword
             CEAdapterStashPlayerValue=dword,CEAdapterStashPlayerValue,dword,dword
             CEAdapterFetchPlayerValue=dword,CEAdapterFetchPlayerValue,dword

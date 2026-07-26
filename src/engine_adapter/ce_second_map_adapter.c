@@ -456,6 +456,7 @@ static volatile LONG g_ce_nextday_label3_hook_installed = 0;
 static volatile LONG g_ce_nextday_label3_recovered_count = 0;
 static volatile LONG g_ce_day_counter_hook_installed = 0;
 static volatile LONG g_ce_loadgame_diag_installed = 0;
+static volatile LONG g_ce_post_nextday_guard_installed = 0;
 /* Set while a portal-initiated LoadGame is outstanding; consumed by the
    GameLoad form gate stub. See CE_RVA_LOADGAME_FORM_GATE_CALL. */
 static volatile LONG g_ce_portal_load_pending = 0;
@@ -821,6 +822,16 @@ enum {
        it belongs to turned out to select background MUSIC, not forms --
        the names it passes to 0x007F9B0C are 'Base', 'Music', 'Destroyer',
        'Nation.PiratePlanetMain'. That patch is removed. */
+    /* Post-NextDay pass (VA 0x00841BE8), called by the day-process wrapper
+       right after TGalaxy.NextDay. It takes the galaxy in EAX and dereferences
+       [self+0x15C] immediately, with no null check -- so it faults with
+       "read of address 0000015C" whenever the current-galaxy cell is empty.
+       That cell IS legitimately empty for a moment: LoadGame clears it (VA
+       0x00601200) before rebuilding, and a day tick landing in that window
+       arrives with nothing to work on. Same family as the guard already
+       installed at VA 0x0072FB43. The trampoline returns early on a null
+       self and otherwise reproduces the original prologue verbatim. */
+    CE_RVA_POST_NEXTDAY_PASS = 0x00441be8u,
     CE_RVA_FORM_NEXT_CELL = 0x00482fd0u,
     CE_FORM_INDEX_STARMAP = 16u,
     /* The GameLoad form's own gate, `call 0x007029A4` at VA 0x0053CF4D,
@@ -6804,6 +6815,84 @@ uint32_t CE_CALL CEAdapterLoadPlayerStash(void) {
     ce_write_progress("player-stash:loaded");
     return 1u;
 }
+
+#if defined(__i386__)
+/* See CE_RVA_POST_NEXTDAY_PASS. Steals the 6-byte prologue
+   (push ebp; mov ebp,esp; add esp,-0x1c) and re-emits it after the check. */
+__attribute__((used)) static void CE_CALL ce_post_nextday_null_body(void) {
+    ce_write_progress("post-nextday:skipped-null-galaxy");
+}
+
+__attribute__((naked)) static void ce_post_nextday_guard_hook(void) {
+    __asm__ volatile(
+        "testl %eax, %eax
+	"
+        "jz 1f
+	"
+        "pushl %ebp
+	"
+        "movl %esp, %ebp
+	"
+        "addl $-0x1c, %esp
+	"
+        "movl $0x00841bee, %ecx
+	"
+        "jmp *%ecx
+	"
+        "1:
+	"
+        "pushal
+	"
+        "call _ce_post_nextday_null_body
+	"
+        "popal
+	"
+        "ret
+	"
+    );
+}
+
+uint32_t CE_CALL CEAdapterInstallPostNextDayGuard(uint32_t galaxy_ptr) {
+    static const unsigned char expected[6] = { 0x55, 0x8b, 0xec, 0x83, 0xc4, 0xe4 };
+    uintptr_t module_base;
+    uint32_t *galaxy_slot;
+    uint32_t unused_class_ref;
+    unsigned char *target;
+    unsigned char patch[6];
+    DWORD old_protect, ignored_protect;
+    int32_t relative;
+    LONG state = InterlockedCompareExchange(&g_ce_post_nextday_guard_installed, -1, 0);
+    if (state == 1) return 1u;
+    if (state != 0) return 0u;
+    if (!ce_resolve_engine_galaxy(galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
+        InterlockedExchange(&g_ce_post_nextday_guard_installed, 0);
+        return 0u;
+    }
+    target = (unsigned char *)(module_base + CE_RVA_POST_NEXTDAY_PASS);
+    if (memcmp(target, expected, sizeof(expected)) != 0) {
+        InterlockedExchange(&g_ce_post_nextday_guard_installed, 0);
+        return 0u;
+    }
+    patch[0] = 0xe9;
+    relative = (int32_t)((unsigned char *)(uintptr_t)ce_post_nextday_guard_hook - (target + 5u));
+    memcpy(patch + 1u, &relative, sizeof(relative));
+    patch[5] = 0x90;
+    if (!VirtualProtect(target, sizeof(patch), PAGE_EXECUTE_READWRITE, &old_protect)) {
+        InterlockedExchange(&g_ce_post_nextday_guard_installed, 0);
+        return 0u;
+    }
+    memcpy(target, patch, sizeof(patch));
+    FlushInstructionCache(GetCurrentProcess(), target, sizeof(patch));
+    VirtualProtect(target, sizeof(patch), old_protect, &ignored_protect);
+    InterlockedExchange(&g_ce_post_nextday_guard_installed, 1);
+    return 1u;
+}
+#else
+uint32_t CE_CALL CEAdapterInstallPostNextDayGuard(uint32_t galaxy_ptr) {
+    (void)galaxy_ptr;
+    return 0u;
+}
+#endif
 
 uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr) {
     static const unsigned char save_signature[] = {
