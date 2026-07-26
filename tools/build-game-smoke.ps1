@@ -44,6 +44,24 @@ if ($LASTEXITCODE -ne 0) { throw "Engine adapter build failed" }
 & (Join-Path $PSScriptRoot "build-early-launcher.ps1") -OutputRoot $OutputRoot
 if ($LASTEXITCODE -ne 0) { throw "Early launcher build failed" }
 
+# RScript treats ' as a string delimiter inside // comments too, so a comment
+# holding an odd number of them opens a literal that swallows the code after it.
+# The compiler then reports a syntax error hundreds of characters away, at some
+# innocent declaration, with no hint of the real cause -- an afternoon lost the
+# first time. Refuse to build instead.
+$rsonLines = [IO.File]::ReadAllLines($sourceRson, (New-Object Text.UTF8Encoding($false, $true)))
+$badComments = @()
+for ($i = 0; $i -lt $rsonLines.Count; $i++) {
+    $text = $rsonLines[$i].Trim()
+    if (-not $text.StartsWith('"//')) { continue }
+    if ((($text.ToCharArray() | Where-Object { $_ -eq "'" }).Count % 2) -ne 0) {
+        $badComments += ("  line {0}: {1}" -f ($i + 1), $text)
+    }
+}
+if ($badComments.Count -gt 0) {
+    throw ("Comment with an unpaired apostrophe in $sourceRson -- RScript reads it as an unterminated string:`n" + ($badComments -join "`n"))
+}
+
 $rscriptBefore = @(Get-Process RScript -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
 $buildStarted = Get-Date
 & $rscript --cli --build --full $sourceRson $outputScr $outputText
