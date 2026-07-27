@@ -642,7 +642,12 @@ static uint32_t g_ce_second_home_save_path_ansi = 0u;
 
 /* Steam build 20648864 / Rangers.exe 2.1.2500.0 only. */
 enum {
+    /* The PE timestamp of each engine this mod knows how to patch. The guard
+       below refuses to touch anything else, which is right -- but it predates
+       the address table and knew only one build, so it kept declining on
+       Universe long after every address it needed had been mapped. */
     CE_RANGERS_TIMESTAMP = 0x68eccc46u,
+    CE_RANGERS_TIMESTAMP_UNIVERSE = 0x6a4e23a9u,
     CE_RANGERS_IMAGE_SIZE = 0x004d1000u,
     CE_RVA_GALAXY_IMPORT_CELL = 0x0048263cu,
     CE_RVA_TGALAXY_CLASS_CELL = 0x00438d90u,
@@ -1485,7 +1490,8 @@ static int ce_resolve_engine_galaxy(
     nt = (const IMAGE_NT_HEADERS32 *)(base + (uintptr_t)dos->e_lfanew);
     if (!ce_region_has_access(nt, sizeof(*nt), 0) || nt->Signature != IMAGE_NT_SIGNATURE ||
         nt->FileHeader.Machine != IMAGE_FILE_MACHINE_I386 ||
-        nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP ||
+        (nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP &&
+         nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP_UNIVERSE) ||
         nt->OptionalHeader.SizeOfImage != CE_RANGERS_IMAGE_SIZE) {
         return 0;
     }
@@ -3647,7 +3653,8 @@ static int ce_install_dual_newgame_hook(void) {
     nt = (IMAGE_NT_HEADERS32 *)(module_base + (uintptr_t)dos->e_lfanew);
     if (!ce_region_has_access(nt, sizeof(*nt), 0) ||
         nt->Signature != IMAGE_NT_SIGNATURE ||
-        nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP ||
+        (nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP &&
+         nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP_UNIVERSE) ||
         nt->OptionalHeader.SizeOfImage != CE_RANGERS_IMAGE_SIZE) goto fail;
 
     target = (unsigned char *)(module_base + ce_rva(CE_RVA_NEWGAME_THREAD_EXECUTE));
