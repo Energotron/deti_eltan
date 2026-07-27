@@ -5842,6 +5842,17 @@ uint32_t CE_CALL CEAdapterPortalReady(uint32_t galaxy_ptr) {
             (g_ce_first_arm_save_path == 0u || g_ce_second_home_save_path == 0u)) {
         ce_make_dual_newgame_paths(module_base);
     }
+    /* Seed the second arm here, not when the portal opens. Readiness asks
+       whether the file exists, and the seeding sat behind that check -- so on
+       a fresh install the anchor could never report ready and the file could
+       never come into being. The chicken had been put after the egg. */
+    if (ce_resolve_engine_galaxy(galaxy_ptr, &module_base, &galaxy_slot, &class_ref) &&
+            g_ce_second_home_save_path != 0u &&
+            !ce_file_exists(g_ce_second_home_save_path)) {
+        ce_write_progress(ce_save_complete_game(module_base,
+                g_ce_second_home_save_path, L"Дети Эльтан: Второй Дом")
+            ? "second-home:seeded-from-live-galaxy" : "second-home:seed-failed");
+    }
     ready = ce_resolve_engine_galaxy(
             galaxy_ptr, &module_base, &galaxy_slot, &class_ref) &&
         g_ce_first_arm_save_path != 0u && g_ce_second_home_save_path != 0u &&
