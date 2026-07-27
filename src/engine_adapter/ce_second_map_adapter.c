@@ -386,6 +386,7 @@ struct ce_rva_pair { uint32_t stock; uint32_t universe; };
 
 static const struct ce_rva_pair g_ce_universe_rvas[] = {
     { 0x00439198u, 0x00439f24u },  /* TGalaxy constructor          */
+    { 0x00438d90u, 0x00439b1cu },  /* TGalaxy class cell           */
     { 0x0043a034u, 0x0043adc0u },  /* TGalaxy initialize           */
     { 0x0043a1a4u, 0x0043af30u },  /* TGalaxy save to stream       */
     { 0x0043b6ccu, 0x0043c458u },  /* TGalaxy load from stream     */
@@ -649,6 +650,7 @@ enum {
     CE_RANGERS_TIMESTAMP = 0x68eccc46u,
     CE_RANGERS_TIMESTAMP_UNIVERSE = 0x6a4e23a9u,
     CE_RANGERS_IMAGE_SIZE = 0x004d1000u,
+    CE_RANGERS_IMAGE_SIZE_UNIVERSE = 0x004d2000u,
     CE_RVA_GALAXY_IMPORT_CELL = 0x0048263cu,
     CE_RVA_TGALAXY_CLASS_CELL = 0x00438d90u,
     CE_RVA_TGALAXY_CONSTRUCTOR = 0x00439198u,
@@ -1492,7 +1494,8 @@ static int ce_resolve_engine_galaxy(
         nt->FileHeader.Machine != IMAGE_FILE_MACHINE_I386 ||
         (nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP &&
          nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP_UNIVERSE) ||
-        nt->OptionalHeader.SizeOfImage != CE_RANGERS_IMAGE_SIZE) {
+        (nt->OptionalHeader.SizeOfImage != CE_RANGERS_IMAGE_SIZE &&
+         nt->OptionalHeader.SizeOfImage != CE_RANGERS_IMAGE_SIZE_UNIVERSE)) {
         return 0;
     }
     if (memcmp((const void *)(base + ce_rva(CE_RVA_TGALAXY_CONSTRUCTOR)),
@@ -3655,7 +3658,8 @@ static int ce_install_dual_newgame_hook(void) {
         nt->Signature != IMAGE_NT_SIGNATURE ||
         (nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP &&
          nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP_UNIVERSE) ||
-        nt->OptionalHeader.SizeOfImage != CE_RANGERS_IMAGE_SIZE) goto fail;
+        (nt->OptionalHeader.SizeOfImage != CE_RANGERS_IMAGE_SIZE &&
+         nt->OptionalHeader.SizeOfImage != CE_RANGERS_IMAGE_SIZE_UNIVERSE)) goto fail;
 
     target = (unsigned char *)(module_base + ce_rva(CE_RVA_NEWGAME_THREAD_EXECUTE));
     if (!ce_region_has_access(target, sizeof(execute_signature), 0) ||
