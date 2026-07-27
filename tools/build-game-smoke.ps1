@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    $OutputRoot = Join-Path $projectRoot "dist\ChildrenOfEltan"
+    $OutputRoot = Join-Path $projectRoot "dist\pack\ChildrenOfEltan\ChildrenOfEltan"
 }
 $dataRoot = Join-Path $OutputRoot "DATA"
 $scriptRoot = Join-Path $dataRoot "Script"

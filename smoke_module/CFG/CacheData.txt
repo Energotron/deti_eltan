@@ -3,9 +3,9 @@ Script ^{
 }
 Bm ^{
     FormGalaxy2 ^{
-        CESecondHomeBg=Mods\ChildrenOfEltan\DATA\ChildrenOfEltan\SecondHomeMap.gi
+        CESecondHomeBg=Mods\ChildrenOfEltan\ChildrenOfEltan\DATA\ChildrenOfEltan\SecondHomeMap.gi
     }
     ItemsUseless ^{
-        2CE_Item_TwinHomeAnchor_s=Mods\ChildrenOfEltan\DATA\ChildrenOfEltan\TwinHomeAnchor.gi
+        2CE_Item_TwinHomeAnchor_s=Mods\ChildrenOfEltan\ChildrenOfEltan\DATA\ChildrenOfEltan\TwinHomeAnchor.gi
     }
 }
