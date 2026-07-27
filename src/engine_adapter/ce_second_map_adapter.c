@@ -5751,6 +5751,43 @@ uint32_t CE_CALL CEAdapterConsumeCheatTrigger(void) {
     return (uint32_t)InterlockedExchange(&g_ce_cheat_triggered, 0);
 }
 
+/* Which arm is on screen, asked of the world instead of a flag.
+
+   g_ce_active_arm is a DLL global, so it does not survive the player
+   quitting and starting the game again. When it disagreed with reality the
+   portal wrote the wrong world into the wrong sidecar, and an ordinary
+   galaxy landed on top of the authored Eltan map -- vanilla system names,
+   vanilla planets, and every Second Home check in the script silently
+   false. Star zero of that map is named by tools/make_second_home.py and by
+   nothing else, so it answers the question without a flag to go stale.
+
+   Systems live in galaxy+0x2c (confirmed above, against GalaxyEye) and TStar
+   keeps its name pointer at +0x10, with the Delphi WideString byte length in
+   the word before the characters. */
+static int ce_galaxy_is_second_home(uint32_t galaxy_ptr) {
+    static const wchar_t marker[] = L"Эльтанская Рана";
+    const uint32_t marker_bytes =
+        (uint32_t)((sizeof(marker) / sizeof(marker[0]) - 1u) * sizeof(wchar_t));
+    uint32_t list, array, count, star, name, length;
+    if (galaxy_ptr == 0u ||
+            !ce_region_has_access(
+                (const void *)(uintptr_t)(galaxy_ptr + 0x2cu), 4u, 0)) return 0;
+    list = *(const uint32_t *)(uintptr_t)(galaxy_ptr + 0x2cu);
+    if (!ce_read_plain_list(list, &array, &count)) return 0;
+    star = *(const uint32_t *)(uintptr_t)array;
+    if (!ce_region_has_access((const void *)(uintptr_t)(star + 0x10u), 4u, 0)) return 0;
+    name = *(const uint32_t *)(uintptr_t)(star + 0x10u);
+    if (name < 4u ||
+            !ce_region_has_access((const void *)(uintptr_t)(name - 4u), 4u, 0)) return 0;
+    length = *(const uint32_t *)(uintptr_t)(name - 4u);
+    if (length != marker_bytes ||
+            !ce_region_has_access((const void *)(uintptr_t)name, length, 0)) return 0;
+    return memcmp((const void *)(uintptr_t)name, marker, length) == 0;
+}
+
+uint32_t CE_CALL CEAdapterGalaxyIsSecondHome(uint32_t galaxy_ptr) {
+    return ce_galaxy_is_second_home(galaxy_ptr) ? 1u : 0u;
+}
 uint32_t CE_CALL CEAdapterRegisterPortal(uint32_t galaxy_ptr, uint32_t hole_id) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;
@@ -5767,7 +5804,11 @@ uint32_t CE_CALL CEAdapterRegisterPortal(uint32_t galaxy_ptr, uint32_t hole_id) 
         InterlockedExchange(&g_ce_portal_status, 0);
         return 0;
     }
-    active_arm = (uint32_t)InterlockedCompareExchange(&g_ce_active_arm, 0, 0);
+    /* Ask the galaxy, not the flag. Getting this backwards overwrites one of
+       the two sidecars with the other arm's world, and one of them is
+       authored content that cannot be regenerated from inside the game. */
+    active_arm = ce_galaxy_is_second_home(galaxy_ptr) ? 1u : 0u;
+    InterlockedExchange(&g_ce_active_arm, (LONG)active_arm);
     source_path = active_arm == 0u
         ? g_ce_first_arm_save_path : g_ce_second_home_save_path;
     /* Registration runs from the artifact's OnUseCode, before the player
