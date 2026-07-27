@@ -58,3 +58,27 @@ unresolved:
   CE_RVA_LOADGAME_RAISE_BAD_PRE_SIG                20129f  code
   CE_RVA_LOADGAME_RAISE_BAD_POST_SIG               201360  code
   CE_RVA_LOADGAME_RAISE_GALAXY_READ                201474  code
+
+Derived by hand, after the automatic passes gave up on them.
+
+  CE_RVA_GAME_LOAD_PATH_CELL       482880 -> 483880   data, +0x1000
+  CE_RVA_PREPARE_SAVE_PREVIEWS      c5684 ->  c5680   code, via caller
+
+Both matter more than anything else left: without the first the engine has
+nowhere to read the save path from and the transit cannot load, and without
+the second the arm being left behind is never written.
+
+The data cells all moved by exactly one page, because .data starts at
+0x479000 in the Universe build against 0x478000 in the stock one. That is
+not a guess: the number of instructions referencing each cell is identical
+on both sides -- 7 and 7 for the load path, 30 and 30 for the save manager,
+16 and 16 for the loading flag, 3559 and 3559 for the galaxy import. A wrong
+address would not reproduce those counts.
+
+CON_CONTEXT_CELL is the exception, 359 references against none, because it
+lives past .bss where a different shift applies. It belongs to the abandoned
+galaxy-pointer-swap code and is not worth chasing.
+
+PREPARE_SAVE_PREVIEWS has seventeen callers in the stock build. Its own bytes
+were recompiled and match nothing, so it was found through one of them: locate
+the call site, read the target out of the relative operand.
