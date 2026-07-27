@@ -1,5 +1,5 @@
 Script ^{
-    CE_MapSmoke=data\Script\CE_MapSmoke.scr
+    CE_MapSmoke=Mods\ChildrenOfEltan\ChildrenOfEltan\DATA\Script\CE_MapSmoke.scr
 }
 Bm ^{
     FormGalaxy2 ^{

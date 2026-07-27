@@ -116,8 +116,10 @@ if (-not (Test-Path -LiteralPath $outputCache) -or (Get-Item -LiteralPath $outpu
     throw "BlockParEditor did not produce CFG\CacheData.dat"
 }
 
-& python (Join-Path $PSScriptRoot "build_smoke_pkg.py") $outputScr $outputPackage
-if ($LASTEXITCODE -ne 0) { throw "PKG build failed" }
+# No package and no INSTALL.TXT: every module in the Universe pack is just
+# CFG, DATA and ModuleInfo, and the mod manager refused ours while it carried
+# more than that. The script is addressed by its real path instead, which is
+# what a loose file needs -- data\... only resolves inside a package.
 
 # ModuleInfo is read as UTF-16LE: a working example from another mod starts
 # with a byte-order mark and CRLF, and ours went out as UTF-8, which is why
@@ -131,7 +133,6 @@ $moduleInfoText = $moduleInfoText -replace "`r`n", "`n" -replace "`n", "`r`n"
 [IO.File]::WriteAllBytes(
     (Join-Path $OutputRoot "ModuleInfo.txt"),
     ([Text.Encoding]::Unicode.GetPreamble() + [Text.Encoding]::Unicode.GetBytes($moduleInfoText)))
-Copy-Item -LiteralPath (Join-Path $projectRoot "smoke_module\INSTALL.TXT") -Destination $OutputRoot -Force
 
 & python (Join-Path $PSScriptRoot "game_smoke_check.py") preflight --module $OutputRoot
 if ($LASTEXITCODE -ne 0) { throw "Smoke module preflight failed" }
