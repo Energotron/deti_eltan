@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$ToolchainRoot = "",
     [string]$OutputRoot = "",
@@ -31,12 +31,21 @@ New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
 # it is the game's artwork, and this repository has no business shipping a copy.
 # Without a game to read it from the launcher simply builds without one.
 $iconObject = ""
-if (-not [string]::IsNullOrWhiteSpace($IconExe) -and (Test-Path -LiteralPath $IconExe)) {
+# The mod's own artwork wins when it is there; the game icon is the fallback,
+# which is better than the generic application one but is still the game's.
+$ownIcon = Join-Path $projectRoot "srcssets\launcher_icon.png"
+$useOwnIcon = Test-Path -LiteralPath $ownIcon
+if ($useOwnIcon -or (-not [string]::IsNullOrWhiteSpace($IconExe) -and (Test-Path -LiteralPath $IconExe))) {
     $stage = Join-Path ([IO.Path]::GetTempPath()) ("ce-launcher-icon-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $stage -Force | Out-Null
     $icoPath = Join-Path $stage "launcher.ico"
-    & python (Join-Path $PSScriptRoot "extract_exe_icon.py") $IconExe $icoPath
-    if ($LASTEXITCODE -ne 0) { throw "Icon extraction failed for $IconExe" }
+    if ($useOwnIcon) {
+        & (Join-Path $PSScriptRoot "make_launcher_icon.ps1") -Source $ownIcon -Destination $icoPath
+        if ($LASTEXITCODE -ne 0) { throw "Building the launcher icon failed" }
+    } else {
+        & python (Join-Path $PSScriptRoot "extract_exe_icon.py") $IconExe $icoPath
+        if ($LASTEXITCODE -ne 0) { throw "Icon extraction failed for $IconExe" }
+    }
     $rcPath = Join-Path $stage "launcher.rc"
     [IO.File]::WriteAllText($rcPath, "1 ICON `"launcher.ico`"`r`n", [Text.Encoding]::ASCII)
     $iconObject = Join-Path $stage "launcher_icon.o"

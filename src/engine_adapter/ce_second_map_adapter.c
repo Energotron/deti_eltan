@@ -5030,6 +5030,15 @@ static DWORD WINAPI ce_hook_thread_proc(LPVOID unused) {
    crashed the game on turn 0 of a new game. It now only checks whether the
    DllMain-started thread has finished installing the hook yet. */
 uint32_t CE_CALL CEAdapterInstallLiveArmSwitch(uint32_t galaxy_ptr, uint32_t seed) {
+    /* Stock engine only. These write into the engine at addresses taken from
+       the Steam build; four of them were never mapped onto Universe at all,
+       and the one that was patches a function prologue that the newer
+       compiler laid out differently. Party generation hung at "time passing"
+       -- the NextDay phase these very patches sit in -- with the new-game
+       detour already ruled out. They were written to catch faults in the
+       abandoned pointer-swap architecture, so there is nothing here worth
+       risking a game that will not start. */
+    if (ce_engine_build() != CE_ENGINE_STOCK) return 0u;
     uintptr_t module_base;
     uint32_t *galaxy_slot;
     uint32_t unused_class_ref;
@@ -6640,6 +6649,15 @@ static uint32_t ce_install_raise_recovery_patch(
 #endif
 
 uint32_t CE_CALL CEAdapterInstallStarLookupRecovery(uint32_t galaxy_ptr) {
+    /* Stock engine only. These write into the engine at addresses taken from
+       the Steam build; four of them were never mapped onto Universe at all,
+       and the one that was patches a function prologue that the newer
+       compiler laid out differently. Party generation hung at "time passing"
+       -- the NextDay phase these very patches sit in -- with the new-game
+       detour already ruled out. They were written to catch faults in the
+       abandoned pointer-swap architecture, so there is nothing here worth
+       risking a game that will not start. */
+    if (ce_engine_build() != CE_ENGINE_STOCK) return 0u;
 #if defined(__i386__)
     return ce_install_raise_recovery_patch(galaxy_ptr, ce_rva(CE_RVA_STAR_LOOKUP_RAISE_CALL),
         ce_star_lookup_recover_hook, &g_ce_star_lookup_hook_installed);
@@ -6669,6 +6687,15 @@ uint32_t CE_CALL CEAdapterInstallStarLookupRecovery(uint32_t galaxy_ptr) {
    so falling through here after logging reproduces exactly what a clean
    day-skip already does, regardless of which inner check actually failed. */
 uint32_t CE_CALL CEAdapterInstallDayProcessRecovery(uint32_t galaxy_ptr) {
+    /* Stock engine only. These write into the engine at addresses taken from
+       the Steam build; four of them were never mapped onto Universe at all,
+       and the one that was patches a function prologue that the newer
+       compiler laid out differently. Party generation hung at "time passing"
+       -- the NextDay phase these very patches sit in -- with the new-game
+       detour already ruled out. They were written to catch faults in the
+       abandoned pointer-swap architecture, so there is nothing here worth
+       risking a game that will not start. */
+    if (ce_engine_build() != CE_ENGINE_STOCK) return 0u;
 #if defined(__i386__)
     return ce_install_raise_recovery_patch(galaxy_ptr, ce_rva(CE_RVA_DAY_PROCESS_RAISE_CALL),
         ce_star_lookup_recover_hook, &g_ce_day_process_hook_installed);
@@ -6702,6 +6729,15 @@ __attribute__((naked)) static void ce_nextday_label3_recover_hook(void) {
 
 /* See ce_rva(CE_RVA_NEXTDAY_LABEL3_RAISE_CALL)'s own comment. */
 uint32_t CE_CALL CEAdapterInstallNextDayLabel3Recovery(uint32_t galaxy_ptr) {
+    /* Stock engine only. These write into the engine at addresses taken from
+       the Steam build; four of them were never mapped onto Universe at all,
+       and the one that was patches a function prologue that the newer
+       compiler laid out differently. Party generation hung at "time passing"
+       -- the NextDay phase these very patches sit in -- with the new-game
+       detour already ruled out. They were written to catch faults in the
+       abandoned pointer-swap architecture, so there is nothing here worth
+       risking a game that will not start. */
+    if (ce_engine_build() != CE_ENGINE_STOCK) return 0u;
 #if defined(__i386__)
     return ce_install_raise_recovery_patch(galaxy_ptr, ce_rva(CE_RVA_NEXTDAY_LABEL3_RAISE_CALL),
         ce_nextday_label3_recover_hook, &g_ce_nextday_label3_hook_installed);
@@ -6759,6 +6795,15 @@ __attribute__((naked)) static void ce_day_counter_recover_hook(void) {
    simpler CALL patches) since this signature is more distinctive and the
    cost of matching it exactly is low. */
 uint32_t CE_CALL CEAdapterInstallDayCounterGuard(uint32_t galaxy_ptr) {
+    /* Stock engine only. These write into the engine at addresses taken from
+       the Steam build; four of them were never mapped onto Universe at all,
+       and the one that was patches a function prologue that the newer
+       compiler laid out differently. Party generation hung at "time passing"
+       -- the NextDay phase these very patches sit in -- with the new-game
+       detour already ruled out. They were written to catch faults in the
+       abandoned pointer-swap architecture, so there is nothing here worth
+       risking a game that will not start. */
+    if (ce_engine_build() != CE_ENGINE_STOCK) return 0u;
     static const unsigned char expected[16] = {
         0xa1, 0x3c, 0x26, 0x88, 0x00, 0x8b, 0x00, 0x81,
         0x78, 0x4c, 0x2c, 0x01, 0x00, 0x00, 0x7d, 0x36
@@ -7160,6 +7205,15 @@ __attribute__((naked)) static void ce_post_nextday_guard_hook(void) {
 }
 
 uint32_t CE_CALL CEAdapterInstallPostNextDayGuard(uint32_t galaxy_ptr) {
+    /* Stock engine only. These write into the engine at addresses taken from
+       the Steam build; four of them were never mapped onto Universe at all,
+       and the one that was patches a function prologue that the newer
+       compiler laid out differently. Party generation hung at "time passing"
+       -- the NextDay phase these very patches sit in -- with the new-game
+       detour already ruled out. They were written to catch faults in the
+       abandoned pointer-swap architecture, so there is nothing here worth
+       risking a game that will not start. */
+    if (ce_engine_build() != CE_ENGINE_STOCK) return 0u;
     static const unsigned char expected[6] = { 0x55, 0x8b, 0xec, 0x83, 0xc4, 0xe4 };
     uintptr_t module_base;
     uint32_t *galaxy_slot;
