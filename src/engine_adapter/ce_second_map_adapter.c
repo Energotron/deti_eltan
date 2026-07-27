@@ -403,6 +403,7 @@ static const struct ce_rva_pair g_ce_universe_rvas[] = {
     { 0x003f85e0u, 0x003f9360u },  /* TThread constructor          */
     { 0x002008f8u, 0x00200f44u },  /* SaveGame                     */
     { 0x00201150u, 0x0020179cu },  /* LoadGame                     */
+    { 0x0013c98au, 0x0013d022u },  /* the call to LoadGame         */
     { 0x0039ffdcu, 0x003a0c30u },  /* turn save path               */
     { 0x003f8bb4u, 0x003f9934u },  /* TThread is running           */
     { 0x003f8bf4u, 0x003f9974u },  /* TThread wait for             */
@@ -6968,13 +6969,18 @@ __attribute__((used)) static void CE_CALL ce_loadgame_result_body(uint32_t resul
     if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", payload, (size_t)size);
 }
 
+/* Where the real LoadGame lives on whichever engine this is. The trampoline
+   below carried the Steam build's address as an immediate, which on any other
+   engine would have called into the middle of something else. */
+__attribute__((used)) static uint32_t g_ce_loadgame_target = 0u;
+
 /* EAX already holds LoadGame's filename argument when this replaces the
    original call, so the stub just forwards it, keeps the returned AL, and
    logs around it. ECX/EDX are free: LoadGame takes a single register
    argument. */
 __attribute__((naked)) static void ce_loadgame_result_hook(void) {
     __asm__ volatile(
-        "movl $0x00601150, %ecx\n\t"
+        "movl _g_ce_loadgame_target, %ecx\n\t"
         "call *%ecx\n\t"
         "pushl %eax\n\t"
         "movzbl %al, %eax\n\t"
@@ -7028,13 +7034,20 @@ uint32_t CE_CALL CEAdapterInstallLoadGameDiagnostics(uint32_t galaxy_ptr) {
         ce_rva(CE_RVA_LOADGAME_RAISE_BAD_POST_SIG), ce_loadgame_diag_bad_post_sig);
     installed += ce_patch_loadgame_call(module_base,
         ce_rva(CE_RVA_LOADGAME_RAISE_GALAXY_READ), ce_loadgame_diag_galaxy_read);
-    installed += ce_patch_loadgame_call(module_base,
+    /* This one is the point of the whole function. A load started from inside
+       the game leaves the form queue empty and the engine then sits at a
+       finished progress bar with nothing to draw -- which is exactly what a
+       transit into Second Home became once this patch stopped being installed.
+       The four above only write to the log; if their addresses are unknown on
+       this engine that costs a diagnostic, not the transit. */
+    g_ce_loadgame_target = (uint32_t)(module_base + ce_rva(CE_RVA_LOAD_GAME));
+    installed = ce_patch_loadgame_call(module_base,
         ce_rva(CE_RVA_LOADGAME_CALL_IN_THREAD), ce_loadgame_result_hook);
     /* The form-gate patch that used to go here is gone: it never fired in a
        live transit, and its host function turned out to pick music, not
        forms. Queueing GFormNext from the result hook replaces it. */
-    InterlockedExchange(&g_ce_loadgame_diag_installed, installed == 5 ? 1 : 0);
-    return installed == 5 ? 1u : 0u;
+    InterlockedExchange(&g_ce_loadgame_diag_installed, installed ? 1 : 0);
+    return installed ? 1u : 0u;
 }
 #else
 uint32_t CE_CALL CEAdapterInstallLoadGameDiagnostics(uint32_t galaxy_ptr) {
