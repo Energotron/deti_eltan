@@ -7007,8 +7007,17 @@ __attribute__((used)) static void CE_CALL ce_loadgame_result_body(uint32_t resul
         uint32_t slot = *(const uint32_t *)(module_base + ce_rva(CE_RVA_FORM_NEXT_CELL));
         if (ce_region_has_access((void *)(uintptr_t)slot, 1u, 1)) {
             previous_form = *(const unsigned char *)(uintptr_t)slot;
-            *(unsigned char *)(uintptr_t)slot = (unsigned char)CE_FORM_INDEX_STARMAP;
-            queued = 1;
+            /* Only into an empty slot. A load that leaves nothing queued is the
+               one that needs help; a load with a form already waiting is the
+               engine going somewhere on its own business, and taking that away
+               is how a hyperspace jump turned into a loop -- it kept arriving
+               and being sent back to load again while the days went by. Four
+               was what it wanted, sixteen was what we gave it. */
+            if (previous_form == 0) {
+                *(unsigned char *)(uintptr_t)slot =
+                    (unsigned char)CE_FORM_INDEX_STARMAP;
+                queued = 1;
+            }
         }
     }
     size = snprintf(payload, sizeof(payload),
