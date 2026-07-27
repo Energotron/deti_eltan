@@ -33,7 +33,7 @@ New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
 $iconObject = ""
 # The mod's own artwork wins when it is there; the game icon is the fallback,
 # which is better than the generic application one but is still the game's.
-$ownIcon = Join-Path $projectRoot "srcssets\launcher_icon.png"
+$ownIcon = Join-Path $projectRoot "src\assets\launcher_icon.png"
 $useOwnIcon = Test-Path -LiteralPath $ownIcon
 if ($useOwnIcon -or (-not [string]::IsNullOrWhiteSpace($IconExe) -and (Test-Path -LiteralPath $IconExe))) {
     $stage = Join-Path ([IO.Path]::GetTempPath()) ("ce-launcher-icon-" + [guid]::NewGuid().ToString("N"))
