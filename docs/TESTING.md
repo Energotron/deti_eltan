@@ -53,6 +53,13 @@ if ($e) { $e | ForEach-Object Message } else { 'PARSE OK' }
 .\tools\build-game-smoke.ps1
 ```
 
+⚠️ `docs/BUILD_AND_INSTALL.md`, `CODEX_BOOTSTRAP_PROMPT.md` и
+`MASTER_SPEC_COMPLETE.md` называют `tools/build.ps1` и `tools/install-local.ps1`
+— **таких файлов нет**. Их работу делают `build-game-smoke.ps1` и
+`install-game-smoke.ps1`. Не создавать одноимённые заново: получатся две
+расходящиеся сборки. Переименование это или незакрытый план — вопрос в
+`docs/AGENT_COORDINATION.md`.
+
 Успех: `OK: smoke module built at …\dist\ChildrenOfEltan`. Скрипт сам зовёт
 `game_smoke_check.py preflight`, так что отдельно его гонять не нужно.
 
