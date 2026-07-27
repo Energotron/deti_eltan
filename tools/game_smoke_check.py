@@ -103,7 +103,7 @@ def preflight(module: Path) -> int:
         module / "CFG" / "Rus" / "Lang.dat",
         module / "DATA" / "CESecondMapAdapter.dll",
         module / "DATA" / "Script" / "CE_MapSmoke.scr",
-        module / "ChildrenOfEltanSmoke.pkg",
+        module / "ChildrenOfEltan.pkg",
     ]
     missing = [str(path) for path in required if not path.is_file() or path.stat().st_size == 0]
     if missing:

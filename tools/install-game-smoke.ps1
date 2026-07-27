@@ -7,9 +7,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$source = Join-Path $projectRoot "dist\ChildrenOfEltanSmoke"
+$source = Join-Path $projectRoot "dist\ChildrenOfEltan"
 $modsRoot = Join-Path $GameRoot "Mods"
-$target = Join-Path $modsRoot "ChildrenOfEltanSmoke"
+$target = Join-Path $modsRoot "ChildrenOfEltan"
 
 if (-not (Test-Path -LiteralPath (Join-Path $GameRoot "Rangers.exe"))) {
     throw "Rangers.exe not found under: $GameRoot"
@@ -28,4 +28,4 @@ if (Test-Path -LiteralPath $target) {
 New-Item -ItemType Directory -Path $target | Out-Null
 Copy-Item -Path (Join-Path $source "*") -Destination $target -Recurse -Force
 Write-Output "OK: installed isolated module at $target"
-Write-Output "The module is not enabled; activate ChildrenOfEltanSmoke in the game menu."
+Write-Output "The module is not enabled; activate Children of Eltan in the game menu."

@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
-    $OutputRoot = Join-Path $projectRoot "dist\ChildrenOfEltanSmoke"
+    $OutputRoot = Join-Path $projectRoot "dist\ChildrenOfEltan"
 }
 $dataRoot = Join-Path $OutputRoot "DATA"
 $scriptRoot = Join-Path $dataRoot "Script"
@@ -29,7 +29,7 @@ $outputText = Join-Path $langRoot "CE_MapSmoke.txt"
 $outputMain = Join-Path $cfgRoot "Main.dat"
 $outputLang = Join-Path $langRoot "Lang.dat"
 $outputCache = Join-Path $cfgRoot "CacheData.dat"
-$outputPackage = Join-Path $OutputRoot "ChildrenOfEltanSmoke.pkg"
+$outputPackage = Join-Path $OutputRoot "ChildrenOfEltan.pkg"
 
 foreach ($required in @($rscript, $blockPar, $sourceRson, $sourceMain, $sourceLang, $sourcePortalLang, $sourceTransitLang, $sourceCache, $sourceMapBackground, $sourceAnchorIcon)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing required file: $required" }
@@ -119,7 +119,18 @@ if (-not (Test-Path -LiteralPath $outputCache) -or (Get-Item -LiteralPath $outpu
 & python (Join-Path $PSScriptRoot "build_smoke_pkg.py") $outputScr $outputPackage
 if ($LASTEXITCODE -ne 0) { throw "PKG build failed" }
 
-Copy-Item -LiteralPath (Join-Path $projectRoot "smoke_module\ModuleInfo.txt") -Destination $OutputRoot -Force
+# ModuleInfo is read as UTF-16LE: a working example from another mod starts
+# with a byte-order mark and CRLF, and ours went out as UTF-8, which is why
+# every Russian line showed up as mojibake in the in-game mod list. Kept as
+# plain UTF-8 in the repository so it stays readable and diffable, converted
+# on the way out.
+$moduleInfoText = [IO.File]::ReadAllText(
+    (Join-Path $projectRoot "smoke_module\ModuleInfo.txt"),
+    (New-Object Text.UTF8Encoding($false, $true)))
+$moduleInfoText = $moduleInfoText -replace "`r`n", "`n" -replace "`n", "`r`n"
+[IO.File]::WriteAllBytes(
+    (Join-Path $OutputRoot "ModuleInfo.txt"),
+    ([Text.Encoding]::Unicode.GetPreamble() + [Text.Encoding]::Unicode.GetBytes($moduleInfoText)))
 Copy-Item -LiteralPath (Join-Path $projectRoot "smoke_module\INSTALL.TXT") -Destination $OutputRoot -Force
 
 & python (Join-Path $PSScriptRoot "game_smoke_check.py") preflight --module $OutputRoot
