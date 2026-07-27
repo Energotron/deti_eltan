@@ -393,6 +393,13 @@ static const struct ce_rva_pair g_ce_universe_rvas[] = {
     { 0x00440f08u, 0x00441c94u },  /* TGalaxy NextDay              */
     { 0x00441be8u, 0x00442974u },  /* post-NextDay pass            */
     { 0x001d36d8u, 0x001d3d24u },  /* new-game thread Execute      */
+    /* Its class reference sits just ahead of Execute and moves with it; the
+       two thread helpers either side of the constructor moved by 0xd80, so
+       it does too. Both are inferences from neighbours rather than finds, but
+       a wrong one costs nothing: the patch checks a signature at the address
+       and refuses when it does not match, which is what it did before. */
+    { 0x001d36acu, 0x001d3cf8u },  /* new-game thread class ref    */
+    { 0x003f85e0u, 0x003f9360u },  /* TThread constructor          */
     { 0x002008f8u, 0x00200f44u },  /* SaveGame                     */
     { 0x00201150u, 0x0020179cu },  /* LoadGame                     */
     { 0x0039ffdcu, 0x003a0c30u },  /* turn save path               */
