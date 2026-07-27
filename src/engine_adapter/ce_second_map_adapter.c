@@ -5984,6 +5984,24 @@ uint32_t CE_CALL CEAdapterRegisterPortal(uint32_t galaxy_ptr, uint32_t hole_id) 
        flies into the hole and outside NextDay's fragile Turn stack.  Save
        the complete active world here so returning later preserves its
        economy and the traveler's latest source-arm state. */
+    /* Seed Second Home from the player's own galaxy the first time they jump.
+
+       It used to be prepared by hand and shipped, and that cannot be shared:
+       a save carries the scripts and state of the mod set it was made under,
+       so one built on a stock game loads under Universe, shows its map, and
+       takes the process down on the first turn -- the engine goes looking for
+       mod state the file has never heard of. Built from the player's own world
+       the sets match by definition, whatever they happen to be running.
+
+       Naming it Eltan is the arrival's job, in the live galaxy. */
+    if (!ce_file_exists(g_ce_second_home_save_path)) {
+        if (ce_save_complete_game(module_base, g_ce_second_home_save_path,
+                L"Дети Эльтан: Второй Дом")) {
+            ce_write_progress("second-home:seeded-from-live-galaxy");
+        } else {
+            ce_write_progress("second-home:seed-failed");
+        }
+    }
     saved = ce_save_complete_game(
         module_base, source_path,
         active_arm == 0u ? L"Дети Эльтан: Первый рукав" : L"Дети Эльтан: Второй Дом");
