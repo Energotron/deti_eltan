@@ -5800,18 +5800,35 @@ uint32_t CE_CALL CEAdapterPortalReady(uint32_t galaxy_ptr) {
     uintptr_t module_base;
     uint32_t *galaxy_slot;
     uint32_t class_ref;
-    uint32_t ready = ce_resolve_engine_galaxy(
-            galaxy_ptr, &module_base, &galaxy_slot, &class_ref) &&
-        InterlockedCompareExchange(&g_ce_dual_newgame_status, 0, 0) == 2 &&
-        g_ce_first_arm_save_path != 0u && g_ce_second_home_save_path != 0u &&
-        InterlockedCompareExchange(&g_ce_portal_status, 0, 0) == 0 ? 1u : 0u;
+    uint32_t ready;
     char diagnostic[192];
-    int diagnostic_size = snprintf(diagnostic, sizeof(diagnostic),
+    int diagnostic_size;
+    /* This waited for the new-game detour to report status 2. That detour is
+       stock-only now, so on any other engine the portal could never open
+       however well the rest of the mod worked. What status 2 actually meant
+       was that the prepared Second Home file had been found on disk -- so ask
+       the disk. Same question, one step nearer the answer, and true whether a
+       new game was started this session or a save was loaded into it.
+
+       The detour also built the save paths, so build them here when they are
+       missing rather than depending on whether it ever ran. */
+    module_base = (uintptr_t)GetModuleHandleW(NULL);
+    if (module_base != 0 &&
+            (g_ce_first_arm_save_path == 0u || g_ce_second_home_save_path == 0u)) {
+        ce_make_dual_newgame_paths(module_base);
+    }
+    ready = ce_resolve_engine_galaxy(
+            galaxy_ptr, &module_base, &galaxy_slot, &class_ref) &&
+        g_ce_first_arm_save_path != 0u && g_ce_second_home_save_path != 0u &&
+        ce_file_exists(g_ce_second_home_save_path) &&
+        InterlockedCompareExchange(&g_ce_portal_status, 0, 0) == 0 ? 1u : 0u;
+    diagnostic_size = snprintf(diagnostic, sizeof(diagnostic),
         "{\"status\":\"portal-ready-check\",\"ready\":%s,\"portal_status\":%ld,"
-        "\"dual_newgame_status\":%ld}\r\n",
+        "\"paths\":%d,\"sidecar\":%d}\r\n",
         ready ? "true" : "false",
         (long)InterlockedCompareExchange(&g_ce_portal_status, 0, 0),
-        (long)InterlockedCompareExchange(&g_ce_dual_newgame_status, 0, 0));
+        g_ce_second_home_save_path != 0u ? 1 : 0,
+        ce_file_exists(g_ce_second_home_save_path) ? 1 : 0);
     if (diagnostic_size > 0) ce_write_text_marker(
         "live-arm-switch.jsonl", diagnostic, (size_t)diagnostic_size);
     return ready;
