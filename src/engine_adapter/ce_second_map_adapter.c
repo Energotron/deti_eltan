@@ -362,6 +362,103 @@ static DWORD WINAPI ce_sector_spawn_thread_proc(LPVOID unused);
 /* Unconditional load marker: proves the engine actually mapped this DLL
    into its process, independent of whether any exported function is ever
    invoked from a Turn script. */
+/* Which engine we are patching, and where its innards moved to.
+
+   The constants above were read off the Steam build. The Universe community
+   ships its own executable, and that is a separate compilation rather than a
+   patch: 78% of .text differs and nothing stays where it was. Every address
+   here was mapped onto it by tools/derive_addresses.py, and the ones the tool
+   could not place were derived by hand -- see docs/UNIVERSE_ADDRESS_MAP.txt.
+
+   Telling the two apart: .text is 4667148 bytes in the Steam build and
+   4671200 in Universe. That is read out of the PE header already mapped into
+   this process, so it costs nothing and cannot be fooled by a renamed file.
+
+   An address with no entry here falls through to its stock value. That is
+   deliberate and safe: every patch that writes to the engine checks a byte
+   signature at the address first and refuses when it does not match, so an
+   unmapped address on a foreign build declines to install rather than
+   corrupting whatever happens to live there. */
+enum { CE_ENGINE_STOCK = 0u, CE_ENGINE_UNIVERSE = 1u };
+enum { CE_TEXT_SIZE_STOCK = 4667148u, CE_TEXT_SIZE_UNIVERSE = 4671200u };
+
+struct ce_rva_pair { uint32_t stock; uint32_t universe; };
+
+static const struct ce_rva_pair g_ce_universe_rvas[] = {
+    { 0x00439198u, 0x00439f24u },  /* TGalaxy constructor          */
+    { 0x0043a034u, 0x0043adc0u },  /* TGalaxy initialize           */
+    { 0x0043a1a4u, 0x0043af30u },  /* TGalaxy save to stream       */
+    { 0x0043b6ccu, 0x0043c458u },  /* TGalaxy load from stream     */
+    { 0x0044ff74u, 0x00450d00u },  /* TGalaxy generate stars       */
+    { 0x00440f08u, 0x00441c94u },  /* TGalaxy NextDay              */
+    { 0x00441be8u, 0x00442974u },  /* post-NextDay pass            */
+    { 0x001d36d8u, 0x001d3d24u },  /* new-game thread Execute      */
+    { 0x002008f8u, 0x00200f44u },  /* SaveGame                     */
+    { 0x00201150u, 0x0020179cu },  /* LoadGame                     */
+    { 0x0039ffdcu, 0x003a0c30u },  /* turn save path               */
+    { 0x003f8bb4u, 0x003f9934u },  /* TThread is running           */
+    { 0x003f8bf4u, 0x003f9974u },  /* TThread wait for             */
+    { 0x0042e244u, 0x0042efd0u },  /* package file open            */
+    { 0x000c5684u, 0x000c5680u },  /* prepare save previews        */
+    { 0x00482880u, 0x00483880u },  /* game load path cell          */
+    { 0x004826d4u, 0x004836d4u },  /* save manager cell            */
+    { 0x00482d5cu, 0x00483d5cu },  /* loading flag cell            */
+    { 0x00482724u, 0x00483724u },  /* new-game counter cell        */
+    { 0x0047b6bcu, 0x0047c6bcu },  /* save writer object           */
+    { 0x0048263cu, 0x0048363cu },  /* galaxy import cell           */
+    { 0x00482fd0u, 0x00483fd0u },  /* pending form cell            */
+    { 0x00482bf4u, 0x00483bf4u },  /* form being entered cell      */
+    { 0x00482cf0u, 0x00483cf0u },  /* form settled cell            */
+    { 0x0048dbd0u, 0x0048ebd0u },  /* ExitProcess import slot      */
+    { 0x0048dcfcu, 0x0048ecfcu }   /* PostQuitMessage import slot  */
+};
+
+static volatile LONG g_ce_engine_build = -1;
+
+static uint32_t ce_engine_build(void) {
+    LONG known = InterlockedCompareExchange(&g_ce_engine_build, -1, -1);
+    uintptr_t module_base;
+    const IMAGE_DOS_HEADER *dos;
+    const IMAGE_NT_HEADERS32 *nt;
+    const IMAGE_SECTION_HEADER *section;
+    unsigned int index;
+    uint32_t build = CE_ENGINE_STOCK;
+
+    if (known >= 0) return (uint32_t)known;
+    module_base = (uintptr_t)GetModuleHandleW(NULL);
+    if (module_base == 0) return CE_ENGINE_STOCK;
+    dos = (const IMAGE_DOS_HEADER *)module_base;
+    if (!ce_region_has_access(dos, sizeof(*dos), 0) || dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        return CE_ENGINE_STOCK;
+    }
+    nt = (const IMAGE_NT_HEADERS32 *)(module_base + (uintptr_t)dos->e_lfanew);
+    if (!ce_region_has_access(nt, sizeof(*nt), 0) || nt->Signature != IMAGE_NT_SIGNATURE) {
+        return CE_ENGINE_STOCK;
+    }
+    section = IMAGE_FIRST_SECTION(nt);
+    for (index = 0; index < nt->FileHeader.NumberOfSections; ++index) {
+        if (!ce_region_has_access(&section[index], sizeof(section[index]), 0)) break;
+        if (memcmp(section[index].Name, ".text", 5) != 0) continue;
+        if (section[index].Misc.VirtualSize == CE_TEXT_SIZE_UNIVERSE) build = CE_ENGINE_UNIVERSE;
+        break;
+    }
+    InterlockedExchange(&g_ce_engine_build, (LONG)build);
+    return build;
+}
+
+/* Every address in this file goes through here on its way to being used. */
+static uint32_t ce_rva(uint32_t stock) {
+    unsigned int index;
+    if (ce_engine_build() != CE_ENGINE_UNIVERSE) return stock;
+    for (index = 0;
+         index < sizeof(g_ce_universe_rvas) / sizeof(g_ce_universe_rvas[0]);
+         ++index) {
+        if (g_ce_universe_rvas[index].stock == stock) {
+            return g_ce_universe_rvas[index].universe;
+        }
+    }
+    return stock;
+}
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
     (void)reserved;
     if (reason == DLL_PROCESS_ATTACH) {
@@ -458,7 +555,7 @@ static volatile LONG g_ce_day_counter_hook_installed = 0;
 static volatile LONG g_ce_loadgame_diag_installed = 0;
 static volatile LONG g_ce_post_nextday_guard_installed = 0;
 /* Set while a portal-initiated LoadGame is outstanding; consumed by the
-   GameLoad form gate stub. See CE_RVA_LOADGAME_FORM_GATE_CALL. */
+   GameLoad form gate stub. See ce_rva(CE_RVA_LOADGAME_FORM_GATE_CALL). */
 static volatile LONG g_ce_portal_load_pending = 0;
 /* Traveller's own stats, carried across the transition. Second Home is a
    genuine new game, so it ships with ITS OWN captain -- confirmed in play:
@@ -529,7 +626,7 @@ static void *g_ce_unhandled_exception_trampoline = NULL;
 static volatile LONG g_ce_unhandled_exception_hook_installed = 0;
 static uint32_t g_ce_first_arm_save_path = 0u;
 static uint32_t g_ce_second_home_save_path = 0u;
-/* ANSI twins of the two paths above, for CE_RVA_GAME_LOAD_PATH_CELL only --
+/* ANSI twins of the two paths above, for ce_rva(CE_RVA_GAME_LOAD_PATH_CELL) only --
    that slot is an AnsiString the engine widens itself; see
    ce_make_immortal_ansi's comment. Direct SaveGame/LoadGame calls keep
    using the UTF-16 versions. */
@@ -563,7 +660,7 @@ enum {
     CE_RVA_TCON_CONSTRUCTOR = 0x004482f8u,
     CE_RVA_LIST_ADD = 0x000161c0u,
     /* Globals TCon's own constructor (0x8482f8) touches: an optional
-       "current context" object at CE_RVA_CON_CONTEXT_CELL (guarded by a
+       "current context" object at ce_rva(CE_RVA_CON_CONTEXT_CELL) (guarded by a
        null check in the engine's own code, so not necessarily a problem),
        and two sub-object class-ref cells it unconditionally constructs
        from without any null check. */
@@ -572,7 +669,7 @@ enum {
     CE_RVA_CON_SUBOBJ_CLASS_CELL = 0x00013f74u,
     /* Generic constructor trampoline (test dl; call [eax-0xc] i.e. virtual
        NewInstance) that TCon's own constructor calls 10 times, 6x for
-       CE_RVA_CON_SUBLIST_CLASS_CELL and 4x for CE_RVA_CON_SUBOBJ_CLASS_CELL.
+       ce_rva(CE_RVA_CON_SUBLIST_CLASS_CELL) and 4x for ce_rva(CE_RVA_CON_SUBOBJ_CLASS_CELL).
        Traced with tools/cfg_disasm.py: both classes share the same default
        NewInstance (VA 0x404544, itself unremarkable GetMem+InitInstance) --
        no per-class override, so nothing found in static analysis explains
@@ -602,7 +699,7 @@ enum {
        20 is sector "Дицея", the fixed, already-significant last vanilla
        sector this project has used as a landmark elsewhere -- not an
        arbitrary star id. Whether that caller resolves it against a stale
-       CE_RVA_CON_CONTEXT_CELL is still the leading (not yet fully proven)
+       ce_rva(CE_RVA_CON_CONTEXT_CELL) is still the leading (not yet fully proven)
        theory for WHY the lookup fails after a swap. Rather than keep
        guessing which of the (at least three, likely more) callers holds
        the stale reference, patch the CALL TO THE RAISE ITSELF (not the
@@ -621,8 +718,8 @@ enum {
        ("Error in procedure TGalaxy.NextDay label = 3", confirmed via the
        hardcoded format string at VA 0x00840edc: "Error in procedure
        TGalaxy.NextDay label = " with the numeric label appended). Unlike
-       CE_RVA_DAY_PROCESS_RAISE_CALL (the outer wrapper around the call TO
-       NextDay), this address sits just BEFORE CE_RVA_TGALAXY_NEXTDAY's own
+       ce_rva(CE_RVA_DAY_PROCESS_RAISE_CALL) (the outer wrapper around the call TO
+       NextDay), this address sits just BEFORE ce_rva(CE_RVA_TGALAXY_NEXTDAY)'s own
        entry (0x00840f08) in memory, and is reached via a jump rather than
        linear fall-through from the numbered try/except scaffolding right
        above it -- almost certainly one of several internal, individually
@@ -640,9 +737,9 @@ enum {
        (tools/disasm_rangers.py) rather than reuse of ce_install_raise_
        recovery_patch. Confirmed live: EAccessViolation reading address
        0x4c, reported at VA 0x0072fb43, inside the SAME day-process wrapper
-       function as CE_RVA_DAY_PROCESS_RAISE_CALL (just further along, past
+       function as ce_rva(CE_RVA_DAY_PROCESS_RAISE_CALL) (just further along, past
        its own epilogue jump target). The faulting sequence, at VA
-       0x0072fb3c: `mov eax,[0x88263c]` (CE_RVA_GALAXY_IMPORT_CELL itself --
+       0x0072fb3c: `mov eax,[0x88263c]` (ce_rva(CE_RVA_GALAXY_IMPORT_CELL) itself --
        the SAME two-level "current galaxy pointer" cell ce_resolve_engine_
        galaxy reads); `mov eax,[eax]`; `cmp dword ptr [eax+0x4c],0x12c`;
        `jge 0x0072fb82`. The crash means the engine's own idea of the
@@ -664,7 +761,7 @@ enum {
     CE_RVA_DAY_COUNTER_SKIP = 0x0032fb82u,
     /* THE ENGINE'S OWN COMPLETE NEW-GALAXY BUILDER.
        Found by scanning the whole .text for E8-rel32 calls to
-       CE_RVA_TGALAXY_GENERATE_STARS: there is exactly ONE, at VA
+       ce_rva(CE_RVA_TGALAXY_GENERATE_STARS): there is exactly ONE, at VA
        0x005d4378, inside a single ~8KB function entered at VA 0x005d36d8
        (1701 reachable instructions, ~200 engine calls -- GenerateStars is
        just one of them, the rest being precisely the star-naming, sector
@@ -679,7 +776,7 @@ enum {
        0x005d36ac and makes 0x005d36d8 the first user virtual method --
        i.e. TThread.Execute. So a "new game" builds its galaxy on a worker
        thread whose Execute does the whole job and stores the result into
-       CE_RVA_GALAXY_IMPORT_CELL (confirmed in its own opening lines:
+       ce_rva(CE_RVA_GALAXY_IMPORT_CELL) (confirmed in its own opening lines:
        `mov dl,1; mov eax,[0x838d90]; call 0x839198` = construct TGalaxy,
        then `mov edx,[0x88263c]; mov [edx],eax` = publish it as current).
 
@@ -724,14 +821,14 @@ enum {
        cells (the global holds a pointer; the value lives at what it points
        to), matching how the builder itself dereferences them.
 
-       CE_RVA_LOADING_FLAG_CELL: builder does `mov eax,[0x882d5c]; mov
+       ce_rva(CE_RVA_LOADING_FLAG_CELL): builder does `mov eax,[0x882d5c]; mov
        byte ptr [eax],1` exactly ONCE (VA 0x005d3729) and has no matching
        store of 0 anywhere in its 1701 reachable instructions. The routine
        that normally clears it is the day-process wrapper (`mov byte ptr
        [eax],0` at VA 0x0072f7d3), which also GATES ON IT at VA 0x0072f709
        (`cmp byte ptr [eax],0`). Calling the builder mid-game therefore
        leaves the engine believing a load is permanently in progress.
-       CE_RVA_NEWGAME_COUNTER_CELL: zeroed on entry (VA 0x005d3720), read
+       ce_rva(CE_RVA_NEWGAME_COUNTER_CELL): zeroed on entry (VA 0x005d3720), read
        again later (VA 0x005d4312, 0x005d4550).
 
        Restoring the galaxy pointer alone was not enough precisely because
@@ -763,13 +860,13 @@ enum {
        both bitmaps through 0x4c5730 after it has handed them to the writer. */
     CE_RVA_PREPARE_SAVE_PREVIEWS = 0x000c5684u,
     /* TGameFolders.GetTurnSavePath(Self, out UnicodeString), called by the
-       game's own turn-save path immediately before CE_RVA_SAVE_GAME.  It
+       game's own turn-save path immediately before ce_rva(CE_RVA_SAVE_GAME).  It
        gives us the user's real Documents\SpaceRangersHD\Save directory
        without embedding a machine-specific absolute path. */
     CE_RVA_SAVE_MANAGER_CELL = 0x004826d4u,
     CE_RVA_GET_TURN_SAVE_PATH = 0x0039ffdcu,
     /* TThreadGameLoad.Execute reads:
-         edx = [base + CE_RVA_GAME_LOAD_PATH_CELL]; eax = [edx]
+         edx = [base + ce_rva(CE_RVA_GAME_LOAD_PATH_CELL)]; eax = [edx]
        and passes that UnicodeString to LoadGame.  Setting this immortal
        string before RScript calls FormChange('GameLoad') gives us the
        game's own loading form, worker and progress animation. */
@@ -787,7 +884,7 @@ enum {
        trace is small and identifies the exact file that makes LoadGame
        collapse into EAbort("Err"). */
     CE_RVA_PACKAGE_FILE_OPEN = 0x0042e244u,
-    /* Log-only diagnostics for the four ways LoadGame (CE_RVA_LOAD_GAME)
+    /* Log-only diagnostics for the four ways LoadGame (ce_rva(CE_RVA_LOAD_GAME))
        can fail.  Each is a `call System.@RaiseExcept` (0x00404e20) reached
        from its own validation branch, with the message string identified by
        disassembly:
@@ -914,6 +1011,8 @@ enum {
     CE_RVA_POST_QUIT_MESSAGE_IAT = 0x0048dcfcu,
     CE_RVA_DELPHI_UNHANDLED_EXCEPTION = 0x00004f84u
 };
+
+static uint32_t ce_rva(uint32_t stock);
 
 uint32_t CE_CALL CEAdapterAbiVersion(void) {
     return CE_ADAPTER_ABI_VERSION;
@@ -1383,22 +1482,22 @@ static int ce_resolve_engine_galaxy(
         nt->OptionalHeader.SizeOfImage != CE_RANGERS_IMAGE_SIZE) {
         return 0;
     }
-    if (memcmp((const void *)(base + CE_RVA_TGALAXY_CONSTRUCTOR),
+    if (memcmp((const void *)(base + ce_rva(CE_RVA_TGALAXY_CONSTRUCTOR)),
             constructor_signature, sizeof(constructor_signature)) != 0 ||
-        memcmp((const void *)(base + CE_RVA_TGALAXY_INITIALIZE),
+        memcmp((const void *)(base + ce_rva(CE_RVA_TGALAXY_INITIALIZE)),
             initializer_signature, sizeof(initializer_signature)) != 0 ||
-        memcmp((const void *)(base + CE_RVA_TGALAXY_GENERATE_STARS),
+        memcmp((const void *)(base + ce_rva(CE_RVA_TGALAXY_GENERATE_STARS)),
             generator_signature, sizeof(generator_signature)) != 0) {
         return 0;
     }
-    import_cell = (uint32_t **)(base + CE_RVA_GALAXY_IMPORT_CELL);
+    import_cell = (uint32_t **)(base + ce_rva(CE_RVA_GALAXY_IMPORT_CELL));
     if (!ce_region_has_access(import_cell, sizeof(*import_cell), 0)) return 0;
     slot = *import_cell;
     if (!ce_region_has_access(slot, sizeof(*slot), 1) || *slot != galaxy_ptr ||
         !ce_region_has_access((const void *)(uintptr_t)galaxy_ptr, 0x1dcu, 0)) {
         return 0;
     }
-    class_ref = *(const uint32_t *)(base + CE_RVA_TGALAXY_CLASS_CELL);
+    class_ref = *(const uint32_t *)(base + ce_rva(CE_RVA_TGALAXY_CLASS_CELL));
     if (!ce_region_has_access((const void *)(uintptr_t)class_ref, sizeof(uint32_t), 0) ||
         *(const uint32_t *)(uintptr_t)galaxy_ptr != class_ref) {
         return 0;
@@ -1603,7 +1702,7 @@ uint32_t CE_CALL CEAdapterCreateAndEnterSecondGalaxy(
     }
 
     second = ce_call_delphi_constructor(
-        class_ref, module_base + CE_RVA_TGALAXY_CONSTRUCTOR
+        class_ref, module_base + ce_rva(CE_RVA_TGALAXY_CONSTRUCTOR)
     );
     if (second == 0 || !ce_region_has_access((const void *)(uintptr_t)second, 0x1dcu, 1) ||
         *(const uint32_t *)(uintptr_t)second != class_ref) {
@@ -1615,7 +1714,7 @@ uint32_t CE_CALL CEAdapterCreateAndEnterSecondGalaxy(
         (const void *)(uintptr_t)(galaxy_ptr + 0x50u), 0x10u);
     memcpy((void *)(uintptr_t)(second + 0x188u),
         (const void *)(uintptr_t)(galaxy_ptr + 0x188u), 0x27u);
-    /* CE_RVA_TGALAXY_GENERATE_STARS (disassembled from the installed exe)
+    /* ce_rva(CE_RVA_TGALAXY_GENERATE_STARS) (disassembled from the installed exe)
        reads its star-count target from [self+0x160] and `jle`-skips the
        whole generation loop when it is <= 0. The raw Delphi constructor
        call never sets it, so the field is zero on a synthetic instance;
@@ -1633,10 +1732,10 @@ uint32_t CE_CALL CEAdapterCreateAndEnterSecondGalaxy(
        Initialize/GenerateStars are not thread-safe, and the global Galaxy
        slot must only be swapped while no other engine code can observe it. */
     *galaxy_slot = second;
-    ce_call_delphi_method(second, module_base + CE_RVA_TGALAXY_INITIALIZE);
+    ce_call_delphi_method(second, module_base + ce_rva(CE_RVA_TGALAXY_INITIALIZE));
     ce_write_native_stage(3u, 0u);
     ce_call_delphi_method_byte(second, player_race,
-        module_base + CE_RVA_TGALAXY_GENERATE_STARS);
+        module_base + ce_rva(CE_RVA_TGALAXY_GENERATE_STARS));
     /* GenerateStars clears and fills the list at [self+0x164] (a TList
        subclass: Clear() via its vtable, Add() per created star), not the
        field at +0x2c the previous ABI 8 build read back from; +0x2c is a
@@ -1732,7 +1831,7 @@ static uint32_t ce_galaxy_topology_hash(uint32_t galaxy) {
     return hash != 0u ? hash : 1u;
 }
 
-/* See CE_RVA_NEWGAME_THREAD_CLASS's comment: builds Second Home by calling
+/* See ce_rva(CE_RVA_NEWGAME_THREAD_CLASS)'s comment: builds Second Home by calling
    the engine's own complete new-game galaxy builder, instead of loading a
    snapshot of the player's own galaxy (which produced a byte-identical
    copy -- the actual reason Second Home never felt like a second map).
@@ -1752,7 +1851,7 @@ static uint32_t ce_galaxy_topology_hash(uint32_t galaxy) {
    of a different race (human player, Maloc ship), put the player on that
    new game's starting station, drew that game's initial course, and the
    process died as soon as the mismatched ship was rendered in the hangar.
-   Saving/restoring CE_RVA_LOADING_FLAG_CELL and CE_RVA_NEWGAME_COUNTER_CELL
+   Saving/restoring ce_rva(CE_RVA_LOADING_FLAG_CELL) and ce_rva(CE_RVA_NEWGAME_COUNTER_CELL)
    does not and cannot address this: the builder CONSTRUCTS A NEW PLAYER
    OBJECT and republishes it, so there is no small set of globals to put
    back.
@@ -1796,14 +1895,14 @@ uint32_t CE_CALL CEAdapterBuildFreshSecondGalaxy(uint32_t galaxy_ptr) {
     }
 
     memset(thread_instance, 0, sizeof(thread_instance));
-    thread_instance[0] = (uint32_t)(module_base + CE_RVA_NEWGAME_THREAD_CLASS);
+    thread_instance[0] = (uint32_t)(module_base + ce_rva(CE_RVA_NEWGAME_THREAD_CLASS));
     memcpy((unsigned char *)thread_instance + CE_NEWGAME_THREAD_SETTINGS_OFFSET,
         (const void *)(uintptr_t)(galaxy_ptr + 0x50u), CE_NEWGAME_THREAD_SETTINGS_SIZE);
 
-    /* See CE_RVA_LOADING_FLAG_CELL's comment: capture the values BEFORE the
+    /* See ce_rva(CE_RVA_LOADING_FLAG_CELL)'s comment: capture the values BEFORE the
        builder overwrites them, so they can go back exactly as they were. */
-    loading_flag_ptr = *(const uint32_t *)(module_base + CE_RVA_LOADING_FLAG_CELL);
-    counter_ptr = *(const uint32_t *)(module_base + CE_RVA_NEWGAME_COUNTER_CELL);
+    loading_flag_ptr = *(const uint32_t *)(module_base + ce_rva(CE_RVA_LOADING_FLAG_CELL));
+    counter_ptr = *(const uint32_t *)(module_base + ce_rva(CE_RVA_NEWGAME_COUNTER_CELL));
     if (ce_region_has_access((const void *)(uintptr_t)loading_flag_ptr, 1u, 1)) {
         saved_loading_flag = *(const unsigned char *)(uintptr_t)loading_flag_ptr;
         have_loading_flag = 1;
@@ -1815,7 +1914,7 @@ uint32_t CE_CALL CEAdapterBuildFreshSecondGalaxy(uint32_t galaxy_ptr) {
 
     ce_write_progress("build-fresh:before-execute");
     ce_call_delphi_method((uint32_t)(uintptr_t)thread_instance,
-        module_base + CE_RVA_NEWGAME_THREAD_EXECUTE);
+        module_base + ce_rva(CE_RVA_NEWGAME_THREAD_EXECUTE));
     ce_write_progress("build-fresh:after-execute");
 
     if (have_loading_flag) {
@@ -1933,7 +2032,7 @@ uint32_t CE_CALL CEAdapterCreateBareSecondGalaxyForLoad(
     }
 
     second = ce_call_delphi_constructor(
-        class_ref, module_base + CE_RVA_TGALAXY_CONSTRUCTOR
+        class_ref, module_base + ce_rva(CE_RVA_TGALAXY_CONSTRUCTOR)
     );
     if (second == 0 || !ce_region_has_access((const void *)(uintptr_t)second, 0x1dcu, 1) ||
         *(const uint32_t *)(uintptr_t)second != class_ref) {
@@ -1950,7 +2049,7 @@ uint32_t CE_CALL CEAdapterCreateBareSecondGalaxyForLoad(
     InterlockedExchange(&g_ce_old_galaxy_ptr, (LONG)galaxy_ptr);
     ce_write_progress("bare-second-galaxy:before-initialize");
     *galaxy_slot = second;
-    ce_call_delphi_method(second, module_base + CE_RVA_TGALAXY_INITIALIZE);
+    ce_call_delphi_method(second, module_base + ce_rva(CE_RVA_TGALAXY_INITIALIZE));
     *galaxy_slot = galaxy_ptr;
     ce_write_progress("bare-second-galaxy:after-initialize");
 
@@ -2024,13 +2123,13 @@ uint32_t CE_CALL CEAdapterReturnToOldGalaxy(uint32_t galaxy_ptr, uint32_t turn) 
     *galaxy_slot = old_galaxy;
     InterlockedExchange(&g_ce_active_arm, 0);
     InterlockedExchange(&g_ce_last_swap_turn, (LONG)turn);
-    /* TRIED AND REVERTED: zeroing CE_RVA_CON_CONTEXT_CELL here and in
+    /* TRIED AND REVERTED: zeroing ce_rva(CE_RVA_CON_CONTEXT_CELL) here and in
        CEAdapterEnterReadySecondGalaxy (on the theory that it is a stale
        cross-galaxy pointer left alive after every swap -- see that RVA's
        comment) caused an IMMEDIATE EAccessViolation on the very next hole
        entry, reading offset +0x4C off a null pointer -- confirmed live, OS
        crash dialog at RVA 0x0032fb43 (VA 0x0072fb43), 0xa5 bytes past
-       CE_RVA_DAY_PROCESS_RAISE_CALL, i.e. still inside TGalaxy.NextDay.
+       ce_rva(CE_RVA_DAY_PROCESS_RAISE_CALL), i.e. still inside TGalaxy.NextDay.
        So this cell being null is only safe across the ONE narrow call
        (TCon's own constructor) that already guards it -- some OTHER code
        reachable from NextDay dereferences it with no null check at all.
@@ -2196,10 +2295,10 @@ uint32_t CE_CALL CEAdapterProbeConClass(uint32_t old_galaxy_ptr, uint32_t turn) 
         !ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
         return 0;
     }
-    con_class_ok = ce_probe_cell(module_base + CE_RVA_TCON_CLASS_CELL, &con_class_ref);
-    context_ok = ce_probe_cell(module_base + CE_RVA_CON_CONTEXT_CELL, &context_value);
-    sublist_ok = ce_probe_cell(module_base + CE_RVA_CON_SUBLIST_CLASS_CELL, &sublist_class_ref);
-    subobj_ok = ce_probe_cell(module_base + CE_RVA_CON_SUBOBJ_CLASS_CELL, &subobj_class_ref);
+    con_class_ok = ce_probe_cell(module_base + ce_rva(CE_RVA_TCON_CLASS_CELL), &con_class_ref);
+    context_ok = ce_probe_cell(module_base + ce_rva(CE_RVA_CON_CONTEXT_CELL), &context_value);
+    sublist_ok = ce_probe_cell(module_base + ce_rva(CE_RVA_CON_SUBLIST_CLASS_CELL), &sublist_class_ref);
+    subobj_ok = ce_probe_cell(module_base + ce_rva(CE_RVA_CON_SUBOBJ_CLASS_CELL), &subobj_class_ref);
 
     if (GetTempPathA(MAX_PATH, temp_path) == 0) return 0;
     if (snprintf(marker_dir, sizeof(marker_dir), "%sChildrenOfEltan", temp_path) < 0) return 0;
@@ -2290,13 +2389,13 @@ uint32_t CE_CALL CEAdapterProbeSubobjectConstruction(uint32_t old_galaxy_ptr) {
         ce_write_progress("subobj-probe-abort:resolve-failed");
         return 0;
     }
-    if (!ce_region_has_access((const void *)(module_base + CE_RVA_CON_SUBLIST_CLASS_CELL), 4u, 0) ||
-        !ce_region_has_access((const void *)(module_base + CE_RVA_CON_SUBOBJ_CLASS_CELL), 4u, 0)) {
+    if (!ce_region_has_access((const void *)(module_base + ce_rva(CE_RVA_CON_SUBLIST_CLASS_CELL)), 4u, 0) ||
+        !ce_region_has_access((const void *)(module_base + ce_rva(CE_RVA_CON_SUBOBJ_CLASS_CELL)), 4u, 0)) {
         ce_write_progress("subobj-probe-abort:class-cells-unreadable");
         return 0;
     }
-    sublist_class_ref = *(const uint32_t *)(module_base + CE_RVA_CON_SUBLIST_CLASS_CELL);
-    subobj_class_ref = *(const uint32_t *)(module_base + CE_RVA_CON_SUBOBJ_CLASS_CELL);
+    sublist_class_ref = *(const uint32_t *)(module_base + ce_rva(CE_RVA_CON_SUBLIST_CLASS_CELL));
+    subobj_class_ref = *(const uint32_t *)(module_base + ce_rva(CE_RVA_CON_SUBOBJ_CLASS_CELL));
 
     ce_ensure_veh_installed();
 
@@ -2306,7 +2405,7 @@ uint32_t CE_CALL CEAdapterProbeSubobjectConstruction(uint32_t old_galaxy_ptr) {
         InterlockedExchange(&g_ce_guard_active, 1);
         ce_write_progress("subobj-probe:before-sublist-class");
         sublist_result = ce_call_delphi_constructor(
-            sublist_class_ref, module_base + CE_RVA_GENERIC_CTOR_TRAMPOLINE);
+            sublist_class_ref, module_base + ce_rva(CE_RVA_GENERIC_CTOR_TRAMPOLINE));
         InterlockedExchange(&g_ce_guard_active, 0);
         ce_write_progress(sublist_result != 0
             ? "subobj-probe:sublist-class-ok"
@@ -2319,7 +2418,7 @@ uint32_t CE_CALL CEAdapterProbeSubobjectConstruction(uint32_t old_galaxy_ptr) {
         InterlockedExchange(&g_ce_guard_active, 1);
         ce_write_progress("subobj-probe:before-subobj-class");
         subobj_result = ce_call_delphi_constructor(
-            subobj_class_ref, module_base + CE_RVA_GENERIC_CTOR_TRAMPOLINE);
+            subobj_class_ref, module_base + ce_rva(CE_RVA_GENERIC_CTOR_TRAMPOLINE));
         InterlockedExchange(&g_ce_guard_active, 0);
         ce_write_progress(subobj_result != 0
             ? "subobj-probe:subobj-class-ok"
@@ -2351,11 +2450,11 @@ uint32_t CE_CALL CEAdapterProbeBareConAllocation(uint32_t old_galaxy_ptr) {
         ce_write_progress("bare-con-abort:resolve-failed");
         return 0;
     }
-    if (!ce_region_has_access((const void *)(module_base + CE_RVA_TCON_CLASS_CELL), 4u, 0)) {
+    if (!ce_region_has_access((const void *)(module_base + ce_rva(CE_RVA_TCON_CLASS_CELL)), 4u, 0)) {
         ce_write_progress("bare-con-abort:class-cell-unreadable");
         return 0;
     }
-    con_class_ref = *(const uint32_t *)(module_base + CE_RVA_TCON_CLASS_CELL);
+    con_class_ref = *(const uint32_t *)(module_base + ce_rva(CE_RVA_TCON_CLASS_CELL));
 
     ce_ensure_veh_installed();
     if (setjmp(g_ce_recovery_point) != 0) {
@@ -2365,7 +2464,7 @@ uint32_t CE_CALL CEAdapterProbeBareConAllocation(uint32_t old_galaxy_ptr) {
     InterlockedExchange(&g_ce_guard_active, 1);
     ce_write_progress("bare-con-probe:before");
     result = ce_call_delphi_constructor(
-        con_class_ref, module_base + CE_RVA_GENERIC_CTOR_TRAMPOLINE);
+        con_class_ref, module_base + ce_rva(CE_RVA_GENERIC_CTOR_TRAMPOLINE));
     InterlockedExchange(&g_ce_guard_active, 0);
     ce_write_progress(result != 0 ? "bare-con-probe:ok" : "bare-con-probe:returned-null");
     return result;
@@ -2399,10 +2498,10 @@ uint32_t CE_CALL CEAdapterDumpConVmt(uint32_t old_galaxy_ptr, uint32_t turn) {
         !ce_resolve_engine_galaxy(old_galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
         return 0;
     }
-    if (!ce_region_has_access((const void *)(module_base + CE_RVA_TCON_CLASS_CELL), 4u, 0)) {
+    if (!ce_region_has_access((const void *)(module_base + ce_rva(CE_RVA_TCON_CLASS_CELL)), 4u, 0)) {
         return 0;
     }
-    con_class_ref = *(const uint32_t *)(module_base + CE_RVA_TCON_CLASS_CELL);
+    con_class_ref = *(const uint32_t *)(module_base + ce_rva(CE_RVA_TCON_CLASS_CELL));
     if (!ce_region_has_access((const void *)(uintptr_t)(con_class_ref - 0x60u), 0x80u, 0)) {
         return 0;
     }
@@ -2517,13 +2616,13 @@ uint32_t CE_CALL CEAdapterCloneRaceRecords(uint32_t old_galaxy_ptr) {
         if (!ce_region_has_access((const void *)(uintptr_t)old_record, CE_RACE_RECORD_BYTES, 0)) {
             continue;
         }
-        new_record = ce_call_raw_alloc(CE_RACE_RECORD_BYTES, module_base + CE_RVA_RAW_RECORD_ALLOC);
+        new_record = ce_call_raw_alloc(CE_RACE_RECORD_BYTES, module_base + ce_rva(CE_RVA_RAW_RECORD_ALLOC));
         if (new_record == 0 ||
             !ce_region_has_access((const void *)(uintptr_t)new_record, CE_RACE_RECORD_BYTES, 1)) {
             continue;
         }
         memcpy((void *)(uintptr_t)new_record, (const void *)(uintptr_t)old_record, CE_RACE_RECORD_BYTES);
-        ce_call_delphi_method_dword(new_list, new_record, module_base + CE_RVA_LIST_ADD);
+        ce_call_delphi_method_dword(new_list, new_record, module_base + ce_rva(CE_RVA_LIST_ADD));
         ++cloned;
     }
     InterlockedExchange(&g_ce_guard_active, 0);
@@ -2567,10 +2666,10 @@ uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
         !ce_region_has_access((const void *)(uintptr_t)second_galaxy, 0x30u, 0)) {
         return 0;
     }
-    if (!ce_region_has_access((const void *)(module_base + CE_RVA_TCON_CLASS_CELL), 4u, 0)) {
+    if (!ce_region_has_access((const void *)(module_base + ce_rva(CE_RVA_TCON_CLASS_CELL)), 4u, 0)) {
         return 0;
     }
-    con_class_ref = *(const uint32_t *)(module_base + CE_RVA_TCON_CLASS_CELL);
+    con_class_ref = *(const uint32_t *)(module_base + ce_rva(CE_RVA_TCON_CLASS_CELL));
     /* The class-ref cell crashed the constructor on day 1 of a brand new
        game (write access violation inside the engine's own NewInstance),
        most likely because this global isn't populated that early in the
@@ -2602,7 +2701,7 @@ uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
     {
         volatile uint32_t context_saved = 0;
         volatile uint32_t original_context = 0;
-        uintptr_t context_cell = module_base + CE_RVA_CON_CONTEXT_CELL;
+        uintptr_t context_cell = module_base + ce_rva(CE_RVA_CON_CONTEXT_CELL);
 
         if (ce_region_has_access((const void *)context_cell, 4u, 0)) {
             original_context = *(const uint32_t *)context_cell;
@@ -2628,7 +2727,7 @@ uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
             *(uint32_t *)context_cell = 0;
         }
         ce_write_progress("before-construct");
-        new_con = ce_call_delphi_constructor(con_class_ref, module_base + CE_RVA_TCON_CONSTRUCTOR);
+        new_con = ce_call_delphi_constructor(con_class_ref, module_base + ce_rva(CE_RVA_TCON_CONSTRUCTOR));
         ce_write_progress("after-construct");
         if (context_saved && ce_region_has_access((const void *)context_cell, 4u, 1)) {
             *(uint32_t *)context_cell = original_context;
@@ -2662,7 +2761,7 @@ uint32_t CE_CALL CEAdapterCreateSecondDestination(uint32_t old_galaxy_ptr) {
     memcpy((void *)(uintptr_t)(new_con + 0x18u), &ref_y, sizeof(ref_y));
     ce_write_progress("after-position-copy");
 
-    ce_call_delphi_method_dword(con_list, new_con, module_base + CE_RVA_LIST_ADD);
+    ce_call_delphi_method_dword(con_list, new_con, module_base + ce_rva(CE_RVA_LIST_ADD));
     ce_write_progress("after-add");
     InterlockedExchange(&g_ce_guard_active, 0);
     return new_con;
@@ -2702,7 +2801,7 @@ uint32_t CE_CALL CEAdapterProbeNextDayOnSecondGalaxy(uint32_t old_galaxy_ptr) {
     }
     InterlockedExchange(&g_ce_guard_active, 1);
     ce_write_progress("nextday-probe:before");
-    ce_call_delphi_method_byte(second_galaxy, 0u, module_base + CE_RVA_TGALAXY_NEXTDAY);
+    ce_call_delphi_method_byte(second_galaxy, 0u, module_base + ce_rva(CE_RVA_TGALAXY_NEXTDAY));
     ce_write_progress("nextday-probe:after-ok");
     InterlockedExchange(&g_ce_guard_active, 0);
     return 1;
@@ -3039,7 +3138,7 @@ static uint32_t ce_make_immortal_unicode(const wchar_t *text) {
 
 /* Same immortal-refcount idea, but Delphi AnsiString layout: refcount at
    -8, length in BYTES (= chars, 1 byte each) at -4, then the data and a
-   NUL. Needed because CE_RVA_GAME_LOAD_PATH_CELL is an ANSISTRING slot:
+   NUL. Needed because ce_rva(CE_RVA_GAME_LOAD_PATH_CELL) is an ANSISTRING slot:
    TThreadGameLoad.Execute widens it with @WStrFromLStr before calling
    LoadGame (VA 0x0053c97a -> 0x00405f00, which reads the length at
    [src-4] and converts the buffer through MultiByteToWideChar at
@@ -3109,8 +3208,8 @@ static int ce_make_dual_newgame_paths(uintptr_t module_base) {
     static const wchar_t second_name[] = L"CE_Eltan_SecondHome.sav";
 
     if (!ce_region_has_access(
-            (const void *)(module_base + CE_RVA_SAVE_MANAGER_CELL), 4u, 0)) return 0;
-    manager_slot = *(const uint32_t *)(module_base + CE_RVA_SAVE_MANAGER_CELL);
+            (const void *)(module_base + ce_rva(CE_RVA_SAVE_MANAGER_CELL)), 4u, 0)) return 0;
+    manager_slot = *(const uint32_t *)(module_base + ce_rva(CE_RVA_SAVE_MANAGER_CELL));
     if (!ce_region_has_access((const void *)(uintptr_t)manager_slot, 4u, 0)) return 0;
     manager = *(const uint32_t *)(uintptr_t)manager_slot;
     if (manager == 0u || !ce_region_has_access((const void *)(uintptr_t)manager, 4u, 0)) {
@@ -3119,7 +3218,7 @@ static int ce_make_dual_newgame_paths(uintptr_t module_base) {
 
     ce_call_delphi_eax_edx(
         manager, (uint32_t)(uintptr_t)&turn_save_path,
-        module_base + CE_RVA_GET_TURN_SAVE_PATH);
+        module_base + ce_rva(CE_RVA_GET_TURN_SAVE_PATH));
     if (turn_save_path < 8u ||
         !ce_region_has_access((const void *)(uintptr_t)(turn_save_path - 4u), 4u, 0)) {
         return 0;
@@ -3169,16 +3268,16 @@ static int ce_wait_for_save_writer(uintptr_t module_base) {
     uint32_t writer;
     uint32_t running;
     if (!ce_region_has_access(
-            (const void *)(module_base + CE_RVA_SAVE_WRITER_OBJECT), 4u, 0)) return 0;
-    writer = *(const uint32_t *)(module_base + CE_RVA_SAVE_WRITER_OBJECT);
+            (const void *)(module_base + ce_rva(CE_RVA_SAVE_WRITER_OBJECT)), 4u, 0)) return 0;
+    writer = *(const uint32_t *)(module_base + ce_rva(CE_RVA_SAVE_WRITER_OBJECT));
     if (writer == 0u || !ce_region_has_access((const void *)(uintptr_t)writer, 4u, 0)) {
         return 0;
     }
     running = ce_call_delphi_eax_edx(
-        writer, 0u, module_base + CE_RVA_THREAD_IS_RUNNING) & 0xffu;
+        writer, 0u, module_base + ce_rva(CE_RVA_THREAD_IS_RUNNING)) & 0xffu;
     if (running != 0u) {
         ce_call_delphi_eax_edx(
-            writer, 0xffffffffu, module_base + CE_RVA_THREAD_WAIT_FOR);
+            writer, 0xffffffffu, module_base + ce_rva(CE_RVA_THREAD_WAIT_FOR));
     }
     return 1;
 }
@@ -3191,9 +3290,9 @@ static int ce_save_complete_game(
     if (filename == 0u) return 0;
     title_string = ce_make_immortal_unicode(title);
     if (title_string == 0u) return 0;
-    ce_call_delphi_method(0u, module_base + CE_RVA_PREPARE_SAVE_PREVIEWS);
+    ce_call_delphi_method(0u, module_base + ce_rva(CE_RVA_PREPARE_SAVE_PREVIEWS));
     result = ce_call_delphi_eax_edx(
-        filename, title_string, module_base + CE_RVA_SAVE_GAME) & 0xffu;
+        filename, title_string, module_base + ce_rva(CE_RVA_SAVE_GAME)) & 0xffu;
     if (result == 0u) return 0;
     return ce_wait_for_save_writer(module_base);
 }
@@ -3201,17 +3300,17 @@ static int ce_save_complete_game(
 static int ce_load_complete_game(uintptr_t module_base, uint32_t filename) {
     if (filename == 0u) return 0;
     return (ce_call_delphi_eax_edx(
-        filename, 0u, module_base + CE_RVA_LOAD_GAME) & 0xffu) != 0u;
+        filename, 0u, module_base + ce_rva(CE_RVA_LOAD_GAME)) & 0xffu) != 0u;
 }
 
 static int ce_set_native_game_load_path(uintptr_t module_base, uint32_t filename) {
     uint32_t path_slot;
     if (filename == 0u ||
         !ce_region_has_access(
-            (const void *)(module_base + CE_RVA_GAME_LOAD_PATH_CELL), 4u, 0)) {
+            (const void *)(module_base + ce_rva(CE_RVA_GAME_LOAD_PATH_CELL)), 4u, 0)) {
         return 0;
     }
-    path_slot = *(const uint32_t *)(module_base + CE_RVA_GAME_LOAD_PATH_CELL);
+    path_slot = *(const uint32_t *)(module_base + ce_rva(CE_RVA_GAME_LOAD_PATH_CELL));
     if (!ce_region_has_access((void *)(uintptr_t)path_slot, 4u, 1)) return 0;
     /* filename is an immortal Delphi UnicodeString (refcount -1), so direct
        assignment is valid across the asynchronous GameLoad form.  Do not
@@ -3276,11 +3375,11 @@ __attribute__((used)) static void CE_CALL ce_dual_newgame_execute(uint32_t self)
     ce_write_progress("dual-newgame:first:after-execute");
 
     if (!ce_region_has_access(
-            (const void *)(module_base + CE_RVA_GALAXY_IMPORT_CELL), 4u, 0)) {
+            (const void *)(module_base + ce_rva(CE_RVA_GALAXY_IMPORT_CELL)), 4u, 0)) {
         InterlockedExchange(&g_ce_dual_newgame_status, 3);
         goto done;
     }
-    galaxy_slot = *(uint32_t **)(module_base + CE_RVA_GALAXY_IMPORT_CELL);
+    galaxy_slot = *(uint32_t **)(module_base + ce_rva(CE_RVA_GALAXY_IMPORT_CELL));
     if (!ce_region_has_access(galaxy_slot, 4u, 0)) {
         InterlockedExchange(&g_ce_dual_newgame_status, 3);
         goto done;
@@ -3342,8 +3441,8 @@ __attribute__((used)) static void CE_CALL ce_dual_newgame_execute(uint32_t self)
        suspended Delphi TThread from inside another worker is riskier than
        leaking this single process-lifetime object. */
     second_thread = ce_call_delphi_constructor(
-        (uint32_t)(module_base + CE_RVA_NEWGAME_THREAD_CLASS),
-        module_base + CE_RVA_TTHREAD_CONSTRUCTOR);
+        (uint32_t)(module_base + ce_rva(CE_RVA_NEWGAME_THREAD_CLASS)),
+        module_base + ce_rva(CE_RVA_TTHREAD_CONSTRUCTOR));
     if (second_thread == 0u ||
         !ce_region_has_access((void *)(uintptr_t)second_thread,
             CE_NEWGAME_THREAD_INSTANCE_SIZE, 1)) {
@@ -3544,7 +3643,7 @@ static int ce_install_dual_newgame_hook(void) {
         nt->FileHeader.TimeDateStamp != CE_RANGERS_TIMESTAMP ||
         nt->OptionalHeader.SizeOfImage != CE_RANGERS_IMAGE_SIZE) goto fail;
 
-    target = (unsigned char *)(module_base + CE_RVA_NEWGAME_THREAD_EXECUTE);
+    target = (unsigned char *)(module_base + ce_rva(CE_RVA_NEWGAME_THREAD_EXECUTE));
     if (!ce_region_has_access(target, sizeof(execute_signature), 0) ||
         memcmp(target, execute_signature, sizeof(execute_signature)) != 0) goto fail;
     trampoline = (unsigned char *)VirtualAlloc(
@@ -3684,7 +3783,7 @@ static int ce_install_package_file_open_trace_hook(void) {
         &g_ce_package_file_open_hook_installed, -1, 0);
     if (hook_state == 1) return 1;
     if (hook_state != 0 || module_base == 0u) return 0;
-    target = (unsigned char *)(module_base + CE_RVA_PACKAGE_FILE_OPEN);
+    target = (unsigned char *)(module_base + ce_rva(CE_RVA_PACKAGE_FILE_OPEN));
     if (!ce_region_has_access(target, sizeof(signature), 0) ||
         memcmp(target, signature, sizeof(signature)) != 0) goto fail;
     trampoline = (unsigned char *)VirtualAlloc(
@@ -3818,9 +3917,9 @@ static int ce_install_process_exit_trace_hooks(void) {
     if (hook_state == 1) return 1;
     if (hook_state != 0 || module_base == 0u) return 0;
     exit_process_cell =
-        (void **)(module_base + CE_RVA_EXIT_PROCESS_IAT);
+        (void **)(module_base + ce_rva(CE_RVA_EXIT_PROCESS_IAT));
     post_quit_message_cell =
-        (void **)(module_base + CE_RVA_POST_QUIT_MESSAGE_IAT);
+        (void **)(module_base + ce_rva(CE_RVA_POST_QUIT_MESSAGE_IAT));
     if (!ce_region_has_access(exit_process_cell, sizeof(void *), 0) ||
         !ce_region_has_access(post_quit_message_cell, sizeof(void *), 0)) {
         goto fail;
@@ -3948,7 +4047,7 @@ static int ce_install_unhandled_exception_trace_hook(void) {
     if (hook_state == 1) return 1;
     if (hook_state != 0 || module_base == 0u) return 0;
     target = (unsigned char *)(
-        module_base + CE_RVA_DELPHI_UNHANDLED_EXCEPTION);
+        module_base + ce_rva(CE_RVA_DELPHI_UNHANDLED_EXCEPTION));
     if (!ce_region_has_access(target, sizeof(signature), 0) ||
         memcmp(target, signature, sizeof(signature)) != 0) goto fail;
     trampoline = (unsigned char *)VirtualAlloc(
@@ -6036,7 +6135,7 @@ uint32_t CE_CALL CEAdapterPollSecondHomeTransform(
     }
     if (!ce_resolve_engine_galaxy(
             galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) return 0;
-    target = (unsigned char *)(module_base + CE_RVA_TGALAXY_LOAD_FROM_STREAM);
+    target = (unsigned char *)(module_base + ce_rva(CE_RVA_TGALAXY_LOAD_FROM_STREAM));
     hook_state = InterlockedCompareExchange(&g_ce_load_hook_installed, -1, 0);
     if (hook_state == 0) {
         if (memcmp(target, load_signature, sizeof(load_signature)) != 0) {
@@ -6221,7 +6320,7 @@ uint32_t CE_CALL CEAdapterArmGalaxySaveSnapshot(uint32_t galaxy_ptr) {
 
     if (!ce_resolve_engine_galaxy(
             galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) return 0;
-    target = (unsigned char *)(module_base + CE_RVA_TGALAXY_SAVE_TO_STREAM);
+    target = (unsigned char *)(module_base + ce_rva(CE_RVA_TGALAXY_SAVE_TO_STREAM));
     hook_state = InterlockedCompareExchange(&g_ce_save_hook_installed, -1, 0);
     if (hook_state == 0) {
         if (memcmp(target, save_signature, sizeof(save_signature)) != 0) {
@@ -6290,7 +6389,7 @@ uint32_t CE_CALL CEAdapterArmGalaxySaveSnapshot(uint32_t galaxy_ptr) {
    LoadFromStream's ~8.8KB of largely undocumented Delphi bytecode, so it
    is wrapped in the same VEH+setjmp recovery net as every other risky
    engine call in this file (see the TCon constructor fault above) and the
-   CE_RVA_CON_CONTEXT_CELL guard is zeroed for the duration, exactly like
+   ce_rva(CE_RVA_CON_CONTEXT_CELL) guard is zeroed for the duration, exactly like
    the single-TCon-construction case, since LoadFromStream rebuilds many
    TCon-like sub-objects in one call and would touch that same shared
    next-id counter repeatedly. */
@@ -6333,7 +6432,7 @@ uint32_t CE_CALL CEAdapterLoadSnapshotIntoSecondGalaxy(uint32_t galaxy_ptr) {
     {
         volatile uint32_t context_saved = 0;
         volatile uint32_t original_context = 0;
-        uintptr_t context_cell = module_base + CE_RVA_CON_CONTEXT_CELL;
+        uintptr_t context_cell = module_base + ce_rva(CE_RVA_CON_CONTEXT_CELL);
 
         if (ce_region_has_access((const void *)context_cell, 4u, 0)) {
             original_context = *(const uint32_t *)context_cell;
@@ -6355,7 +6454,7 @@ uint32_t CE_CALL CEAdapterLoadSnapshotIntoSecondGalaxy(uint32_t galaxy_ptr) {
             ce_write_progress("load-snapshot:before-call");
             ce_call_delphi_method_dword(
                 second_galaxy, (uint32_t)(uintptr_t)reader_block,
-                module_base + CE_RVA_TGALAXY_LOAD_FROM_STREAM);
+                module_base + ce_rva(CE_RVA_TGALAXY_LOAD_FROM_STREAM));
             ce_write_progress("load-snapshot:after-call");
             if (context_saved && ce_region_has_access((const void *)context_cell, 4u, 1)) {
                 *(uint32_t *)context_cell = original_context;
@@ -6422,7 +6521,7 @@ uint32_t CE_CALL CEAdapterGetRememberedShipStar(void) {
     return (uint32_t)InterlockedCompareExchange(&g_ce_remembered_ship_star, 0, 0);
 }
 
-/* See CE_RVA_STAR_LOOKUP_RAISE_CALL's own comment: this replaces the call
+/* See ce_rva(CE_RVA_STAR_LOOKUP_RAISE_CALL)'s own comment: this replaces the call
    to System.@RaiseExcept at the exact point the "find star by id" lookup
    (VA 0x00841e60) gives up, with a small stub that logs and returns
    normally instead. The lookup's own local result slot is already 0 at
@@ -6497,7 +6596,7 @@ static uint32_t ce_install_raise_recovery_patch(
 
 uint32_t CE_CALL CEAdapterInstallStarLookupRecovery(uint32_t galaxy_ptr) {
 #if defined(__i386__)
-    return ce_install_raise_recovery_patch(galaxy_ptr, CE_RVA_STAR_LOOKUP_RAISE_CALL,
+    return ce_install_raise_recovery_patch(galaxy_ptr, ce_rva(CE_RVA_STAR_LOOKUP_RAISE_CALL),
         ce_star_lookup_recover_hook, &g_ce_star_lookup_hook_installed);
 #else
     (void)galaxy_ptr;
@@ -6526,7 +6625,7 @@ uint32_t CE_CALL CEAdapterInstallStarLookupRecovery(uint32_t galaxy_ptr) {
    day-skip already does, regardless of which inner check actually failed. */
 uint32_t CE_CALL CEAdapterInstallDayProcessRecovery(uint32_t galaxy_ptr) {
 #if defined(__i386__)
-    return ce_install_raise_recovery_patch(galaxy_ptr, CE_RVA_DAY_PROCESS_RAISE_CALL,
+    return ce_install_raise_recovery_patch(galaxy_ptr, ce_rva(CE_RVA_DAY_PROCESS_RAISE_CALL),
         ce_star_lookup_recover_hook, &g_ce_day_process_hook_installed);
 #else
     (void)galaxy_ptr;
@@ -6556,10 +6655,10 @@ __attribute__((naked)) static void ce_nextday_label3_recover_hook(void) {
 }
 #endif
 
-/* See CE_RVA_NEXTDAY_LABEL3_RAISE_CALL's own comment. */
+/* See ce_rva(CE_RVA_NEXTDAY_LABEL3_RAISE_CALL)'s own comment. */
 uint32_t CE_CALL CEAdapterInstallNextDayLabel3Recovery(uint32_t galaxy_ptr) {
 #if defined(__i386__)
-    return ce_install_raise_recovery_patch(galaxy_ptr, CE_RVA_NEXTDAY_LABEL3_RAISE_CALL,
+    return ce_install_raise_recovery_patch(galaxy_ptr, ce_rva(CE_RVA_NEXTDAY_LABEL3_RAISE_CALL),
         ce_nextday_label3_recover_hook, &g_ce_nextday_label3_hook_installed);
 #else
     (void)galaxy_ptr;
@@ -6567,7 +6666,7 @@ uint32_t CE_CALL CEAdapterInstallNextDayLabel3Recovery(uint32_t galaxy_ptr) {
 #endif
 }
 
-/* See CE_RVA_DAY_COUNTER_CHECK's own comment. Unlike the three raise-call
+/* See ce_rva(CE_RVA_DAY_COUNTER_CHECK)'s own comment. Unlike the three raise-call
    patches above, this is not a CALL site with a safe "just fall through"
    continuation -- it is a conditional branch that needs to land on one of
    two different existing addresses depending on a runtime check, so it
@@ -6637,7 +6736,7 @@ uint32_t CE_CALL CEAdapterInstallDayCounterGuard(uint32_t galaxy_ptr) {
         InterlockedExchange(&g_ce_day_counter_hook_installed, 0);
         return 0;
     }
-    target = (unsigned char *)(module_base + CE_RVA_DAY_COUNTER_CHECK);
+    target = (unsigned char *)(module_base + ce_rva(CE_RVA_DAY_COUNTER_CHECK));
     if (memcmp(target, expected, sizeof(expected)) != 0) {
         InterlockedExchange(&g_ce_day_counter_hook_installed, 0);
         return 0;
@@ -6663,7 +6762,7 @@ uint32_t CE_CALL CEAdapterInstallDayCounterGuard(uint32_t galaxy_ptr) {
 }
 #endif
 
-/* See CE_RVA_LOADGAME_RAISE_CANNOT_OPEN's comment. Records which LoadGame
+/* See ce_rva(CE_RVA_LOADGAME_RAISE_CANNOT_OPEN)'s comment. Records which LoadGame
    validation rejected the save, plus the filename LoadGame itself was given
    (read out of its own still-live frame), then falls through to the real
    raise so the engine's behaviour is unchanged. */
@@ -6748,13 +6847,13 @@ __attribute__((used)) static void CE_CALL ce_loadgame_result_body(uint32_t resul
     char payload[224];
     int size;
     if (ce_region_has_access(
-            (const void *)(module_base + CE_RVA_GALAXY_IMPORT_CELL), 4u, 0)) {
-        uint32_t cell = *(const uint32_t *)(module_base + CE_RVA_GALAXY_IMPORT_CELL);
+            (const void *)(module_base + ce_rva(CE_RVA_GALAXY_IMPORT_CELL)), 4u, 0)) {
+        uint32_t cell = *(const uint32_t *)(module_base + ce_rva(CE_RVA_GALAXY_IMPORT_CELL));
         if (ce_region_has_access((const void *)(uintptr_t)cell, 4u, 0)) {
             galaxy = *(const uint32_t *)(uintptr_t)cell;
         }
     }
-    /* See CE_RVA_FORM_NEXT_CELL: a load the player started from inside the
+    /* See ce_rva(CE_RVA_FORM_NEXT_CELL): a load the player started from inside the
        game leaves nothing queued, so the engine ends its message loop and
        halts cleanly. Queue StarMap ourselves, but only for this mod's own
        portal load -- a normal menu load already queues its own follow-up
@@ -6762,8 +6861,8 @@ __attribute__((used)) static void CE_CALL ce_loadgame_result_body(uint32_t resul
     pending = InterlockedExchange(&g_ce_portal_load_pending, 0);
     if ((result & 0xffu) != 0u && pending != 0 &&
             ce_region_has_access(
-                (const void *)(module_base + CE_RVA_FORM_NEXT_CELL), 4u, 0)) {
-        uint32_t slot = *(const uint32_t *)(module_base + CE_RVA_FORM_NEXT_CELL);
+                (const void *)(module_base + ce_rva(CE_RVA_FORM_NEXT_CELL)), 4u, 0)) {
+        uint32_t slot = *(const uint32_t *)(module_base + ce_rva(CE_RVA_FORM_NEXT_CELL));
         if (ce_region_has_access((void *)(uintptr_t)slot, 1u, 1)) {
             previous_form = *(const unsigned char *)(uintptr_t)slot;
             *(unsigned char *)(uintptr_t)slot = (unsigned char)CE_FORM_INDEX_STARMAP;
@@ -6832,15 +6931,15 @@ uint32_t CE_CALL CEAdapterInstallLoadGameDiagnostics(uint32_t galaxy_ptr) {
         return 0;
     }
     installed += ce_patch_loadgame_call(module_base,
-        CE_RVA_LOADGAME_RAISE_CANNOT_OPEN, ce_loadgame_diag_cannot_open);
+        ce_rva(CE_RVA_LOADGAME_RAISE_CANNOT_OPEN), ce_loadgame_diag_cannot_open);
     installed += ce_patch_loadgame_call(module_base,
-        CE_RVA_LOADGAME_RAISE_BAD_PRE_SIG, ce_loadgame_diag_bad_pre_sig);
+        ce_rva(CE_RVA_LOADGAME_RAISE_BAD_PRE_SIG), ce_loadgame_diag_bad_pre_sig);
     installed += ce_patch_loadgame_call(module_base,
-        CE_RVA_LOADGAME_RAISE_BAD_POST_SIG, ce_loadgame_diag_bad_post_sig);
+        ce_rva(CE_RVA_LOADGAME_RAISE_BAD_POST_SIG), ce_loadgame_diag_bad_post_sig);
     installed += ce_patch_loadgame_call(module_base,
-        CE_RVA_LOADGAME_RAISE_GALAXY_READ, ce_loadgame_diag_galaxy_read);
+        ce_rva(CE_RVA_LOADGAME_RAISE_GALAXY_READ), ce_loadgame_diag_galaxy_read);
     installed += ce_patch_loadgame_call(module_base,
-        CE_RVA_LOADGAME_CALL_IN_THREAD, ce_loadgame_result_hook);
+        ce_rva(CE_RVA_LOADGAME_CALL_IN_THREAD), ce_loadgame_result_hook);
     /* The form-gate patch that used to go here is gone: it never fired in a
        live transit, and its host function turned out to pick music, not
        forms. Queueing GFormNext from the result hook replaces it. */
@@ -6992,7 +7091,7 @@ uint32_t CE_CALL CEAdapterLoadPlayerStash(void) {
 }
 
 #if defined(__i386__)
-/* See CE_RVA_POST_NEXTDAY_PASS. Steals the 6-byte prologue
+/* See ce_rva(CE_RVA_POST_NEXTDAY_PASS). Steals the 6-byte prologue
    (push ebp; mov ebp,esp; add esp,-0x1c) and re-emits it after the check. */
 __attribute__((used)) static void CE_CALL ce_post_nextday_null_body(void) {
     ce_write_progress("post-nextday:skipped-null-galaxy");
@@ -7031,7 +7130,7 @@ uint32_t CE_CALL CEAdapterInstallPostNextDayGuard(uint32_t galaxy_ptr) {
         InterlockedExchange(&g_ce_post_nextday_guard_installed, 0);
         return 0u;
     }
-    target = (unsigned char *)(module_base + CE_RVA_POST_NEXTDAY_PASS);
+    target = (unsigned char *)(module_base + ce_rva(CE_RVA_POST_NEXTDAY_PASS));
     if (memcmp(target, expected, sizeof(expected)) != 0) {
         InterlockedExchange(&g_ce_post_nextday_guard_installed, 0);
         return 0u;
@@ -7057,7 +7156,7 @@ uint32_t CE_CALL CEAdapterInstallPostNextDayGuard(uint32_t galaxy_ptr) {
 }
 #endif
 
-/* See CE_RVA_SECTOR_COUNT_IMMEDIATE. Rewrites the compiled-in sector count
+/* See ce_rva(CE_RVA_SECTOR_COUNT_IMMEDIATE). Rewrites the compiled-in sector count
    so the next galaxy the engine builds gets more constellations. Refuses
    counts the name pool cannot cover -- Constellations.Name currently ends at
    44, and unnamed sectors are worse than fewer sectors. */
@@ -7075,7 +7174,7 @@ uint32_t CE_CALL CEAdapterSetSectorCount(uint32_t galaxy_ptr, uint32_t count) {
     if (!ce_resolve_engine_galaxy(galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref)) {
         return 0u;
     }
-    target = (unsigned char *)(module_base + CE_RVA_SECTOR_COUNT_IMMEDIATE);
+    target = (unsigned char *)(module_base + ce_rva(CE_RVA_SECTOR_COUNT_IMMEDIATE));
     memcpy(&previous, target, sizeof(previous));
     if (previous == count) return 1u;
     /* Only ever rewrite what still looks like the stock value or a value this
@@ -7150,8 +7249,8 @@ uint32_t CE_CALL CEAdapterRequestStarMapReenter(void) {
     int size;
     if (module_base == 0) return 0u;
     if (!ce_region_has_access(
-            (const void *)(module_base + CE_RVA_FORM_NEXT_CELL), 4u, 0)) return 0u;
-    slot = *(const uint32_t *)(module_base + CE_RVA_FORM_NEXT_CELL);
+            (const void *)(module_base + ce_rva(CE_RVA_FORM_NEXT_CELL)), 4u, 0)) return 0u;
+    slot = *(const uint32_t *)(module_base + ce_rva(CE_RVA_FORM_NEXT_CELL));
     if (!ce_region_has_access((void *)(uintptr_t)slot, 1u, 1)) return 0u;
     before = *(const unsigned char *)(uintptr_t)slot;
     /* A non-zero byte means the engine has already queued a form of its own and
@@ -7165,15 +7264,15 @@ uint32_t CE_CALL CEAdapterRequestStarMapReenter(void) {
         written = 1;
     }
     if (ce_region_has_access(
-            (const void *)(module_base + CE_RVA_FORM_ENTERING_CELL), 4u, 0)) {
-        uint32_t cell = *(const uint32_t *)(module_base + CE_RVA_FORM_ENTERING_CELL);
+            (const void *)(module_base + ce_rva(CE_RVA_FORM_ENTERING_CELL)), 4u, 0)) {
+        uint32_t cell = *(const uint32_t *)(module_base + ce_rva(CE_RVA_FORM_ENTERING_CELL));
         if (ce_region_has_access((const void *)(uintptr_t)cell, 1u, 0)) {
             entering = (int)*(const unsigned char *)(uintptr_t)cell;
         }
     }
     if (ce_region_has_access(
-            (const void *)(module_base + CE_RVA_FORM_SETTLED_CELL), 4u, 0)) {
-        uint32_t cell = *(const uint32_t *)(module_base + CE_RVA_FORM_SETTLED_CELL);
+            (const void *)(module_base + ce_rva(CE_RVA_FORM_SETTLED_CELL)), 4u, 0)) {
+        uint32_t cell = *(const uint32_t *)(module_base + ce_rva(CE_RVA_FORM_SETTLED_CELL));
         if (ce_region_has_access((const void *)(uintptr_t)cell, 1u, 0)) {
             settled = (int)*(const unsigned char *)(uintptr_t)cell;
         }
@@ -7249,23 +7348,23 @@ uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr) {
     if (InterlockedCompareExchange(&g_ce_snapshot_lock, 1, 0) != 0) return 0;
     if (!ce_resolve_engine_galaxy(
             galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref) ||
-        memcmp((const void *)(module_base + CE_RVA_TGALAXY_SAVE_TO_STREAM),
+        memcmp((const void *)(module_base + ce_rva(CE_RVA_TGALAXY_SAVE_TO_STREAM)),
             save_signature, sizeof(save_signature)) != 0 ||
-        memcmp((const void *)(module_base + CE_RVA_BUFFER_CONSTRUCTOR),
+        memcmp((const void *)(module_base + ce_rva(CE_RVA_BUFFER_CONSTRUCTOR)),
             buffer_ctor_signature, sizeof(buffer_ctor_signature)) != 0 ||
         !ce_region_has_access(
-            (const void *)(module_base + CE_RVA_BUFFER_CLASS_CELL), 4u, 0)) {
+            (const void *)(module_base + ce_rva(CE_RVA_BUFFER_CLASS_CELL)), 4u, 0)) {
         InterlockedExchange(&g_ce_snapshot_lock, 0);
         return 0;
     }
 
-    buffer_class_ref = *(const uint32_t *)(module_base + CE_RVA_BUFFER_CLASS_CELL);
+    buffer_class_ref = *(const uint32_t *)(module_base + ce_rva(CE_RVA_BUFFER_CLASS_CELL));
     if (!ce_region_has_access((const void *)(uintptr_t)buffer_class_ref, 4u, 0)) {
         InterlockedExchange(&g_ce_snapshot_lock, 0);
         return 0;
     }
     buffer = ce_call_delphi_constructor(
-        buffer_class_ref, module_base + CE_RVA_BUFFER_CONSTRUCTOR
+        buffer_class_ref, module_base + ce_rva(CE_RVA_BUFFER_CONSTRUCTOR)
     );
     if (buffer == 0 || !ce_region_has_access((const void *)(uintptr_t)buffer, 0x14u, 1)) {
         InterlockedExchange(&g_ce_snapshot_lock, 0);
@@ -7273,7 +7372,7 @@ uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr) {
     }
 
     ce_call_delphi_method_dword(
-        galaxy_ptr, buffer, module_base + CE_RVA_TGALAXY_SAVE_TO_STREAM
+        galaxy_ptr, buffer, module_base + ce_rva(CE_RVA_TGALAXY_SAVE_TO_STREAM)
     );
     length = *(const uint32_t *)(uintptr_t)(buffer + 0x04u);
     capacity = *(const uint32_t *)(uintptr_t)(buffer + 0x08u);
@@ -7282,7 +7381,7 @@ uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr) {
     if (length == 0 || length > capacity || position != length ||
         length > 256u * 1024u * 1024u ||
         !ce_region_has_access((const void *)(uintptr_t)data, length, 0)) {
-        ce_call_delphi_method(buffer, module_base + CE_RVA_TOBJECT_FREE);
+        ce_call_delphi_method(buffer, module_base + ce_rva(CE_RVA_TOBJECT_FREE));
         InterlockedExchange(&g_ce_snapshot_lock, 0);
         return 0;
     }
@@ -7304,14 +7403,14 @@ uint32_t CE_CALL CEAdapterSnapshotGalaxy(uint32_t galaxy_ptr) {
     if (report_size > 0) {
         ce_write_text_marker("galaxy-snapshot.jsonl", report, (size_t)report_size);
     }
-    ce_call_delphi_method(buffer, module_base + CE_RVA_TOBJECT_FREE);
+    ce_call_delphi_method(buffer, module_base + ce_rva(CE_RVA_TOBJECT_FREE));
     if (wrote_temp) InterlockedExchange(&g_ce_snapshot_done, 1);
     InterlockedExchange(&g_ce_snapshot_lock, 0);
     return wrote_temp ? 1u : 0u;
 }
 
 /* CEAdapterSnapshotGalaxy above already proves this exact shape works --
-   construct a real buffer object (CE_RVA_BUFFER_CLASS_CELL/CONSTRUCTOR),
+   construct a real buffer object (ce_rva(CE_RVA_BUFFER_CLASS_CELL)/CONSTRUCTOR),
    call TGalaxy.SaveToStream on it DIRECTLY (not via the passive hook that
    only fires when the ENGINE itself happens to save), read the result,
    free the buffer -- but it is one-shot-forever (g_ce_snapshot_done) and
@@ -7359,15 +7458,15 @@ uint32_t CE_CALL CEAdapterCaptureFreshSnapshot(uint32_t galaxy_ptr) {
        never captured anything (no log line at all, since the signature
        memcmp failed before any of the real work or logging below). */
     if (!ce_resolve_engine_galaxy(galaxy_ptr, &module_base, &galaxy_slot, &unused_class_ref) ||
-        memcmp((const void *)(module_base + CE_RVA_BUFFER_CONSTRUCTOR),
+        memcmp((const void *)(module_base + ce_rva(CE_RVA_BUFFER_CONSTRUCTOR)),
             buffer_ctor_signature, sizeof(buffer_ctor_signature)) != 0 ||
         !ce_region_has_access(
-            (const void *)(module_base + CE_RVA_BUFFER_CLASS_CELL), 4u, 0)) {
+            (const void *)(module_base + ce_rva(CE_RVA_BUFFER_CLASS_CELL)), 4u, 0)) {
         ce_write_progress("capture-fresh-snapshot:abort:validation-failed");
         InterlockedExchange(&g_ce_fresh_snapshot_lock, 0);
         return 0;
     }
-    buffer_class_ref = *(const uint32_t *)(module_base + CE_RVA_BUFFER_CLASS_CELL);
+    buffer_class_ref = *(const uint32_t *)(module_base + ce_rva(CE_RVA_BUFFER_CLASS_CELL));
     if (!ce_region_has_access((const void *)(uintptr_t)buffer_class_ref, 4u, 0)) {
         ce_write_progress("capture-fresh-snapshot:abort:bad-class-ref");
         InterlockedExchange(&g_ce_fresh_snapshot_lock, 0);
@@ -7384,7 +7483,7 @@ uint32_t CE_CALL CEAdapterCaptureFreshSnapshot(uint32_t galaxy_ptr) {
     InterlockedExchange(&g_ce_guard_active, 1);
 
     buffer = ce_call_delphi_constructor(
-        buffer_class_ref, module_base + CE_RVA_BUFFER_CONSTRUCTOR);
+        buffer_class_ref, module_base + ce_rva(CE_RVA_BUFFER_CONSTRUCTOR));
     if (buffer == 0 || !ce_region_has_access((const void *)(uintptr_t)buffer, 0x14u, 1)) {
         InterlockedExchange(&g_ce_guard_active, 0);
         InterlockedExchange(&g_ce_fresh_snapshot_lock, 0);
@@ -7392,7 +7491,7 @@ uint32_t CE_CALL CEAdapterCaptureFreshSnapshot(uint32_t galaxy_ptr) {
     }
 
     ce_call_delphi_method_dword(
-        galaxy_ptr, buffer, module_base + CE_RVA_TGALAXY_SAVE_TO_STREAM);
+        galaxy_ptr, buffer, module_base + ce_rva(CE_RVA_TGALAXY_SAVE_TO_STREAM));
 
     length = *(const uint32_t *)(uintptr_t)(buffer + 0x04u);
     capacity = *(const uint32_t *)(uintptr_t)(buffer + 0x08u);
@@ -7411,7 +7510,7 @@ uint32_t CE_CALL CEAdapterCaptureFreshSnapshot(uint32_t galaxy_ptr) {
             "galaxy-save-snapshot.jsonl", report, (size_t)report_size);
     }
 
-    ce_call_delphi_method(buffer, module_base + CE_RVA_TOBJECT_FREE);
+    ce_call_delphi_method(buffer, module_base + ce_rva(CE_RVA_TOBJECT_FREE));
     InterlockedExchange(&g_ce_guard_active, 0);
     InterlockedExchange(&g_ce_fresh_snapshot_lock, 0);
     /* Invalidate the one-shot "already loaded" guard on the second galaxy's
