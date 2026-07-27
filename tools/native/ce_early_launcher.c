@@ -71,8 +71,8 @@ static int ce_find_adapter(
     wchar_t candidate[CE_PATH_CAPACITY];
     static const wchar_t *relative_candidates[] = {
         L"DATA\\CESecondMapAdapter.dll",
-        L"Mods\\ChildrenOfEltan\\ChildrenOfEltan\\DATA\\CESecondMapAdapter.dll",
-        L"Mods\\ChildrenOfEltan\\ChildrenOfEltan\\DATA\\CESecondMapAdapter.dll"
+        L"Mods\\ChildrenOfEltan\\DATA\\CESecondMapAdapter.dll",
+        L"Mods\\ChildrenOfEltan\\DATA\\CESecondMapAdapter.dll"
     };
     size_t index;
 

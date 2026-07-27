@@ -1,11 +1,11 @@
 Script ^{
-    CE_MapSmoke=Mods\ChildrenOfEltan\ChildrenOfEltan\DATA\Script\CE_MapSmoke.scr
+    CE_MapSmoke=Mods\ChildrenOfEltan\DATA\Script\CE_MapSmoke.scr
 }
 Bm ^{
     FormGalaxy2 ^{
-        CESecondHomeBg=Mods\ChildrenOfEltan\ChildrenOfEltan\DATA\ChildrenOfEltan\SecondHomeMap.gi
+        CESecondHomeBg=Mods\ChildrenOfEltan\DATA\ChildrenOfEltan\SecondHomeMap.gi
     }
     ItemsUseless ^{
-        2CE_Item_TwinHomeAnchor_s=Mods\ChildrenOfEltan\ChildrenOfEltan\DATA\ChildrenOfEltan\TwinHomeAnchor.gi
+        2CE_Item_TwinHomeAnchor_s=Mods\ChildrenOfEltan\DATA\ChildrenOfEltan\TwinHomeAnchor.gi
     }
 }

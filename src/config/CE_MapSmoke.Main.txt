@@ -204,7 +204,7 @@ Data ^{
     }
     ScriptLibs ^{
         CESecondMapAdapter ^{
-            Path=Mods\ChildrenOfEltan\ChildrenOfEltan\DATA\CESecondMapAdapter.dll
+            Path=Mods\ChildrenOfEltan\DATA\CESecondMapAdapter.dll
             CEAdapterAbiVersion=dword,CEAdapterAbiVersion
             CEAdapterCapabilities=dword,CEAdapterCapabilities
             CEAdapterBindGalaxy=dword,CEAdapterBindGalaxy,dword
