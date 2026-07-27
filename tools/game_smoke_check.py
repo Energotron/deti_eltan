@@ -103,8 +103,13 @@ def preflight(module: Path) -> int:
         module / "CFG" / "Rus" / "Lang.dat",
         module / "DATA" / "CESecondMapAdapter.dll",
         module / "DATA" / "Script" / "CE_MapSmoke.scr",
-        module / "ChildrenOfEltan.pkg",
     ]
+    # No ChildrenOfEltan.pkg here any more. 6d5d11e dropped the package
+    # because the mod manager would not take the module while it carried one;
+    # the script travels loose, the way every Universe module does. This list
+    # kept asking for it, so a build over a clean dist/ failed its own final
+    # gate -- and passed only on a machine still carrying a package left over
+    # from before that commit.
     missing = [str(path) for path in required if not path.is_file() or path.stat().st_size == 0]
     if missing:
         print("FAIL: missing module files:\n" + "\n".join(missing))
