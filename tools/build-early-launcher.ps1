@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$ToolchainRoot = "",
-    [string]$OutputRoot = ""
+    [string]$OutputRoot = "",
+    [string]$IconExe = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,9 +24,42 @@ foreach ($required in @($compiler, $objdump, $source)) {
     }
 }
 New-Item -ItemType Directory -Path $OutputRoot -Force | Out-Null
-& $compiler --target=i686-w64-windows-gnu -std=c11 -O2 -Wall -Wextra -Werror `
-    -municode -mwindows $source -o $launcher
+
+# The launcher is its own process, so Windows draws it with the generic
+# application icon while the game it starts carries its own. Borrow the game's,
+# taken from the installed executable at build time rather than committed here:
+# it is the game's artwork, and this repository has no business shipping a copy.
+# Without a game to read it from the launcher simply builds without one.
+$iconObject = ""
+if (-not [string]::IsNullOrWhiteSpace($IconExe) -and (Test-Path -LiteralPath $IconExe)) {
+    $stage = Join-Path ([IO.Path]::GetTempPath()) ("ce-launcher-icon-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+    $icoPath = Join-Path $stage "launcher.ico"
+    & python (Join-Path $PSScriptRoot "extract_exe_icon.py") $IconExe $icoPath
+    if ($LASTEXITCODE -ne 0) { throw "Icon extraction failed for $IconExe" }
+    $rcPath = Join-Path $stage "launcher.rc"
+    [IO.File]::WriteAllText($rcPath, "1 ICON `"launcher.ico`"`r`n", [Text.Encoding]::ASCII)
+    $iconObject = Join-Path $stage "launcher_icon.o"
+    $windres = Join-Path $ToolchainRoot "bin\i686-w64-mingw32-windres.exe"
+    if (-not (Test-Path -LiteralPath $windres)) { throw "Missing resource compiler: $windres" }
+    & $windres --input-format=rc --output-format=coff --target=pe-i386 `
+        -I $stage $rcPath $iconObject
+    if ($LASTEXITCODE -ne 0) { throw "Resource compilation failed" }
+}
+
+$compileArgs = @(
+    "--target=i686-w64-windows-gnu", "-std=c11", "-O2",
+    "-Wall", "-Wextra", "-Werror", "-municode", "-mwindows", $source
+)
+if ($iconObject -ne "") { $compileArgs += $iconObject }
+$compileArgs += @("-o", $launcher)
+& $compiler @compileArgs
 if ($LASTEXITCODE -ne 0) { throw "Early launcher compilation failed" }
+if ($iconObject -ne "") {
+    Remove-Item -LiteralPath (Split-Path -Parent $iconObject) -Recurse -Force -ErrorAction SilentlyContinue
+    $resources = (& $objdump -h $launcher) -join "`n"
+    if ($resources -notmatch "\.rsrc") { throw "Launcher was built without its icon resource" }
+}
 
 $machineLine = & $objdump -f $launcher | Select-String "architecture: i386"
 if (-not $machineLine) { throw "Early launcher is not PE32/i386" }

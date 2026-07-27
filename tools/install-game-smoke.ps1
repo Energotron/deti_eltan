@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$GameRoot,
@@ -14,7 +14,7 @@ $target = Join-Path $modsRoot "ChildrenOfEltanSmoke"
 if (-not (Test-Path -LiteralPath (Join-Path $GameRoot "Rangers.exe"))) {
     throw "Rangers.exe not found under: $GameRoot"
 }
-& (Join-Path $PSScriptRoot "build-game-smoke.ps1") -OutputRoot $source
+& (Join-Path $PSScriptRoot "build-game-smoke.ps1") -OutputRoot $source -GameRoot $GameRoot
 if ($LASTEXITCODE -ne 0) { throw "Smoke build failed" }
 Write-Output "Dry run: source=$source"
 Write-Output "Dry run: target=$target"

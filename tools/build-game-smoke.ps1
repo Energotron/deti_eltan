@@ -1,6 +1,7 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
-    [string]$OutputRoot = ""
+    [string]$OutputRoot = "",
+    [string]$GameRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,7 +42,11 @@ Copy-Item -LiteralPath $sourceAnchorIcon `
 
 & (Join-Path $PSScriptRoot "build-engine-adapter.ps1") -OutputRoot $dataRoot
 if ($LASTEXITCODE -ne 0) { throw "Engine adapter build failed" }
-& (Join-Path $PSScriptRoot "build-early-launcher.ps1") -OutputRoot $OutputRoot
+$launcherIconExe = ""
+if (-not [string]::IsNullOrWhiteSpace($GameRoot)) {
+    $launcherIconExe = Join-Path $GameRoot "Rangers.exe"
+}
+& (Join-Path $PSScriptRoot "build-early-launcher.ps1") -OutputRoot $OutputRoot -IconExe $launcherIconExe
 if ($LASTEXITCODE -ne 0) { throw "Early launcher build failed" }
 
 # RScript treats ' as a string delimiter inside // comments too, so a comment
