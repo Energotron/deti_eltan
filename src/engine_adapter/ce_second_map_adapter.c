@@ -7007,17 +7007,15 @@ __attribute__((used)) static void CE_CALL ce_loadgame_result_body(uint32_t resul
         uint32_t slot = *(const uint32_t *)(module_base + ce_rva(CE_RVA_FORM_NEXT_CELL));
         if (ce_region_has_access((void *)(uintptr_t)slot, 1u, 1)) {
             previous_form = *(const unsigned char *)(uintptr_t)slot;
-            /* Only into an empty slot. A load that leaves nothing queued is the
-               one that needs help; a load with a form already waiting is the
-               engine going somewhere on its own business, and taking that away
-               is how a hyperspace jump turned into a loop -- it kept arriving
-               and being sent back to load again while the days went by. Four
-               was what it wanted, sixteen was what we gave it. */
-            if (previous_form == 0) {
-                *(unsigned char *)(uintptr_t)slot =
-                    (unsigned char)CE_FORM_INDEX_STARMAP;
-                queued = 1;
-            }
+            /* Force the star map, but only for a load this mod started -- which
+               is what portal_pending above already means. Refusing to write
+               over a form the engine had queued sounded right and was not: the
+               engine queues the hangar behind a jump into the hole, so the
+               traveller was shown a launch bay instead of the second arm. The
+               hyperspace loop this was aimed at is a stale pending flag, and
+               that is cleared where it is set, not by second-guessing here. */
+            *(unsigned char *)(uintptr_t)slot = (unsigned char)CE_FORM_INDEX_STARMAP;
+            queued = 1;
         }
     }
     size = snprintf(payload, sizeof(payload),
