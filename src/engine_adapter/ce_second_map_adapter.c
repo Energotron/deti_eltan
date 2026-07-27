@@ -6608,6 +6608,13 @@ uint32_t CE_CALL CEAdapterRenameSecondGalaxySystems(uint32_t second_galaxy_ptr) 
         *(uint32_t *)(uintptr_t)(object + 0x10u) = new_name;
         ++renamed;
     }
+    {
+        char note[160];
+        int size = snprintf(note, sizeof(note),
+            "{\"status\":\"systems-renamed\",\"count\":%lu,\"of\":%lu}\r\n",
+            (unsigned long)renamed, (unsigned long)con_count);
+        if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", note, (size_t)size);
+    }
     return renamed;
 }
 
