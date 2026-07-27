@@ -7104,6 +7104,7 @@ uint32_t CE_CALL CEAdapterRequestStarMapReenter(void) {
     unsigned char before = 0xffu;
     int entering = -1;
     int settled = -1;
+    int written = 0;
     char payload[192];
     int size;
     if (module_base == 0) return 0u;
@@ -7112,7 +7113,16 @@ uint32_t CE_CALL CEAdapterRequestStarMapReenter(void) {
     slot = *(const uint32_t *)(module_base + CE_RVA_FORM_NEXT_CELL);
     if (!ce_region_has_access((void *)(uintptr_t)slot, 1u, 1)) return 0u;
     before = *(const unsigned char *)(uintptr_t)slot;
-    *(unsigned char *)(uintptr_t)slot = (unsigned char)CE_FORM_INDEX_STARMAP;
+    /* A non-zero byte means the engine has already queued a form of its own and
+       has not reached it yet. Overwriting that is how the return leg ended up
+       showing the map while the game still had the player docked: the engine
+       was on its way to another form and this quietly cancelled it. An
+       already-queued transition rebuilds the screen anyway, so there is
+       nothing to add -- leave it alone and say so in the log. */
+    if (before == 0u) {
+        *(unsigned char *)(uintptr_t)slot = (unsigned char)CE_FORM_INDEX_STARMAP;
+        written = 1;
+    }
     if (ce_region_has_access(
             (const void *)(module_base + CE_RVA_FORM_ENTERING_CELL), 4u, 0)) {
         uint32_t cell = *(const uint32_t *)(module_base + CE_RVA_FORM_ENTERING_CELL);
@@ -7129,10 +7139,10 @@ uint32_t CE_CALL CEAdapterRequestStarMapReenter(void) {
     }
     size = snprintf(payload, sizeof(payload),
         "{\"status\":\"starmap-reenter\",\"pending_before\":%d,"
-        "\"entering\":%d,\"settled\":%d}\r\n",
-        (int)before, entering, settled);
+        "\"entering\":%d,\"settled\":%d,\"written\":%d}\r\n",
+        (int)before, entering, settled, written);
     if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", payload, (size_t)size);
-    return 1u;
+    return (uint32_t)written;
 }
 
 uint32_t CE_CALL CEAdapterStashItemsBegin(void) {
