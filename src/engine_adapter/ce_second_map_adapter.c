@@ -4509,7 +4509,11 @@ uint32_t CE_CALL CEAdapterArmPendingArrival(uint32_t entering) {
        the captain's money and skills were written to the departing player
        and the arrival hole was opened in the departing galaxy. One tick
        lets the load happen first, and Turn-code runs again right after it. */
-    InterlockedExchange(&g_ce_pending_arrival_ticks, 1);
+    /* No delay at all. The poll now sits above the block that arms this, so
+       the first pass after the load is the one that fires. A single tick of
+       grace was enough to lose it: the portal kept completing on every turn
+       and re-arming, and the countdown never reached zero. */
+    InterlockedExchange(&g_ce_pending_arrival_ticks, 0);
     return 1u;
 }
 
