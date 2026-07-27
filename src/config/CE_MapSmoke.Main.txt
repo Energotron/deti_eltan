@@ -49,6 +49,23 @@ ML ^{
                     }
                 }
             }
+            Panel ^{
+            }
+            Panel ^{
+                Panel ^{
+                    CESecondHomeSky ^{
+                        Image ^{
+                            Active=False
+                            Image=GI,Bm.FormGalaxy2.CESecondHomeBg
+                            KindX=Center
+                            KindY=Center
+                            Name=CESecondHomeBackdrop
+                            Pos=0,0,999
+                            Size=768,527
+                        }
+                    }
+                }
+            }
         }
     }
     Ship ^{
