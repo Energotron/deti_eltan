@@ -29,7 +29,6 @@ $outputText = Join-Path $langRoot "CE_MapSmoke.txt"
 $outputMain = Join-Path $cfgRoot "Main.dat"
 $outputLang = Join-Path $langRoot "Lang.dat"
 $outputCache = Join-Path $cfgRoot "CacheData.dat"
-$outputPackage = Join-Path $OutputRoot "ChildrenOfEltan.pkg"
 
 foreach ($required in @($rscript, $blockPar, $sourceRson, $sourceMain, $sourceLang, $sourcePortalLang, $sourceTransitLang, $sourceCache, $sourceMapBackground, $sourceAnchorIcon)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Missing required file: $required" }
