@@ -882,6 +882,14 @@ enum {
     CE_RVA_SECTOR_COUNT_IMMEDIATE = 0x004394d1u,
     CE_RVA_POST_NEXTDAY_PASS = 0x00441be8u,
     CE_RVA_FORM_NEXT_CELL = 0x00482fd0u,
+    /* The main loop reads the pending form index out of the cell above and,
+       for StarMap and its two neighbours, calls the form object's virtual
+       method at +8 -- the enter-the-form path -- then zeroes the byte again.
+       These two cells are the bookends: one names the form being entered
+       while that call runs, the other the form settled on afterwards. They
+       are read only, to say in the log where the engine actually was. */
+    CE_RVA_FORM_ENTERING_CELL = 0x00482bf4u,
+    CE_RVA_FORM_SETTLED_CELL = 0x00482cf0u,
     CE_FORM_INDEX_STARMAP = 16u,
     /* The GameLoad form's own gate, `call 0x007029A4` at VA 0x0053CF4D,
        immediately followed by `test al,al; je 0x0053CFCF`.  When it answers
@@ -7077,6 +7085,56 @@ uint32_t CE_CALL CEAdapterSetGalaxyTurn(uint32_t galaxy_ptr, uint32_t turn) {
 
 /* See g_ce_item_stash. Begin clears the list so a second transit does not
    inherit the previous one's cargo. */
+/* Re-enter the star map without advancing a day.
+
+   Everything the traveller carries is applied while the engine is still
+   inside the form-enter call that follows the load, so the map on screen was
+   already drawn from the values the arriving save had, and only redrew when
+   something else forced it -- which in practice meant skipping a day. Asking
+   through the script FormChange() does not help: it sees the target form is
+   the one already showing and takes a shorter path that sets a flag instead
+   of queueing an entry.
+
+   The main loop wants one byte. Written directly, the next pass through it
+   calls the star map's enter method again and clears the byte itself, so this
+   costs one extra rebuild and leaves nothing behind. */
+uint32_t CE_CALL CEAdapterRequestStarMapReenter(void) {
+    uintptr_t module_base = (uintptr_t)GetModuleHandleW(NULL);
+    uint32_t slot;
+    unsigned char before = 0xffu;
+    int entering = -1;
+    int settled = -1;
+    char payload[192];
+    int size;
+    if (module_base == 0) return 0u;
+    if (!ce_region_has_access(
+            (const void *)(module_base + CE_RVA_FORM_NEXT_CELL), 4u, 0)) return 0u;
+    slot = *(const uint32_t *)(module_base + CE_RVA_FORM_NEXT_CELL);
+    if (!ce_region_has_access((void *)(uintptr_t)slot, 1u, 1)) return 0u;
+    before = *(const unsigned char *)(uintptr_t)slot;
+    *(unsigned char *)(uintptr_t)slot = (unsigned char)CE_FORM_INDEX_STARMAP;
+    if (ce_region_has_access(
+            (const void *)(module_base + CE_RVA_FORM_ENTERING_CELL), 4u, 0)) {
+        uint32_t cell = *(const uint32_t *)(module_base + CE_RVA_FORM_ENTERING_CELL);
+        if (ce_region_has_access((const void *)(uintptr_t)cell, 1u, 0)) {
+            entering = (int)*(const unsigned char *)(uintptr_t)cell;
+        }
+    }
+    if (ce_region_has_access(
+            (const void *)(module_base + CE_RVA_FORM_SETTLED_CELL), 4u, 0)) {
+        uint32_t cell = *(const uint32_t *)(module_base + CE_RVA_FORM_SETTLED_CELL);
+        if (ce_region_has_access((const void *)(uintptr_t)cell, 1u, 0)) {
+            settled = (int)*(const unsigned char *)(uintptr_t)cell;
+        }
+    }
+    size = snprintf(payload, sizeof(payload),
+        "{\"status\":\"starmap-reenter\",\"pending_before\":%d,"
+        "\"entering\":%d,\"settled\":%d}\r\n",
+        (int)before, entering, settled);
+    if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", payload, (size_t)size);
+    return 1u;
+}
+
 uint32_t CE_CALL CEAdapterStashItemsBegin(void) {
     InterlockedExchange(&g_ce_item_stash_count, 0);
     return 1u;

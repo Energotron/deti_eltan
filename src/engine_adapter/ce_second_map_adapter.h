@@ -114,6 +114,7 @@ CE_EXPORT uint32_t CE_CALL CEAdapterPlayerStashReady(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterClearPlayerStash(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterSavePlayerStash(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterLoadPlayerStash(void);
+CE_EXPORT uint32_t CE_CALL CEAdapterRequestStarMapReenter(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterStashItemsBegin(void);
 CE_EXPORT uint32_t CE_CALL CEAdapterStashItem(uint32_t type, uint32_t size, uint32_t level, uint32_t owner, uint32_t slot, uint32_t wear, uint32_t special, uint32_t module, uint32_t hull_class);
 CE_EXPORT uint32_t CE_CALL CEAdapterStashedItemCount(void);

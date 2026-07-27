@@ -259,6 +259,7 @@ Data ^{
             CEAdapterClearPlayerStash=dword,CEAdapterClearPlayerStash
             CEAdapterSavePlayerStash=dword,CEAdapterSavePlayerStash
             CEAdapterLoadPlayerStash=dword,CEAdapterLoadPlayerStash
+            CEAdapterRequestStarMapReenter=dword,CEAdapterRequestStarMapReenter
             CEAdapterStashItemsBegin=dword,CEAdapterStashItemsBegin
             CEAdapterStashItem=dword,CEAdapterStashItem,dword,dword,dword,dword,dword,dword,dword,dword,dword
             CEAdapterStashedItemCount=dword,CEAdapterStashedItemCount
