@@ -483,8 +483,11 @@
             "//galaxy was written over the authored map.",
             "unknown ceIsSecondHome = ImportedFunction('CESecondMapAdapter','CEAdapterGalaxyIsSecondHome');",
             "dword ceInSecondHome = ceIsSecondHome(GalaxyPtr());",
+            "unknown ceLogHK = ImportedFunction('CESecondMapAdapter','CEAdapterLogCheckpoint');",
             "if(ceInSecondHome) {",
+            "  ceLogHK(410);",
             "  InterfaceState('Galaxy','CESecondHomeBackdrop',1);",
+            "  ceLogHK(411);",
             "  //Neither the Dominators nor the pirate clan reach the second arm. The",
             "  //shape is lifted from BlockPirates, which does this to the clan in the",
             "  //ordinary galaxy: hand any system the faction holds back to the people who",
@@ -495,6 +498,7 @@
             "  //no zero -- fifty is as low as the setting reads -- so the sweep is what",
             "  //holds the line and the setting only gives it less to do.",
             "  AdvancedAdjustmentSet(0,1);",
+            "  ceLogHK(412);",
             "  AdvancedAdjustmentSet(2,50);",
             "  AdvancedAdjustmentSet(3,50);",
             "  AdvancedAdjustmentSet(4,50);",
@@ -575,6 +579,7 @@
             "  //and the artwork. Giving a ship one of its types without its Lang behind",
             "  //it would leave the engine looking up strings that are not there. Asking",
             "  //for one of those strings is how we tell whether it is here.",
+            "  ceLogHK(413);",
             "  if(!ceNestTotal && CT('ShipName.Klissan.Count')!='' && GalaxyStars()>48) {",
             "    dword ceSeedIdx = 0;",
             "    while(ceSeedIdx<2) {",
@@ -597,6 +602,7 @@
             "      ceSeedIdx = ceSeedIdx+1;",
             "    }",
             "  }",
+            "  ceLogHK(414);",
             "}"
           ]
         }
