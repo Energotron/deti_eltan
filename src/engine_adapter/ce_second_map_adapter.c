@@ -3632,6 +3632,16 @@ __attribute__((naked)) static void ce_dual_newgame_execute_hook(void) {
 
 static int ce_install_dual_newgame_hook(void) {
 #if defined(__i386__)
+    /* Stock engine only. Opening the build guards let this install on
+       Universe for the first time, and new-game generation then stalled at
+       "time passing" -- this detour runs Execute a second time to build the
+       first-arm sidecar, and whatever it relies on there does not behave the
+       same. Generating a party matters more than the sidecar, which the
+       portal writes for itself anyway when it opens. */
+    if (ce_engine_build() != CE_ENGINE_STOCK) {
+        ce_write_progress("dual-newgame:skipped-foreign-engine");
+        return 0;
+    }
     static const unsigned char execute_signature[8] = {
         0x55, 0x8b, 0xec, 0xb9, 0x6e, 0x00, 0x00, 0x00
     };
