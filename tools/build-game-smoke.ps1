@@ -79,13 +79,21 @@ if (-not (Test-Path -LiteralPath $outputScr) -or
     throw "RScript did not produce CE_MapSmoke.scr"
 }
 
-& $blockPar --cli --convert $sourceMain $outputMain
-Start-Sleep -Milliseconds 500
-if (-not (Test-Path -LiteralPath $outputMain) -or (Get-Item -LiteralPath $outputMain).Length -lt 64) {
-    throw "BlockParEditor did not produce CFG\Main.dat"
-}
+# Every BlockPar source is staged under one tree with the name it will carry in
+# the module, and the whole tree is converted in a single call to
+# tools\srblockpar.py -- which is still BlockParEditor --cli --convert, one
+# invocation per file, but planned and reported in one place. Staged outside
+# CFG\ on purpose: RScript writes CE_MapSmoke.txt into CFG\Rus, and a batch
+# rooted at CFG would sweep that up as a BlockPar source too.
+$blockParStage = Join-Path ([IO.Path]::GetTempPath()) ("ce-blockpar-" + [guid]::NewGuid().ToString("N"))
+$stageLangRoot = Join-Path $blockParStage "Rus"
+New-Item -ItemType Directory -Path $stageLangRoot -Force | Out-Null
+$stagedMain = Join-Path $blockParStage "Main.txt"
+$stagedCache = Join-Path $blockParStage "CacheData.txt"
+$stagedLang = Join-Path $stageLangRoot "Lang.txt"
+Copy-Item -LiteralPath $sourceMain -Destination $stagedMain -Force
+Copy-Item -LiteralPath $sourceCache -Destination $stagedCache -Force
 
-$combinedLang = Join-Path ([IO.Path]::GetTempPath()) ("ce-map-smoke-lang-" + [guid]::NewGuid().ToString("N") + ".txt")
 $windows1251 = [Text.Encoding]::GetEncoding(1251)
 # Read as UTF-8 and re-encode, exactly like $sourceTransitLang below. This
 # file used to be copied through as raw bytes, which shipped its UTF-8 text
@@ -102,16 +110,25 @@ $combinedBytes = New-Object byte[] ($langBytes.Length + $portalBytes.Length + $t
 [Array]::Copy($langBytes, 0, $combinedBytes, 0, $langBytes.Length)
 [Array]::Copy($portalBytes, 0, $combinedBytes, $langBytes.Length, $portalBytes.Length)
 [Array]::Copy($transitBytes, 0, $combinedBytes, $langBytes.Length + $portalBytes.Length, $transitBytes.Length)
-[IO.File]::WriteAllBytes($combinedLang, $combinedBytes)
-& $blockPar --cli --convert $combinedLang $outputLang
-Start-Sleep -Milliseconds 500
-Remove-Item -LiteralPath $combinedLang -Force -ErrorAction SilentlyContinue
+[IO.File]::WriteAllBytes($stagedLang, $combinedBytes)
+
+& python (Join-Path $PSScriptRoot "srblockpar.py") $blockParStage --to-dat --blockpar $blockPar
+$blockParExit = $LASTEXITCODE
+if ($blockParExit -ne 0) {
+    Remove-Item -LiteralPath $blockParStage -Recurse -Force -ErrorAction SilentlyContinue
+    throw "BlockPar batch conversion failed (exit $blockParExit)"
+}
+Move-Item -LiteralPath (Join-Path $blockParStage "Main.dat") -Destination $outputMain -Force
+Move-Item -LiteralPath (Join-Path $stageLangRoot "Lang.dat") -Destination $outputLang -Force
+Move-Item -LiteralPath (Join-Path $blockParStage "CacheData.dat") -Destination $outputCache -Force
+Remove-Item -LiteralPath $blockParStage -Recurse -Force -ErrorAction SilentlyContinue
+
+if (-not (Test-Path -LiteralPath $outputMain) -or (Get-Item -LiteralPath $outputMain).Length -lt 64) {
+    throw "BlockParEditor did not produce CFG\Main.dat"
+}
 if (-not (Test-Path -LiteralPath $outputLang) -or (Get-Item -LiteralPath $outputLang).Length -lt 32) {
     throw "BlockParEditor did not produce CFG\Rus\Lang.dat"
 }
-
-& $blockPar --cli --convert $sourceCache $outputCache
-Start-Sleep -Milliseconds 500
 if (-not (Test-Path -LiteralPath $outputCache) -or (Get-Item -LiteralPath $outputCache).Length -lt 32) {
     throw "BlockParEditor did not produce CFG\CacheData.dat"
 }
