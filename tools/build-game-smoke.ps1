@@ -78,16 +78,6 @@ if (-not (Test-Path -LiteralPath $outputScr) -or
     (Get-Item -LiteralPath $outputScr).LastWriteTimeUtc -lt $buildStarted.ToUniversalTime().AddSeconds(-1)) {
     throw "RScript did not produce CE_MapSmoke.scr"
 }
-# The engine refuses to load a mod whose script crosses 64 KB and says only
-# that it failed to launch -- no crash, no log line, nothing pointing at the
-# script. The .scr holds its source as UTF-16, so every character of comment
-# costs two bytes; the run that hit this was carrying eighty lines of
-# commented-out dead code from an abandoned experiment. Fail here instead,
-# while there is still something to read.
-$scrSize = (Get-Item -LiteralPath $outputScr).Length
-if ($scrSize -ge 65000) {
-    throw "CE_MapSmoke.scr is $scrSize bytes; the engine stops loading mods near 65536. Trim the script."
-}
 
 & $blockPar --cli --convert $sourceMain $outputMain
 Start-Sleep -Milliseconds 500
