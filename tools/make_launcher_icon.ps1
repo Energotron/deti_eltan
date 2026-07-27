@@ -17,7 +17,7 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing
 
 $sizes = @(256, 64, 48, 32, 16)
-$source = [System.Drawing.Image]::FromFile((Resolve-Path -LiteralPath $Source))
+$original = [System.Drawing.Image]::FromFile((Resolve-Path -LiteralPath $Source))
 try {
     $entries = @()
     foreach ($size in $sizes) {
@@ -27,7 +27,7 @@ try {
         $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
         $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
         $graphics.Clear([System.Drawing.Color]::Transparent)
-        $graphics.DrawImage($source, (New-Object System.Drawing.Rectangle 0, 0, $size, $size))
+        $graphics.DrawImage($original, (New-Object System.Drawing.Rectangle 0, 0, $size, $size))
         $graphics.Dispose()
 
         $stream = New-Object IO.MemoryStream
@@ -80,7 +80,7 @@ try {
     [IO.File]::WriteAllBytes($Destination, $out.ToArray())
     $out.Dispose()
 } finally {
-    $source.Dispose()
+    $original.Dispose()
 }
 Write-Output ("OK: {0} -> {1} ({2} sizes, {3} bytes)" -f `
     (Split-Path -Leaf $Source), (Split-Path -Leaf $Destination), $sizes.Count,
