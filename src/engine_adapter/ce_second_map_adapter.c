@@ -4523,6 +4523,17 @@ uint32_t CE_CALL CEAdapterArmPendingArrival(uint32_t entering) {
 uint32_t CE_CALL CEAdapterConsumePendingArrival(void) {
     LONG direction = InterlockedCompareExchange(&g_ce_pending_arrival_direction, 0, 0);
     LONG remaining;
+    /* Say what was seen. Three builds in a row the arrival never fired and
+       there was no way to tell whether it had been armed, already spent, or
+       still counting down. */
+    {
+        char note[128];
+        int size = snprintf(note, sizeof(note),
+            "{\"status\":\"arrival-poll\",\"direction\":%ld,\"ticks\":%ld}\r\n",
+            (long)direction,
+            (long)InterlockedCompareExchange(&g_ce_pending_arrival_ticks, 0, 0));
+        if (size > 0) ce_write_text_marker("live-arm-switch.jsonl", note, (size_t)size);
+    }
     if (direction < 0) return 0u;
     /* This poll is reached from the target save's live Turn graph.  Publish
        the target arm here, after LoadGame, never while the target Galaxy is
