@@ -9,8 +9,10 @@ Format reverse-engineered against the real game files and cross-checked with
 the OpenSR reference loaders (Ranger/GILoader.cpp, GAILoader.cpp,
 HAILoader.cpp; include/OpenSR/libRangerQt.h).
 
-  GI  (0x00006967 "gi")   single frame, 6 encodings (type 0..5)
+  GI  (0x00006967 "gi")   single frame, 7 encodings (type 0..6)
   GAI (0x00696167 "gai")  animation: GI keyframes + type-5 delta frames + times
+                          (haveBackground=1 -> the deltas build on the key frame
+                          in the sibling <stem>.gi, not on anything inside the gai)
   HAI (0x04210420)        multi-resolution indexed animation (HUD 128/256/384)
 
 Binary layout (little-endian):
@@ -33,12 +35,16 @@ Frame types (GIFrameHeader.type):
   3  two layers: indexed R5G6B5 (RLE) + indexed alpha/colour (RLE)
   4  two layers: raw 8-bit indices + RGBA palette
   5  delta frame of a GAI animation (additive overlay on the previous frame)
+  6  bit-packed delta frame (HD animations; per-channel widths in the stream
+     header, ported from okgf.dll!OKGR_F6_DrawRGBA - OpenSR does not know it)
 
 Colour is normalised to straight (non-premultiplied) RGBA8888 for output.
 
 Commands:
   srgi info   <file>            dump header / layer table
   srgi decode <file> <out>      -> <out>.png (gi) or <out>/<stem>_NNN.png (gai/hai)
+                                a haveBackground=1 GAI is flattened over its
+                                sibling <stem>.gi (override --bg, disable --no-bg)
   srgi encode <in> <out>        PNG -> gi; a frame directory -> gai/hai
   srgi verify <file|dir>        self-consistency test (headers + byte consumption)
 
@@ -130,16 +136,29 @@ class Canvas:
 # at absolute offset `pos`, and returns the position just past the bytes it
 # consumed - the caller checks that against GILayerHeader.size.
 
+def _clip_run(col, cnt, cw):
+    """Visible part of a `cnt`-pixel run starting at `col`: (skip, take).
+
+    Runs are clipped, not dropped: a layer may hang off the canvas on either
+    side (a background .gi is routinely larger than the animation box it is
+    decoded into), and the half that is inside must still be drawn.
+    """
+    skip = -col if col < 0 else 0
+    take = min(cnt, cw - col) - skip
+    return skip, (take if take > 0 else 0)
+
+
 def blit_r5g6b5(cv, x, y, w, h, buf, pos):
     """type 0 (R5G6B5 masks): raw 16-bit scanlines, w*h*2 bytes."""
     L = _lut()
     cw, ch, cb = cv.w, cv.h, cv.buf
+    skip, take = _clip_run(x, w, cw)
     for row in range(h):
         yy = y + row
-        if 0 <= yy < ch and 0 <= x and x + w <= cw:
-            cols = struct.unpack_from("<%dH" % w, buf, pos)
-            o = (yy * cw + x) * 4
-            cb[o:o + w * 4] = b"".join([L[c] for c in cols])
+        if 0 <= yy < ch and take:
+            cols = struct.unpack_from("<%dH" % take, buf, pos + skip * 2)
+            o = (yy * cw + x + skip) * 4
+            cb[o:o + take * 4] = b"".join([L[c] for c in cols])
         pos += w * 2
     return pos
 
@@ -175,9 +194,11 @@ def draw_r5g6b5(cv, x, y, buf, pos):
             size -= cnt * 2
             cols = struct.unpack_from("<%dH" % cnt, buf, pos)
             pos += cnt * 2
-            if 0 <= line < ch and 0 <= col and col + cnt <= cw:
-                o = (line * cw + col) * 4
-                cb[o:o + cnt * 4] = b"".join([L[c] for c in cols])
+            if 0 <= line < ch:
+                skip, take = _clip_run(col, cnt, cw)
+                if take:
+                    o = (line * cw + col + skip) * 4
+                    cb[o:o + take * 4] = b"".join([L[c] for c in cols[skip:skip + take]])
             col += cnt
         else:                                       # skip b pixels
             col += b
@@ -226,9 +247,11 @@ def draw_rgbi(cv, x, y, buf, pos):
             size -= cnt
             idx = buf[pos:pos + cnt]
             pos += cnt
-            if 0 <= line < ch and 0 <= col and col + cnt <= cw:
-                o = (line * cw + col) * 4
-                cb[o:o + cnt * 4] = b"".join([L[pal[i]] for i in idx])
+            if 0 <= line < ch:
+                skip, take = _clip_run(col, cnt, cw)
+                if take:
+                    o = (line * cw + col + skip) * 4
+                    cb[o:o + take * 4] = b"".join([L[pal[i]] for i in idx[skip:skip + take]])
             col += cnt
         else:
             col += b
@@ -259,9 +282,11 @@ def draw_ai(cv, x, y, buf, pos):
             size -= cnt
             idx = buf[pos:pos + cnt]
             pos += cnt
-            if 0 <= line < ch and 0 <= col and col + cnt <= cw:
-                o = (line * cw + col) * 4
-                cb[o:o + cnt * 4] = b"".join([pal[i] for i in idx])
+            if 0 <= line < ch:
+                skip, take = _clip_run(col, cnt, cw)
+                if take:
+                    o = (line * cw + col + skip) * 4
+                    cb[o:o + take * 4] = b"".join([pal[i] for i in idx[skip:skip + take]])
             col += cnt
         else:
             col += b
@@ -273,14 +298,15 @@ def decode_indexed(cv, x, y, w, h, buf, ipos, ppos, psize):
     cw, ch, cb = cv.w, cv.h, cv.buf
     npal = psize // 4
     pal = [buf[ppos + 4 * i:ppos + 4 * i + 4] for i in range(npal)]
+    skip, take = _clip_run(x, w, cw)
     for row in range(h):
         yy = y + row
         idx = buf[ipos:ipos + w]
         ipos += w
-        if 0 <= yy < ch and 0 <= x and x + w <= cw:
-            o = (yy * cw + x) * 4
-            cb[o:o + w * 4] = b"".join([pal[i] if i < npal else b"\0\0\0\0"
-                                        for i in idx])
+        if 0 <= yy < ch and take:
+            o = (yy * cw + x + skip) * 4
+            cb[o:o + take * 4] = b"".join([pal[i] if i < npal else b"\0\0\0\0"
+                                           for i in idx[skip:skip + take]])
     return ipos
 
 
@@ -344,6 +370,100 @@ def decode_delta(cv, x, y, buf, pos):
     return pos
 
 
+class _Bits:
+    """Bit reader for type 6: bits come out of each byte LSB-first, but a field
+    is assembled MSB-first (first bits read end up highest). Ported verbatim from
+    okgf.dll!OKGR_F6_DrawRGBA, which is where the format is defined."""
+    __slots__ = ("buf", "pos", "bit")
+
+    def __init__(self, buf, pos):
+        self.buf, self.pos, self.bit = buf, pos, 0
+
+    def read(self, n):
+        val = 0
+        while True:
+            if self.bit + n > 8:
+                avail = 8 - self.bit
+                n -= avail
+                val |= ((self.buf[self.pos] >> self.bit) & ((1 << avail) - 1)) << n
+                self.pos += 1
+                self.bit = 0
+            else:
+                val |= (self.buf[self.pos] >> self.bit) & ((1 << n) - 1)
+                self.bit += n
+                if self.bit == 8:
+                    self.bit = 0
+                    self.pos += 1
+                return val
+
+
+def decode_type6(cv, x, y, buf, pos):
+    """type 6: bit-packed delta frame - the HD animations' counterpart of type 5.
+
+    Layout: byte 0 carries the bit width of channels 0 and 1 in its nibbles
+    (stored as 8-n), byte 1 the same for channels 2 and 3 (0x65,0x55 = 5,6,5,5,
+    i.e. R5G6B5A5); u16 at +2 is the block count; the bit stream follows.
+
+    Per block: x:10, y:10 place the cursor, then segments of (width:3, chan:2).
+    width 0 is a command - chan 0 steps one row down, chan 1 ends the block,
+    chan >= 2 runs "clear pixel"(1) / "skip n"(0 then n:3) opcodes. Otherwise
+    sign:1 follows, then per pixel 1 -> a `width`-bit value v (delta
+    (v+1) << shift[chan], added or subtracted with 8-bit wraparound), or
+    0 -> n:3 pixels skipped (n == 0 ends the segment).
+    """
+    shifts = [8 - (buf[pos] & 0xF), 8 - (buf[pos] >> 4),
+              8 - (buf[pos + 1] & 0xF), 8 - (buf[pos + 1] >> 4)]
+    blocks = struct.unpack_from("<H", buf, pos + 2)[0]
+    br = _Bits(buf, pos + 4)
+    cb, cw, ch = cv.buf, cv.w, cv.h
+    stride = cw * 4
+    for _ in range(blocks):
+        col = x + br.read(10)
+        row = y + br.read(10)
+        base = row * stride + col * 4
+        while True:
+            width = br.read(3)
+            chan = br.read(2)
+            if width == 0:
+                if chan == 0:                        # next scanline
+                    row += 1
+                    base += stride
+                    continue
+                if chan == 1:                        # end of block
+                    break
+                p, px = base, col                    # clear/skip run
+                while True:
+                    if br.read(1):
+                        if 0 <= px < cw and 0 <= row < ch:
+                            cb[p:p + 4] = b"\0\0\0\0"
+                        p += 4
+                        px += 1
+                    else:
+                        n = br.read(3)
+                        if n == 0:
+                            break
+                        p += n * 4
+                        px += n
+                continue
+            sign = br.read(1)
+            shl = shifts[chan]
+            p, px = base + _DELTA_CH[chan], col      # channels sit in B,G,R,A order
+            while True:
+                if br.read(1):
+                    d = (br.read(width) + 1) << shl
+                    if 0 <= px < cw and 0 <= row < ch:
+                        cb[p] = (cb[p] - d if sign else cb[p] + d) & 0xFF
+                    p += 4
+                    px += 1
+                else:
+                    n = br.read(3)
+                    if n == 0:
+                        break
+                    p += n * 4
+                    px += n
+    return br.pos + (1 if br.bit else 0)
+
+
 # --------------------------------------------------------------------------- headers
 
 def read_gi_header(buf, off):
@@ -373,8 +493,8 @@ def decode_gi_frame(buf, off, animation=False, background=None, anim_box=None):
         L[2] -= bx; L[3] -= by; L[4] -= bx; L[5] -= by
 
     typ = h["type"]
-    if typ == 5 and background is not None:
-        cv = background.copy()
+    if typ in (5, 6) and background is not None:   # delta frames build on the
+        cv = background.copy()                     # previous frame
     else:
         cv = Canvas(W, H)
 
@@ -412,6 +532,10 @@ def decode_gi_frame(buf, off, animation=False, background=None, anim_box=None):
         L = layers[0]
         if L[1]:
             decode_delta(cv, L[2], L[3], buf, seek(L))
+    elif typ == 6:
+        L = layers[0]
+        if L[1]:
+            decode_type6(cv, L[2], L[3], buf, seek(L))
     else:
         raise ValueError("unknown GI frame type %d" % typ)
     return cv
@@ -442,15 +566,56 @@ def load_gai_times(buf, frame_count, wait_seek, wait_size):
     return times
 
 
-def decode_gai(buf):
+def read_gai_header(buf):
+    (sig, ver, sx, sy, fx, fy, frame_count, have_bg,
+     wait_seek, wait_size, u1, u2) = struct.unpack_from("<12I", buf, 0)
+    if sig != GAI_SIG:
+        raise ValueError("not a GAI file")
+    return {"ver": ver, "box": (sx, sy, fx, fy), "frameCount": frame_count,
+            "haveBackground": bool(have_bg), "waitSeek": wait_seek, "waitSize": wait_size}
+
+
+def decode_background(data, anim_box):
+    """Decode a standalone GI as an animation's key frame, in animation coordinates.
+
+    A GAI with haveBackground=1 stores only the deltas: its frame 0 is empty (or
+    already a delta) and the picture they build on lives in the sibling *.gi.
+    Decoding it against `anim_box` puts it exactly where the deltas expect it.
+    """
+    if _u32(data, 0) != GI_SIG:
+        raise ValueError("background is not a GI frame")
+    return decode_gi_frame(data, 0, True, None, anim_box)
+
+
+def find_background(path):
+    """Sibling <stem>.gi of a .gai animation, matched case-insensitively (the
+    game ships both 2PeopleAnim0.gi and 2Gaal2Anim0.GI). None if there isn't one."""
+    directory = os.path.dirname(path) or "."
+    want = os.path.splitext(os.path.basename(path))[0].lower() + ".gi"
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return None
+    for name in names:
+        if name.lower() == want:
+            return os.path.join(directory, name)
+    return None
+
+
+def decode_gai(buf, background=None):
+    """Decode a GAI. `background` is the key frame (a Canvas from
+    decode_background) that delta-only animations overlay their frames on."""
     (sig, ver, sx, sy, fx, fy, frame_count, have_bg,
      wait_seek, wait_size, u1, u2) = struct.unpack_from("<12I", buf, 0)
     if sig != GAI_SIG:
         raise ValueError("not a GAI file")
     anim_box = (sx, sy, fx, fy)
+    if background is not None and (background.w, background.h) != (fx - sx, fy - sy):
+        raise ValueError("background is %dx%d, animation is %dx%d"
+                         % (background.w, background.h, fx - sx, fy - sy))
     times = load_gai_times(buf, frame_count, wait_seek, wait_size)
     frames = []
-    bg = None
+    bg = background
     for i in range(frame_count):
         gi_seek, gi_size = struct.unpack_from("<2I", buf, GAI_HDR + i * 8)
         if gi_seek and gi_size:
@@ -859,7 +1024,11 @@ def _info_one(path):
         (s, ver, sx, sy, fx, fy, fc, hbg, ws, wsz, u1, u2) = struct.unpack_from("<12I", data, 0)
         print("GAI version=%d box=(%d,%d)-(%d,%d) frames=%d haveBackground=%d"
               % (ver, sx, sy, fx, fy, fc, hbg))
-        _, times, _ = decode_gai(data)
+        if hbg:                                    # times read straight from the wait
+            src = find_background(path)            # block - no frame decoding needed,
+            print("    background: %s"             # so info stays useful on frame
+                  % (os.path.basename(src) if src else "MISSING (no sibling .gi)"))
+        times = load_gai_times(data, fc, ws, wsz)  # encodings decode cannot handle yet
         print("    frame times (ms): %s%s" % (times[:12], " ..." if len(times) > 12 else ""))
     elif sig == HAI_SIG:
         (s, w, h, rb, cnt, fsz, u1, u2, u3, u4, u5, u6, psz) = struct.unpack_from("<13I", data, 0)
@@ -871,7 +1040,45 @@ def _info_one(path):
     return 0
 
 
-def _decode_frames(data):
+def _resolve_background(path, data, args):
+    """Pick the key frame a delta-only GAI needs: --bg wins, else the sibling .gi.
+
+    Returns (canvas|None, name|None); the name lands in the .times.json sidecar so
+    it stays visible which file the frames were flattened against.
+    """
+    if _u32(data, 0) != GAI_SIG:
+        return None, None
+    header = read_gai_header(data)
+    explicit = getattr(args, "bg", None)
+    if explicit:
+        src = explicit
+    elif getattr(args, "no_bg", False) or not header["haveBackground"]:
+        return None, None
+    else:
+        src = find_background(path)
+        if src is None:
+            print("  note: %s declares a background but no sibling .gi is next to it"
+                  % os.path.basename(path), file=sys.stderr)
+            return None, None
+    blob = load_any(src)
+    _warn_if_disjoint(src, blob, header["box"])
+    return decode_background(blob, header["box"]), os.path.basename(src)
+
+
+def _warn_if_disjoint(src, blob, anim_box):
+    """A key frame outside the animation box decodes to nothing - say so, don't guess."""
+    if _u32(blob, 0) != GI_SIG:
+        return
+    h = read_gi_header(blob, 0)
+    ax0, ay0, ax1, ay1 = anim_box
+    if h["sx"] >= ax1 or h["fx"] <= ax0 or h["sy"] >= ay1 or h["fy"] <= ay0:
+        print("  note: background %s box (%d,%d)-(%d,%d) does not overlap the "
+              "animation box (%d,%d)-(%d,%d)"
+              % (os.path.basename(src), h["sx"], h["sy"], h["fx"], h["fy"],
+                 ax0, ay0, ax1, ay1), file=sys.stderr)
+
+
+def _decode_frames(data, background=None):
     """Return (frames, times|None, kind). Single GI -> one frame, no times.
 
     kind is "gi"/"gai"/"hai" - recorded in the sidecar so `encode` can rebuild a
@@ -881,7 +1088,7 @@ def _decode_frames(data):
     if sig == GI_SIG:
         return [decode_gi(data)], None, "gi"
     if sig == GAI_SIG:
-        frames, times, _ = decode_gai(data)
+        frames, times, _ = decode_gai(data, background)
         return frames, times, "gai"
     if sig == HAI_SIG:
         frames, times = decode_hai(data)
@@ -889,11 +1096,12 @@ def _decode_frames(data):
     raise ValueError("unknown signature %08x" % sig)
 
 
-def _write_frames(out_dir, stem, frames, times, kind="gai"):
+def _write_frames(out_dir, stem, frames, times, kind="gai", background=None):
     """Write decoded frames into out_dir (always treated as a directory).
 
     Single image -> out_dir/stem.png; animation -> out_dir/stem_NNN.png plus a
-    stem.times.json sidecar (which also carries `kind`). Returns (w, h, nframes).
+    stem.times.json sidecar (which also carries `kind`, and the name of the key
+    frame the deltas were flattened against). Returns (w, h, nframes).
     """
     os.makedirs(out_dir, exist_ok=True)
     if times is None:                              # single image
@@ -904,9 +1112,12 @@ def _write_frames(out_dir, stem, frames, times, kind="gai"):
     for i, cv in enumerate(frames):
         write_png(os.path.join(out_dir, "%s_%03d.png" % (stem, i)), cv.w, cv.h, cv.buf)
         width, height = cv.w, cv.h
+    meta = {"kind": kind, "frames": len(frames), "size": [width, height],
+            "times_ms": times}
+    if background:
+        meta["background"] = background
     with open(os.path.join(out_dir, stem + ".times.json"), "w") as f:
-        json.dump({"kind": kind, "frames": len(frames), "size": [width, height],
-                   "times_ms": times}, f, indent=2)
+        json.dump(meta, f, indent=2)
     return width, height, len(frames)
 
 
@@ -924,10 +1135,14 @@ def _decode_dir(args):
         reldir = os.path.dirname(rel)
         out_dir = os.path.join(args.out, reldir) if reldir else args.out
         try:
-            frames, times, kind = _decode_frames(load_any(path))
-            w, h, n = _write_frames(out_dir, stem, frames, times, kind)
+            data = load_any(path)
+            bg, bg_name = _resolve_background(path, data, args)
+            frames, times, kind = _decode_frames(data, bg)
+            w, h, n = _write_frames(out_dir, stem, frames, times, kind, bg_name)
             ok += 1
             what = ("%d frames %dx%d" % (n, w, h)) if times is not None else ("%dx%d" % (w, h))
+            if bg_name:
+                what += ", bg %s" % bg_name
             print("  OK    %s (%s)" % (rel, what))
         except Exception as e:                       # noqa: BLE001 - report, don't crash
             fail += 1
@@ -939,9 +1154,18 @@ def _decode_dir(args):
 
 def cmd_decode(args):
     if os.path.isdir(args.file):
+        if args.bg:
+            print("error: --bg takes a single animation, not a directory "
+                  "(batch picks each sibling .gi on its own)", file=sys.stderr)
+            return 1
         return _decode_dir(args)
     data = load_any(args.file)
-    frames, times, kind = _decode_frames(data)
+    try:
+        bg, bg_name = _resolve_background(args.file, data, args)
+    except (ValueError, OSError) as e:                 # clean CLI error, not a traceback
+        print("error: background %s" % e, file=sys.stderr)
+        return 1
+    frames, times, kind = _decode_frames(data, bg)
     stem = os.path.splitext(os.path.basename(args.file))[0]
     if times is None:                              # single image
         out = args.out
@@ -955,9 +1179,10 @@ def cmd_decode(args):
         write_png(out, cv.w, cv.h, cv.buf)
         print("decoded -> %s (%dx%d)" % (out, cv.w, cv.h), file=sys.stderr)
     else:                                          # animation -> directory
-        width, height, n = _write_frames(args.out, stem, frames, times, kind)
-        print("decoded %d frames -> %s/%s_NNN.png (%dx%d)"
-              % (n, args.out, stem, width, height), file=sys.stderr)
+        width, height, n = _write_frames(args.out, stem, frames, times, kind, bg_name)
+        print("decoded %d frames -> %s/%s_NNN.png (%dx%d%s)"
+              % (n, args.out, stem, width, height,
+                 ", over %s" % bg_name if bg_name else ""), file=sys.stderr)
     return 0
 
 
@@ -1198,6 +1423,13 @@ def _verify_gi(data):
             end = decode_delta(cv.copy(), norm[0][2], norm[0][3], data, L[0])
             if not (L[0] <= end <= L[0] + L[1]):
                 problems.append("type5 delta overran layer size")
+    elif typ == 6:
+        L = layers[0]
+        if L[1]:                                   # the bit stream ends exactly
+            end = decode_type6(cv.copy(), norm[0][2], norm[0][3], data, L[0])
+            if end - L[0] != L[1]:                 # on the layer boundary
+                problems.append("type6 stream consumed %d != size %d"
+                                % (end - L[0], L[1]))
     if cv.w != h["fx"] - h["sx"] or cv.h != h["fy"] - h["sy"]:
         problems.append("canvas size mismatch")
     return problems
@@ -1283,6 +1515,11 @@ def main(argv=None):
     p = sub.add_parser("decode", help="decode to PNG (gi) or a directory of PNGs (gai/hai)")
     p.add_argument("file", help="gi/gai/hai file, or a directory to batch-decode recursively")
     p.add_argument("out", help="output PNG (single gi) or output directory (dir/animation)")
+    p.add_argument("--bg", metavar="FILE.GI",
+                   help="key frame for a delta-only GAI (default: the sibling "
+                        "<stem>.gi, picked automatically when haveBackground=1)")
+    p.add_argument("--no-bg", action="store_true",
+                   help="never pick up a background: decode the deltas on their own")
     p.set_defaults(func=cmd_decode)
 
     p = sub.add_parser("encode", help="encode a PNG -> gi, a frame dir -> gai/hai, "
