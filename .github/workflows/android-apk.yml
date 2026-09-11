@@ -10,19 +10,29 @@ on:
 jobs:
   build-android:
     runs-on: ubuntu-latest
-    container:
-      image: barichello/godot-ci:4.3.0
-    defaults:
-      run:
-        working-directory: mobile_godot
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Godot 4.3 and Android export templates
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin" "$HOME/.local/share/godot/export_templates/4.3.stable"
+          curl -fsSL -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip
+          unzip -q /tmp/godot.zip -d "$HOME/.local/bin"
+          mv "$HOME/.local/bin/Godot_v4.3-stable_linux.x86_64" "$HOME/.local/bin/godot"
+          chmod +x "$HOME/.local/bin/godot"
+          curl -fsSL -o /tmp/templates.tpz https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz
+          unzip -q /tmp/templates.tpz -d /tmp/godot-templates
+          cp -R /tmp/godot-templates/templates/. "$HOME/.local/share/godot/export_templates/4.3.stable/"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Validate Godot project
+        working-directory: mobile_godot
         run: godot --headless --editor --quit
 
       - name: Export Android debug APK
+        working-directory: mobile_godot
         run: |
           mkdir -p build
           godot --headless --path . --export-debug "Android" build/deti_eltan_mobile_debug.apk
