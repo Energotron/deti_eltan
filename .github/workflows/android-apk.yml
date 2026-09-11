@@ -36,6 +36,17 @@ jobs:
           cp -R /tmp/godot-templates/templates/. "$HOME/.local/share/godot/export_templates/4.3.stable/"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Configure Godot Android toolchain
+        run: |
+          mkdir -p "$HOME/.config/godot"
+          cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
+          [gd_resource format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          EOF
+
       - name: Validate Godot project
         working-directory: mobile_godot
         run: godot --headless --editor --quit
