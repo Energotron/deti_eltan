@@ -1,0 +1,35 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "mobile_godot/**"
+      - ".github/workflows/android-apk.yml"
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.3.0
+    defaults:
+      run:
+        working-directory: mobile_godot
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Godot project
+        run: godot --headless --editor --quit
+
+      - name: Export Android debug APK
+        run: |
+          mkdir -p build
+          godot --headless --path . --export-debug "Android" build/deti_eltan_mobile_debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: deti-eltan-mobile-debug
+          path: mobile_godot/build/deti_eltan_mobile_debug.apk
+          if-no-files-found: error
