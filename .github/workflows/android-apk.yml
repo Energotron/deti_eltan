@@ -29,7 +29,6 @@ jobs:
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "cmdline-tools;latest"
 
       - name: Install Godot 4.3 and Android export templates
-ldummy
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.local/bin" "$HOME/.local/share/godot/export_templates/4.3.stable"
