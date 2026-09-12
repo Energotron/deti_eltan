@@ -43,13 +43,19 @@ jobs:
 
       - name: Configure Godot Android toolchain
         run: |
-          mkdir -p "$HOME/.config/godot"
+          mkdir -p "$HOME/.config/godot" "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore "$HOME/.android/debug.keystore" -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 10000
+          fi
           cat > "$HOME/.config/godot/editor_settings-4.tres" <<EOF
           [gd_resource format=3]
 
           [resource]
           export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
           export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/debug_keystore = "$HOME/.android/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
           EOF
 
       - name: Validate Godot project
